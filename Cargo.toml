@@ -1,0 +1,34 @@
+[package]
+name = "decnum"
+version = "0.1.0"
+edition = "2021"
+description = """
+  TODO
+"""
+license = "BSD-3-Clause"
+readme = "README.md"
+repository = "https://github.com/ericlagergren/decnum"
+keywords = [ "todo" ]
+categories = [ "no-std", "no-std::no-alloc" ]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
+[features]
+default = []
+
+# Enable `alloc`.
+alloc = []
+
+# Enable `std`.
+std = ["alloc"]
+
+[dependencies]
+itoa = { version = "1.0.11", default-features = false }
+
+[dev-dependencies]
+decnum = { path = ".", features = ["std"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
