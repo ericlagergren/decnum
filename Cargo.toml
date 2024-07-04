@@ -15,20 +15,41 @@ categories = [ "no-std", "no-std::no-alloc" ]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
 
 [features]
-default = []
+default = ["u128"]
 
 # Enable `alloc`.
 alloc = []
 
+# Enable `rand`.
+rand = ["dep:rand"]
+
 # Enable `std`.
 std = ["alloc"]
 
+u128 = []
+
 [dependencies]
 itoa = { version = "1.0.11", default-features = false }
+rand = { version = "0.8.5", default-features = false, optional = true }
 
 [dev-dependencies]
-decnum = { path = ".", features = ["std"] }
+decnum = { path = ".", features = ["rand", "std"] }
+
+criterion = { version = "0.4" }
+rand = { version = "0.8.5" }
+ruint = { version = "1.12.3" }
+
+[[bench]]
+name = "lib"
+harness = false
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.cargo-all-features]
+always_include_features = [
+	"alloc",
+	"rand",
+	"std",
+]

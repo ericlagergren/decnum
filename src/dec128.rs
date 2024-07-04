@@ -2,7 +2,7 @@ use core::ops::Add;
 
 use super::uint96::u96;
 
-const SIGNBIT: u16 = 1 << 15;
+//const SIGNBIT: u16 = 1 << 15;
 
 /// A 128-bit decimal.
 #[allow(non_camel_case_types)]
@@ -19,20 +19,21 @@ impl d128 {
     /// The smallest value that can be represented by this type.
     pub const MIN: Self = Self::new(-79228162514264337593543950335);
 
-    const fn new(v: i128) -> Self {
-        if v < 0 {
-            Self {
-                _unused: 0,
-                flags: SIGNBIT,
-                val: u96::new(v.unsigned_abs()),
-            }
-        } else {
-            Self {
-                _unused: 0,
-                flags: 0,
-                val: u96::new(v.unsigned_abs()),
-            }
-        }
+    const fn new(_v: i128) -> Self {
+        todo!()
+        // if v < 0 {
+        //     Self {
+        //         _unused: 0,
+        //         flags: SIGNBIT,
+        //         val: u96::new(v.unsigned_abs()),
+        //     }
+        // } else {
+        //     Self {
+        //         _unused: 0,
+        //         flags: 0,
+        //         val: u96::new(v.unsigned_abs()),
+        //     }
+        // }
     }
 
     /// Returns `self + other`.
@@ -46,7 +47,7 @@ impl d128 {
 impl Add for d128 {
     type Output = Self;
 
-    fn add(self, other: Self) -> Self::Output {
+    fn add(self, _other: Self) -> Self::Output {
         todo!()
     }
 }

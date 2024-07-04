@@ -34,3 +34,4 @@ mod dec128;
 mod uint96;
 
 pub use dec128::d128;
+pub use uint96::*;
