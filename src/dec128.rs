@@ -20,7 +20,11 @@ impl d128 {
     pub const MIN: Self = Self::new(-79228162514264337593543950335);
 
     const fn new(_v: i128) -> Self {
-        todo!()
+        Self {
+            _unused: 0,
+            flags: 0,
+            val: u96::MIN,
+        }
         // if v < 0 {
         //     Self {
         //         _unused: 0,

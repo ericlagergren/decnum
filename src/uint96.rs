@@ -117,14 +117,9 @@ impl u96 {
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn checked_add(self, rhs: Self) -> Option<Self> {
-        let (lo, c) = self.lo.overflowing_add(rhs.lo);
-        let hi = match self.hi.checked_add(rhs.hi) {
-            Some(hi) => hi,
-            None => return None,
-        };
-        match hi.checked_add(c as u32) {
-            Some(hi) => Some(Self { lo, hi }),
-            None => None,
+        match self.overflowing_add(rhs) {
+            (_, true) => None,
+            (v, _) => Some(v),
         }
     }
 
@@ -154,8 +149,165 @@ impl u96 {
     /// overflows.
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
-    pub const fn checked_sub(self, _rhs: Self) -> Option<Self> {
-        todo!()
+    pub const fn checked_sub(self, rhs: Self) -> Option<Self> {
+        match self.overflowing_sub(rhs) {
+            (_, true) => None,
+            (v, _) => Some(v),
+        }
+    }
+
+    /// Computes `self + rhs`.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if debug assertions are enabled and
+    /// the sum overflows.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn const_add(self, rhs: Self) -> Self {
+        if cfg!(debug_assertions) {
+            self.strict_add(rhs)
+        } else {
+            self.wrapping_add(rhs)
+        }
+    }
+
+    /// Computes `self & rhs`.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn const_bitand(self, rhs: Self) -> Self {
+        Self {
+            lo: self.lo & rhs.lo,
+            hi: self.hi & rhs.hi,
+        }
+    }
+
+    /// Computes `self | rhs`.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn const_bitor(self, rhs: Self) -> Self {
+        Self {
+            lo: self.lo | rhs.lo,
+            hi: self.hi | rhs.hi,
+        }
+    }
+
+    /// Computes `self ^ rhs`.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn const_bitxor(self, rhs: Self) -> Self {
+        Self {
+            lo: self.lo ^ rhs.lo,
+            hi: self.hi ^ rhs.hi,
+        }
+    }
+
+    /// Computes `!self`.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn const_not(self) -> Self {
+        Self {
+            lo: !self.lo,
+            hi: !self.hi,
+        }
+    }
+
+    /// Computes `self << rhs`.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if debug assertions are enabled and
+    /// `rhs > 96`.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn const_shl(self, rhs: u32) -> Self {
+        debug_assert!(rhs < Self::BITS);
+
+        self.wrapping_shl(rhs)
+    }
+
+    /// Computes `self >> rhs`.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if debug assertions are enabled and
+    /// `rhs > 96`.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn const_shr(self, rhs: u32) -> Self {
+        debug_assert!(rhs < Self::BITS);
+
+        self.wrapping_shr(rhs)
+    }
+
+    /// Computes `self - rhs`.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if debug assertions are enabled and
+    /// the difference overflows.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn const_sub(self, rhs: Self) -> Self {
+        if cfg!(debug_assertions) {
+            self.strict_sub(rhs)
+        } else {
+            self.wrapping_sub(rhs)
+        }
+    }
+
+    /// Computes `self + rhs` and also reports whether the sum
+    /// overflowed.
+    ///
+    /// If an overflow occurs, the sum is wrapped.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn overflowing_add(self, rhs: Self) -> (Self, bool) {
+        let (lo, c) = self.lo.overflowing_add(rhs.lo);
+        let (mut hi, overflow) = self.hi.overflowing_add(rhs.hi);
+        hi = hi.wrapping_add(c as u32);
+        (Self { lo, hi }, overflow)
+    }
+
+    /// Computes `self - rhs` and also reports whether the
+    /// difference overflowed.
+    ///
+    /// If an overflow occurs, the sum is wrapped.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn overflowing_sub(self, rhs: Self) -> (Self, bool) {
+        let (lo, c) = self.lo.overflowing_sub(rhs.lo);
+        let (mut hi, overflow) = self.hi.overflowing_sub(rhs.hi);
+        hi = hi.wrapping_sub(c as u32);
+        (Self { lo, hi }, overflow)
+    }
+
+    /// Computes `self + rhs`.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the sum overflows.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn strict_add(self, rhs: Self) -> Self {
+        match self.overflowing_add(rhs) {
+            (_, true) => overflow_panic::add(),
+            (v, _) => v,
+        }
+    }
+
+    /// Computes `self - rhs`.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the difference overflows.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn strict_sub(self, rhs: Self) -> Self {
+        match self.overflowing_sub(rhs) {
+            (_, true) => overflow_panic::sub(),
+            (v, _) => v,
+        }
     }
 
     /// Computes `self << rhs`, wrapping modulo 2^96.
@@ -204,9 +356,7 @@ impl u96 {
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn wrapping_add(self, rhs: Self) -> Self {
-        let (lo, c) = self.lo.overflowing_add(rhs.lo);
-        let hi = self.hi.wrapping_add(rhs.hi).wrapping_add(c as u32);
-        Self { lo, hi }
+        self.overflowing_add(rhs).0
     }
 
     /// Computes `self / rhs`.
@@ -282,7 +432,24 @@ impl u96 {
         } else {
             Self {
                 lo: self.lo << rhs,
-                hi: ((self.hi as u64) << rhs | (self.lo.wrapping_shr(64 - rhs))) as u32,
+                hi: ((self.hi as u64) << rhs | (self.lo >> (64 - rhs))) as u32,
+            }
+        }
+    }
+
+    /// TODO
+    pub fn wrapping_shl2(self, rhs: u32) -> Self {
+        let rhs = rhs & (Self::BITS - 1);
+        if rhs >= 64 {
+            Self {
+                lo: 0,
+                hi: (self.lo << (rhs - 64)) as u32,
+            }
+        } else {
+            println!("{}", 64 - rhs);
+            Self {
+                lo: self.lo << rhs,
+                hi: ((self.hi as u64) << rhs | (self.lo >> (64 - rhs))) as u32,
             }
         }
     }
@@ -306,7 +473,7 @@ impl u96 {
             }
         } else {
             Self {
-                lo: self.lo.wrapping_shr(rhs) | (self.hi as u64).wrapping_shl(64 - rhs),
+                lo: self.lo >> rhs | (self.hi as u64) << (64 - rhs),
                 hi: ((self.hi as u64) >> rhs) as u32,
             }
         }
@@ -360,8 +527,8 @@ impl u96 {
         // Perform 128-bit division as if the u96 is a u128 whose
         // upper 32 bits are all zero.
         let n = y.hi.leading_zeros();
-        let y1 = y.wrapping_shl(n); // y<<n
-        let x1 = x.wrapping_shr(1); // x>>1
+        let y1 = y.truncating_shl(n); // y<<n
+        let x1 = x.truncating_shr(1); // x>>1
         let tq = {
             let (mut tq, _) = div64(x1.hi as u64, x1.lo, y1.hi as u64);
             tq >>= 63 - n; // `n` is in [0,32]
@@ -395,76 +562,13 @@ impl u96 {
         let (lo, r) = div64(r, self.lo, rhs);
         (Self { lo, hi: hi as u32 }, r)
     }
-
-    /// Computes `self & rhs`.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn bitand(self, rhs: Self) -> Self {
-        Self {
-            lo: self.lo & rhs.lo,
-            hi: self.hi & rhs.hi,
-        }
-    }
-
-    /// Computes `self | rhs`.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn bitor(self, rhs: Self) -> Self {
-        Self {
-            lo: self.lo | rhs.lo,
-            hi: self.hi | rhs.hi,
-        }
-    }
-
-    /// Computes `self ^ rhs`.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn bitxor(self, rhs: Self) -> Self {
-        Self {
-            lo: self.lo ^ rhs.lo,
-            hi: self.hi ^ rhs.hi,
-        }
-    }
-
-    /// Computes `!self`.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn not(self) -> Self {
-        Self {
-            lo: !self.lo,
-            hi: !self.hi,
-        }
-    }
-
-    /// Computes `self << rhs`.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    #[no_mangle]
-    pub const fn shl(self, rhs: u32) -> Self {
-        debug_assert!(rhs < Self::BITS);
-
-        self.wrapping_shl(rhs)
-    }
-
-    /// Computes `self >> rhs`.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn shr(self, rhs: u32) -> Self {
-        debug_assert!(rhs < Self::BITS);
-
-        self.wrapping_shr(rhs)
-    }
 }
 
 impl Add for u96 {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        if cfg!(debug_assertions) {
-            self.checked_add(rhs).unwrap()
-        } else {
-            self.wrapping_add(rhs)
-        }
+        self.const_add(rhs)
     }
 }
 
@@ -478,13 +582,13 @@ impl BitAnd for u96 {
     type Output = Self;
 
     fn bitand(self, rhs: Self) -> Self::Output {
-        self.bitand(rhs)
+        self.const_bitand(rhs)
     }
 }
 
 impl BitAndAssign for u96 {
     fn bitand_assign(&mut self, rhs: Self) {
-        *self = self.bitand(rhs);
+        *self = self.const_bitand(rhs);
     }
 }
 
@@ -492,13 +596,13 @@ impl BitOr for u96 {
     type Output = Self;
 
     fn bitor(self, rhs: Self) -> Self::Output {
-        self.bitor(rhs)
+        self.const_bitor(rhs)
     }
 }
 
 impl BitOrAssign for u96 {
     fn bitor_assign(&mut self, rhs: Self) {
-        *self = self.bitor(rhs);
+        *self = self.const_bitor(rhs);
     }
 }
 
@@ -506,13 +610,13 @@ impl BitXor for u96 {
     type Output = Self;
 
     fn bitxor(self, rhs: Self) -> Self::Output {
-        self.bitxor(rhs)
+        self.const_bitxor(rhs)
     }
 }
 
 impl BitXorAssign for u96 {
     fn bitxor_assign(&mut self, rhs: Self) {
-        *self = self.bitxor(rhs);
+        *self = self.const_bitxor(rhs);
     }
 }
 
@@ -556,7 +660,7 @@ impl Not for u96 {
     type Output = Self;
 
     fn not(self) -> Self::Output {
-        self.not()
+        self.const_not()
     }
 }
 
@@ -582,13 +686,13 @@ impl Shl<u32> for u96 {
     type Output = Self;
 
     fn shl(self, rhs: u32) -> Self::Output {
-        self.shl(rhs)
+        self.const_shl(rhs)
     }
 }
 
 impl ShlAssign<u32> for u96 {
     fn shl_assign(&mut self, rhs: u32) {
-        *self = self.shl(rhs);
+        *self = self.const_shl(rhs);
     }
 }
 
@@ -596,13 +700,13 @@ impl Shr<u32> for u96 {
     type Output = Self;
 
     fn shr(self, rhs: u32) -> Self::Output {
-        self.shr(rhs)
+        self.const_shr(rhs)
     }
 }
 
 impl ShrAssign<u32> for u96 {
     fn shr_assign(&mut self, rhs: u32) {
-        *self = self.shr(rhs);
+        *self = self.const_shr(rhs);
     }
 }
 
@@ -610,11 +714,7 @@ impl Sub for u96 {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        if cfg!(debug_assertions) {
-            self.checked_sub(rhs).unwrap()
-        } else {
-            self.wrapping_sub(rhs)
-        }
+        self.const_sub(rhs)
     }
 }
 
@@ -728,6 +828,57 @@ const fn mul64(x: u64, y: u64) -> (u64, u64) {
     ((z >> 64) as u64, z as u64)
 }
 
+/// <https://github.com/rust-lang/rust/blob/f6fa358a182b2f8e4d5a10faac4dae950493c9bc/library/core/src/num/overflow_panic.rs>
+mod overflow_panic {
+    #[cold]
+    #[track_caller]
+    pub const fn add() -> ! {
+        panic!("attempt to add with overflow")
+    }
+
+    #[cold]
+    #[track_caller]
+    pub const fn sub() -> ! {
+        panic!("attempt to subtract with overflow")
+    }
+
+    #[cold]
+    #[track_caller]
+    pub const fn mul() -> ! {
+        panic!("attempt to multiply with overflow")
+    }
+
+    #[cold]
+    #[track_caller]
+    pub const fn div() -> ! {
+        panic!("attempt to divide with overflow")
+    }
+
+    #[cold]
+    #[track_caller]
+    pub const fn rem() -> ! {
+        panic!("attempt to calculate the remainder with overflow")
+    }
+
+    #[cold]
+    #[track_caller]
+    pub const fn neg() -> ! {
+        panic!("attempt to negate with overflow")
+    }
+
+    #[cold]
+    #[track_caller]
+    pub const fn shr() -> ! {
+        panic!("attempt to shift right with overflow")
+    }
+
+    #[cold]
+    #[track_caller]
+    pub const fn shl() -> ! {
+        panic!("attempt to shift left with overflow")
+    }
+}
+
 #[cfg(feature = "rand")]
 impl Distribution<u96> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> u96 {
@@ -835,19 +986,10 @@ mod tests {
             let x: u96 = random();
             let y: u32 = thread_rng().gen_range(0..u96::BITS - 1);
 
-            let got = x.wrapping_shl(y);
+            let got = x.wrapping_shl2(y);
             let want = Uint96::from(x).wrapping_shl((y & (u96::BITS - 1)) as usize);
             assert_eq!(got, want, "#{i}: {x} << {y}");
         }
-    }
-
-    #[test]
-    fn test_idk() {
-        let x = u96::wrapping_new((u64::MAX as u128) + 1);
-        println!("{x}");
-        println!("{:096b}", x.wrapping_shr(63));
-        println!("{:096b}", x.wrapping_shr(64));
-        println!("{:096b}", x.wrapping_shr(65));
     }
 
     #[test]
