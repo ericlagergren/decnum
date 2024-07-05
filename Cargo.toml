@@ -15,7 +15,7 @@ categories = [ "no-std", "no-std::no-alloc" ]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
 
 [features]
-default = ["u128"]
+default = []
 
 # Enable `alloc`.
 alloc = []
@@ -26,7 +26,7 @@ rand = ["dep:rand"]
 # Enable `std`.
 std = ["alloc"]
 
-u128 = []
+slow-128 = []
 
 [dependencies]
 itoa = { version = "1.0.11", default-features = false }

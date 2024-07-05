@@ -31,6 +31,7 @@
 // extern crate alloc;
 
 mod dec128;
+mod macros;
 mod uint96;
 
 pub use dec128::d128;
