@@ -3,12 +3,12 @@ use core::{
     fmt,
     hash::Hash,
     mem,
-    num::TryFromIntError,
+    num::{ParseIntError, TryFromIntError},
     ops::{
         BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Shl, ShlAssign, Shr,
         ShrAssign,
     },
-    ptr,
+    str::FromStr,
 };
 
 #[cfg(feature = "rand")]
@@ -17,96 +17,77 @@ use rand::{
     Rng,
 };
 
-use super::macros::{
-    add_assign_impl, add_impl, div_assign_impl, div_impl_integer, mul_assign_impl, mul_impl,
-    neg_impl, rem_assign_impl, rem_impl_integer, sub_assign_impl, sub_impl,
-};
-
 /// An unsigned 96-bit integer.
 #[repr(C, align(4))]
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub struct u96 {
-    lo: u64,
-    hi: u32,
-}
+pub struct u96(u32, u32, u32);
 const _: () = assert!(mem::size_of::<u96>() == 96 / 8);
 
 impl u96 {
-    const MASK: u128 = (1u128 << 96) - 1;
-    const OVERFLOW: u128 = !Self::MASK;
+    const MASK: u128 = (1u128 << Self::BITS) - 1;
 
-    /// The number of bits in the integer.
+    /// The size of the integer in bits.
     pub const BITS: u32 = 96;
 
     /// The largest value that can be represented by this type.
-    pub const MAX: Self = Self {
-        lo: u64::MAX,
-        hi: u32::MAX,
-    };
+    pub const MAX: Self = Self(u32::MAX, u32::MAX, u32::MAX);
+
     /// The smallest value that can be represented by this type.
-    pub const MIN: Self = Self { lo: 0, hi: 0 };
+    pub const MIN: Self = Self(0, 0, 0);
 
     /// Creates a `u96`.
     ///
-    /// It returns `None` if `v` is greater than `(1<<128)-1`.
+    /// It returns `None` if `v` is greater than `(1<<96)-1`.
     pub const fn new(v: u128) -> Option<Self> {
         if v > Self::MASK {
             None
         } else {
-            Some(Self {
-                lo: v as u64,
-                hi: (v >> 64) as u32,
-            })
-        }
-    }
-
-    /// Creates a `u96`, wrapping `v` if it is greater than
-    /// `2^96-1`.
-    pub const fn wrapping_new(v: u128) -> Self {
-        Self {
-            lo: v as u64,
-            hi: (v >> 64) as u32,
+            Some(Self::wrapping_new(v))
         }
     }
 
     /// Creates a `u96` from a `u64`.
     pub const fn from_u64(v: u64) -> Self {
-        Self { lo: v, hi: 0 }
+        Self::from_words(v, 0)
+    }
+
+    const fn from_words(lo: u64, hi: u32) -> Self {
+        Self(lo as u32, (lo >> 32) as u32, hi)
     }
 
     /// Converts the `u96` to a `u128`.
     pub const fn to_u128(self) -> u128 {
-        (self.lo as u128) | ((self.hi as u128) << 64)
+        (self.low64() as u128) | ((self.hi32() as u128) << 64)
     }
 
     /// Converts the `u96` to a `u64`, or returns `None` if it
     /// is too large to fit in a `u64`.
     pub const fn try_to_u64(self) -> Option<u64> {
-        if self.hi != 0 {
+        if self.hi32() != 0 {
             None
         } else {
-            Some(self.lo)
+            Some(self.low64())
         }
     }
 
     /// Reports whether `self == rhs`.
     const fn eq(self, rhs: Self) -> bool {
-        self.lo == rhs.lo && self.hi == rhs.hi
+        self.0 == rhs.0 && self.1 == rhs.1 && self.2 == rhs.2
     }
 
     /// Reports whether `self >= rhs`.
     const fn gte(self, rhs: Self) -> bool {
-        !self.less(rhs)
+        self.cmp(rhs).is_ge()
     }
 
     /// Reports whether `self < rhs`.
     const fn less(self, rhs: Self) -> bool {
-        matches!(self.cmp(rhs), Ordering::Less)
+        self.cmp(rhs).is_lt()
     }
 
     const fn cmp(self, rhs: Self) -> Ordering {
-        if self.hi < rhs.hi || (self.hi == rhs.hi && self.lo < rhs.lo) {
+        if self.hi32() < rhs.hi32() || (self.hi32() == rhs.hi32() && self.low64() < rhs.low64()) {
             Ordering::Less
         } else if self.eq(rhs) {
             Ordering::Equal
@@ -117,12 +98,18 @@ impl u96 {
 
     /// Reports whether the integer is zero.
     pub const fn is_zero(self) -> bool {
-        self.lo == 0 && self.hi == 0
+        self.0 == 0 && self.1 == 0 && self.2 == 0
     }
 
-    const fn low(&self) -> u64 {
-        0
-        //unsafe { ptr::read_unaligned(()) }
+    /// Returns the low 64 bits.
+    const fn low64(self) -> u64 {
+        // SAFETY: `u64` is smaller than `self`.
+        unsafe { mem::transmute_copy(&[self.0, self.1]) }
+    }
+
+    /// Returns the low 64 bits.
+    const fn hi32(self) -> u32 {
+        self.2
     }
 
     /// Shifts `self` left `rhs` times, filling with zeros on the
@@ -133,26 +120,19 @@ impl u96 {
     /// ```rust
     /// use decnum::u96;
     ///
-    /// assert_eq!(u96::MAX.logical_shl(95), 1);
-    /// assert_eq!(u96::MAX.logical_shl(96), 0);
-    /// assert_eq!(u96::MAX.logical_shl(u32::MAX), 0);
+    /// assert_eq!(u96::MAX.logical_shl(95),
+    ///     "39614081257132168796771975168".parse::<u96>().unwrap());
+    /// assert_eq!(u96::MAX.logical_shl(96), u96::from_u64(0));
+    /// assert_eq!(u96::MAX.logical_shl(u32::MAX), u96::from_u64(0));
     /// ```
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     #[no_mangle]
     pub const fn logical_shl(self, rhs: u32) -> Self {
         if rhs >= Self::BITS {
-            Self { lo: 0, hi: 0 }
-        } else if rhs >= 64 {
-            Self {
-                lo: 0,
-                hi: (self.lo << (rhs - 64)) as u32,
-            }
+            Self::MIN
         } else {
-            Self {
-                lo: self.lo << rhs,
-                hi: ((self.hi as u64) << rhs | (self.lo >> (64 - rhs))) as u32,
-            }
+            Self::wrapping_new(self.to_u128() << rhs)
         }
     }
 
@@ -164,25 +144,17 @@ impl u96 {
     /// ```rust
     /// use decnum::u96;
     ///
-    /// assert_eq!(u96::MAX.logical_shr(95), 1);
-    /// assert_eq!(u96::MAX.logical_shr(96), 0);
-    /// assert_eq!(u96::MAX.logical_shr(u32::MAX), 0);
+    /// assert_eq!(u96::MAX.logical_shr(95), u96::from_u64(1));
+    /// assert_eq!(u96::MAX.logical_shr(96), u96::from_u64(0));
+    /// assert_eq!(u96::MAX.logical_shr(u32::MAX), u96::from_u64(0));
     /// ```
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn logical_shr(self, rhs: u32) -> Self {
         if rhs >= Self::BITS {
-            Self { lo: 0, hi: 0 }
-        } else if rhs >= 64 {
-            Self {
-                lo: (self.hi as u64) >> (rhs - 64),
-                hi: 0,
-            }
+            Self::MIN
         } else {
-            Self {
-                lo: self.lo >> rhs | (self.hi as u64) << (64 - rhs),
-                hi: ((self.hi as u64) >> rhs) as u32,
-            }
+            Self::wrapping_new(self.to_u128() >> rhs)
         }
     }
 
@@ -210,8 +182,8 @@ impl u96 {
         }
 
         // `y` is 64 bits, so use fast division.
-        if y.hi == 0 {
-            let (q, r) = self.quorem64(y.lo);
+        if y.hi32() == 0 {
+            let (q, r) = self.quorem64(y.low64());
             return (q, Self::from_u64(r));
         }
 
@@ -223,11 +195,11 @@ impl u96 {
 
         // Perform 128-bit division as if the u96 is a u128 whose
         // upper 32 bits are all zero.
-        let n = y.hi.leading_zeros();
+        let n = y.hi32().leading_zeros();
         let y1 = y.logical_shl(n); // y<<n
         let x1 = x.logical_shr(1); // x>>1
         let tq = {
-            let (mut tq, _) = div64(x1.hi as u64, x1.lo, y1.hi as u64);
+            let (mut tq, _) = div64(x1.hi32() as u64, x1.low64(), y1.hi32() as u64);
             tq >>= 63 - n; // `n` is in [0,32]
             if tq != 0 {
                 tq -= 1;
@@ -251,13 +223,13 @@ impl u96 {
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn quorem64(self, rhs: u64) -> (Self, u64) {
-        if self.lo < rhs {
-            let (q, r) = div64(self.hi as u64, self.lo, rhs);
+        if self.low64() < rhs {
+            let (q, r) = div64(self.hi32() as u64, self.low64(), rhs);
             return (Self::from_u64(q), r);
         }
-        let (hi, r) = div64(0, self.hi as u64, rhs);
-        let (lo, r) = div64(r, self.lo, rhs);
-        (Self { lo, hi: hi as u32 }, r)
+        let (hi, r) = div64(0, self.hi32() as u64, rhs);
+        let (lo, r) = div64(r, self.low64(), rhs);
+        (Self::from_words(lo, hi as u32), r)
     }
 }
 
@@ -364,30 +336,21 @@ impl u96 {
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn const_bitand(self, rhs: Self) -> Self {
-        Self {
-            lo: self.lo & rhs.lo,
-            hi: self.hi & rhs.hi,
-        }
+        Self(self.0 & rhs.0, self.1 & rhs.1, self.2 & rhs.2)
     }
 
     /// Computes `self | rhs`.
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn const_bitor(self, rhs: Self) -> Self {
-        Self {
-            lo: self.lo | rhs.lo,
-            hi: self.hi | rhs.hi,
-        }
+        Self(self.0 | rhs.0, self.1 | rhs.1, self.2 | rhs.2)
     }
 
     /// Computes `self ^ rhs`.
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn const_bitxor(self, rhs: Self) -> Self {
-        Self {
-            lo: self.lo ^ rhs.lo,
-            hi: self.hi ^ rhs.hi,
-        }
+        Self(self.0 ^ rhs.0, self.1 ^ rhs.1, self.2 ^ rhs.2)
     }
 
     /// Computes `self * rhs`.
@@ -426,10 +389,7 @@ impl u96 {
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn const_not(self) -> Self {
-        Self {
-            lo: !self.lo,
-            hi: !self.hi,
-        }
+        Self(!self.0, !self.1, !self.2)
     }
 
     /// Computes `self % rhs`.
@@ -494,6 +454,17 @@ impl u96 {
 
 // Overflowing.
 impl u96 {
+    /// Creates a `u96`, wrapping `v` if it is greater than
+    /// `2^96-1`.
+    #[must_use]
+    pub const fn overflowing_new(v: u128) -> (Self, bool) {
+        const MASK: u64 = u64::MAX ^ (u32::MAX as u64);
+        let lo = v as u64;
+        let hi = (v >> 64) as u64;
+        let overflow = hi & MASK != 0;
+        (Self::from_words(lo, hi as u32), overflow)
+    }
+
     /// Computes `self + rhs` and also reports whether the sum
     /// overflowed.
     ///
@@ -501,9 +472,9 @@ impl u96 {
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn overflowing_add(self, rhs: Self) -> (Self, bool) {
-        let (lo, c) = self.lo.overflowing_add(rhs.lo);
-        let (hi, c) = carrying_add32(self.hi, rhs.hi, c);
-        (Self { lo, hi }, c)
+        let (lo, c) = self.low64().overflowing_add(rhs.low64());
+        let (hi, c) = carrying_add32(self.hi32(), rhs.hi32(), c);
+        (Self::from_words(lo, hi), c)
     }
 
     /// Computes `self / rhs` and also reports whether quotient
@@ -528,17 +499,11 @@ impl u96 {
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn overflowing_mul(self, rhs: Self) -> (Self, bool) {
-        if cfg!(feature = "slow-128") {
-            let (lo, c) = mul64(self.lo, rhs.lo);
-            let (hi, _) = carrying_mul64(self.hi as u64, rhs.lo, c);
-            let (hi, c) = carrying_mul64(self.lo, rhs.hi as u64, hi);
-            let overflow = hi > (u32::MAX as u64) || c != 0;
-            (Self { lo, hi: hi as u32 }, overflow)
-        } else {
-            let (z, c) = self.to_u128().overflowing_mul(rhs.to_u128());
-            let overflow = c || z & Self::OVERFLOW != 0;
-            (Self::wrapping_new(z), overflow)
-        }
+        let (lo, c) = carrying_mul64(self.low64(), rhs.low64(), 0);
+        let (hi, _) = carrying_mul64(self.hi32() as u64, rhs.low64(), c);
+        let (hi, c) = carrying_mul64(self.low64(), rhs.hi32() as u64, hi);
+        let overflow = hi > (u32::MAX as u64) || c != 0;
+        (Self::from_words(lo, hi as u32), overflow)
     }
 
     /// Computes `!self + 1` and also reports whether the result
@@ -547,11 +512,6 @@ impl u96 {
                       without modifying the original"]
     pub const fn overflowing_neg(self) -> (Self, bool) {
         Self::MIN.overflowing_sub(self)
-        // if self.is_zero() {
-        //     (Self::MIN, true)
-        // } else {
-        //     (self.const_not().const_add(1) false)
-        // }
     }
 
     /// Computes `self % rhs` and also reports whether remainder
@@ -576,9 +536,9 @@ impl u96 {
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn overflowing_sub(self, rhs: Self) -> (Self, bool) {
-        let (lo, b) = self.lo.overflowing_sub(rhs.lo);
-        let (hi, b) = borrowing_sub32(self.hi, rhs.hi, b);
-        (Self { lo, hi }, b)
+        let (lo, b) = self.low64().overflowing_sub(rhs.low64());
+        let (hi, b) = borrowing_sub32(self.hi32(), rhs.hi32(), b);
+        (Self::from_words(lo, hi), b)
     }
 }
 
@@ -671,6 +631,13 @@ impl u96 {
 
 // Wrapping.
 impl u96 {
+    /// Creates a `u96`, wrapping `v` if it is greater than
+    /// `2^96-1`.
+    #[must_use]
+    pub const fn wrapping_new(v: u128) -> Self {
+        Self::from_words(v as u64, (v >> 64) as u32)
+    }
+
     /// Computes `self + rhs`, wrapping if the sum overflows.
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
@@ -709,9 +676,9 @@ impl u96 {
             let z = self.to_u128().wrapping_mul(rhs as u128);
             Self::wrapping_new(z)
         } else {
-            let (lo, mut hi) = mul64(self.lo, rhs);
-            hi = hi.wrapping_add((self.hi as u64).wrapping_mul(rhs));
-            Self { lo, hi: hi as u32 }
+            let (lo, mut hi) = mul64(self.low64(), rhs);
+            hi = hi.wrapping_add((self.hi32() as u64).wrapping_mul(rhs));
+            Self::from_words(lo, hi as u32)
         }
     }
 
@@ -765,24 +732,9 @@ impl u96 {
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn wrapping_sub(self, rhs: Self) -> Self {
-        let (lo, b) = self.lo.overflowing_sub(rhs.lo);
-        let hi = self.hi.wrapping_sub(rhs.hi).wrapping_sub(b as u32);
-        Self { lo, hi }
+        self.overflowing_sub(rhs).0
     }
 }
-
-add_impl!(u96);
-div_impl_integer!((u96) => "This operation will panic if `other == 0`.");
-mul_impl!(u96);
-neg_impl!(u96);
-rem_impl_integer!((u96) => "This operation will panic if `other == 0`.");
-sub_impl!(u96);
-
-add_assign_impl!(u96);
-div_assign_impl!(u96);
-mul_assign_impl!(u96);
-rem_assign_impl!(u96);
-sub_assign_impl!(u96);
 
 impl BitAnd for u96 {
     type Output = Self;
@@ -862,15 +814,9 @@ impl ShrAssign<u32> for u96 {
     }
 }
 
-impl PartialEq<i32> for u96 {
-    fn eq(&self, rhs: &i32) -> bool {
-        self.hi == 0 && *rhs > 0 && self.lo == (*rhs as u64)
-    }
-}
-
 impl PartialEq<u64> for u96 {
     fn eq(&self, other: &u64) -> bool {
-        self.hi == 0 && self.lo == *other
+        self.hi32() == 0 && self.low64() == *other
     }
 }
 
@@ -882,48 +828,32 @@ impl PartialEq<u128> for u96 {
 
 impl PartialOrd<u64> for u96 {
     fn partial_cmp(&self, other: &u64) -> Option<Ordering> {
-        if self.hi != 0 {
+        if self.2 != 0 {
             Some(Ordering::Greater)
         } else {
-            PartialOrd::partial_cmp(&self.lo, other)
+            PartialOrd::partial_cmp(&self.low64(), other)
         }
     }
 }
 
-impl fmt::Debug for u96 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.to_u128().fmt(f)
-    }
+macro_rules! fmt_impl {
+    ($($ty:ident),+ $(,)?) => {
+        $(
+            impl fmt::$ty for u96 {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    self.to_u128().fmt(f)
+                }
+            }
+        )+
+    };
 }
-
-impl fmt::Display for u96 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.to_u128().fmt(f)
-    }
-}
-
-impl fmt::Binary for u96 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.to_u128().fmt(f)
-    }
-}
-
-impl fmt::Octal for u96 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.to_u128().fmt(f)
-    }
-}
-
-impl fmt::LowerHex for u96 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.to_u128().fmt(f)
-    }
-}
-
-impl fmt::UpperHex for u96 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.to_u128().fmt(f)
-    }
+fmt_impl! {
+    Debug,
+    Display,
+    Binary,
+    Octal,
+    LowerHex,
+    UpperHex,
 }
 
 macro_rules! from_impl {
@@ -937,16 +867,48 @@ macro_rules! from_impl {
         )+
     };
 }
-from_impl!(u8, u16, u32, u64);
+from_impl!(bool, u8, u16, u32, u64);
 
-impl TryFrom<u128> for u96 {
-    type Error = TryFromIntError;
-    fn try_from(v: u128) -> Result<Self, Self::Error> {
-        match u96::new(v) {
+macro_rules! try_from_impl {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl TryFrom<$ty> for u96 {
+                type Error = TryFromIntError;
+                fn try_from(v: $ty) -> Result<Self, Self::Error> {
+                    match u96::new(v.try_into()?) {
+                        Some(v) => Ok(v),
+                        None => Err(try_from_int_error()),
+                    }
+                }
+            }
+        )+
+    };
+}
+try_from_impl!(i8, i16, i32, i64, i128, isize, u128, usize);
+
+fn try_from_int_error() -> TryFromIntError {
+    let result = u8::try_from(u32::MAX);
+    // SAFETY: `u32::MAX` is not a valid representation of `u8`,
+    // so this should always be `Err`.
+    unsafe { result.unwrap_err_unchecked() }
+}
+
+impl FromStr for u96 {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match Self::new(s.parse::<u128>()?) {
             Some(v) => Ok(v),
-            None => u8::try_from(u128::MAX).map(|_| u96::MAX),
+            None => Err(parse_int_error()),
         }
     }
+}
+
+fn parse_int_error() -> ParseIntError {
+    let result = "?".parse::<u8>();
+    // SAFETY: `?` is not a valid representation of `u8`, so this
+    // should always be `Err`.
+    unsafe { result.unwrap_err_unchecked() }
 }
 
 /// ```text
@@ -963,6 +925,8 @@ const fn div64(hi: u64, lo: u64, y: u64) -> (u64, u64) {
 /// Returns `x*y` as `(lo, hi)`.
 const fn mul64(x: u64, y: u64) -> (u64, u64) {
     // SAFETY: Overflow is contained in the wider type.
+    //
+    // ((1^64)-1)^2 < (1^128)-1
     let z = unsafe { (x as u128).unchecked_mul(y as u128) };
     (z as u64, (z >> 64) as u64)
 }
@@ -970,6 +934,8 @@ const fn mul64(x: u64, y: u64) -> (u64, u64) {
 /// Returns `x*y+z` as `(lo, hi)`.
 const fn carrying_mul64(x: u64, y: u64, carry: u64) -> (u64, u64) {
     // SAFETY: Overflow is contained in the wider type.
+    //
+    // ((2^64)-1) + ((2^64)-1)^2 < (2^128)-1
     let z = unsafe {
         (x as u128)
             .unchecked_mul(y as u128)
@@ -1047,10 +1013,7 @@ mod overflow_panic {
 #[cfg(feature = "rand")]
 impl Distribution<u96> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> u96 {
-        u96 {
-            lo: rng.gen(),
-            hi: rng.gen(),
-        }
+        u96(rng.gen(), rng.gen(), rng.gen())
     }
 }
 
@@ -1065,17 +1028,17 @@ mod tests {
     impl TryFrom<u96> for Uint96 {
         type Error = ToUintError<Self>;
         fn try_from(x: u96) -> Result<Self, ToUintError<Self>> {
-            Ok(Uint96::from_limbs([x.lo, x.hi as u64]))
+            Ok(Uint96::from_limbs([x.low64(), x.hi32() as u64]))
         }
     }
     impl PartialEq<Uint96> for u96 {
         fn eq(&self, other: &Uint96) -> bool {
-            PartialEq::eq(&[self.lo, self.hi as u64], other.as_limbs())
+            PartialEq::eq(&[self.low64(), self.hi32() as u64], other.as_limbs())
         }
     }
     impl PartialOrd<Uint96> for u96 {
         fn partial_cmp(&self, other: &Uint96) -> Option<Ordering> {
-            PartialOrd::partial_cmp(&[self.lo, self.hi as u64], other.as_limbs())
+            PartialOrd::partial_cmp(&[self.low64(), self.hi32() as u64], other.as_limbs())
         }
     }
 
@@ -1083,6 +1046,30 @@ mod tests {
         ($v:literal) => {{
             u96::new($v).unwrap()
         }};
+    }
+
+    #[test]
+    fn test_logical_shl() {
+        for i in 0..500_000 {
+            let x: u96 = random();
+            let y: u32 = thread_rng().gen_range(0..u96::BITS - 1);
+
+            let got = x.logical_shl(y);
+            let want = Uint96::from(x).wrapping_shl(y as usize);
+            assert_eq!(got, want, "#{i}: {x} << {y}");
+        }
+    }
+
+    #[test]
+    fn test_logical_shr() {
+        for i in 0..500_000 {
+            let x: u96 = random();
+            let y: u32 = thread_rng().gen_range(0..u96::BITS - 1);
+
+            let got = x.logical_shr(y);
+            let want = Uint96::from(x).wrapping_shr(y as usize);
+            assert_eq!(got, want, "#{i}: {x} >> {y}");
+        }
     }
 
     #[test]

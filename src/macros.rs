@@ -1,3 +1,5 @@
+use super::uint96::u96;
+
 // implements the unary operator "op &T"
 // based on "op T" where T is expected to be `Copy`able
 macro_rules! forward_ref_unop {
@@ -12,7 +14,6 @@ macro_rules! forward_ref_unop {
         }
     };
 }
-pub(crate) use forward_ref_unop;
 
 // implements binary operators "&T op U", "T op &U", "&T op &U"
 // based on "T op U" where T and U are expected to be `Copy`able
@@ -49,7 +50,6 @@ macro_rules! forward_ref_binop {
         }
     };
 }
-pub(crate) use forward_ref_binop;
 
 // implements "T op= &U", based on "T op= U"
 // where U is expected to be `Copy`able
@@ -64,7 +64,6 @@ macro_rules! forward_ref_op_assign {
         }
     };
 }
-pub(crate) use forward_ref_op_assign;
 
 macro_rules! add_impl {
     ($($t:ty)*) => ($(
@@ -78,10 +77,11 @@ macro_rules! add_impl {
             }
         }
 
-        $crate::macros::forward_ref_binop! { impl Add, add for $t, $t }
+        forward_ref_binop! { impl Add, add for $t, $t }
     )*)
 }
-pub(crate) use add_impl;
+
+add_impl! { u96}
 
 macro_rules! sub_impl {
     ($($t:ty)*) => ($(
@@ -95,10 +95,11 @@ macro_rules! sub_impl {
             }
         }
 
-        $crate::macros::forward_ref_binop! { impl Sub, sub for $t, $t }
+        forward_ref_binop! { impl Sub, sub for $t, $t }
     )*)
 }
-pub(crate) use sub_impl;
+
+sub_impl! { u96}
 
 macro_rules! mul_impl {
     ($($t:ty)*) => ($(
@@ -112,10 +113,11 @@ macro_rules! mul_impl {
             }
         }
 
-        $crate::macros::forward_ref_binop! { impl Mul, mul for $t, $t }
+        forward_ref_binop! { impl Mul, mul for $t, $t }
     )*)
 }
-pub(crate) use mul_impl;
+
+mul_impl! { u96}
 
 macro_rules! div_impl_integer {
     ($(($($t:ty)*) => $panic:expr),*) => ($($(
@@ -135,10 +137,11 @@ macro_rules! div_impl_integer {
             }
         }
 
-        $crate::macros::forward_ref_binop! { impl Div, div for $t, $t }
+        forward_ref_binop! { impl Div, div for $t, $t }
     )*)*)
 }
-pub(crate) use div_impl_integer;
+
+div_impl_integer!((u96) => "This operation will panic if `other == 0`.");
 
 macro_rules! rem_impl_integer {
     ($(($($t:ty)*) => $panic:expr),*) => ($($(
@@ -158,10 +161,11 @@ macro_rules! rem_impl_integer {
             }
         }
 
-        $crate::macros::forward_ref_binop! { impl Rem, rem for $t, $t }
+        forward_ref_binop! { impl Rem, rem for $t, $t }
     )*)*)
 }
-pub(crate) use rem_impl_integer;
+
+rem_impl_integer!((u96) => "This operation will panic if `other == 0`.");
 
 macro_rules! neg_impl {
     ($($t:ty)*) => ($(
@@ -174,10 +178,11 @@ macro_rules! neg_impl {
             }
         }
 
-        $crate::macros::forward_ref_unop! { impl Neg, neg for $t }
+        forward_ref_unop! { impl Neg, neg for $t }
     )*)
 }
-pub(crate) use neg_impl;
+
+neg_impl! { u96}
 
 macro_rules! add_assign_impl {
     ($($t:ty)+) => ($(
@@ -189,10 +194,11 @@ macro_rules! add_assign_impl {
             }
         }
 
-        $crate::macros::forward_ref_op_assign! { impl AddAssign, add_assign for $t, $t }
+        forward_ref_op_assign! { impl AddAssign, add_assign for $t, $t }
     )+)
 }
-pub(crate) use add_assign_impl;
+
+add_assign_impl! { u96 }
 
 macro_rules! sub_assign_impl {
     ($($t:ty)+) => ($(
@@ -204,10 +210,11 @@ macro_rules! sub_assign_impl {
             }
         }
 
-        $crate::macros::forward_ref_op_assign! { impl SubAssign, sub_assign for $t, $t }
+        forward_ref_op_assign! { impl SubAssign, sub_assign for $t, $t }
     )+)
 }
-pub(crate) use sub_assign_impl;
+
+sub_assign_impl! { u96 }
 
 macro_rules! mul_assign_impl {
     ($($t:ty)+) => ($(
@@ -219,10 +226,11 @@ macro_rules! mul_assign_impl {
             }
         }
 
-        $crate::macros::forward_ref_op_assign! { impl MulAssign, mul_assign for $t, $t }
+        forward_ref_op_assign! { impl MulAssign, mul_assign for $t, $t }
     )+)
 }
-pub(crate) use mul_assign_impl;
+
+mul_assign_impl! { u96 }
 
 macro_rules! div_assign_impl {
     ($($t:ty)+) => ($(
@@ -234,10 +242,11 @@ macro_rules! div_assign_impl {
             }
         }
 
-        $crate::macros::forward_ref_op_assign! { impl DivAssign, div_assign for $t, $t }
+        forward_ref_op_assign! { impl DivAssign, div_assign for $t, $t }
     )+)
 }
-pub(crate) use div_assign_impl;
+
+div_assign_impl! { u96 }
 
 macro_rules! rem_assign_impl {
     ($($t:ty)+) => ($(
@@ -249,7 +258,8 @@ macro_rules! rem_assign_impl {
             }
         }
 
-        $crate::macros::forward_ref_op_assign! { impl RemAssign, rem_assign for $t, $t }
+        forward_ref_op_assign! { impl RemAssign, rem_assign for $t, $t }
     )+)
 }
-pub(crate) use rem_assign_impl;
+
+rem_assign_impl! { u96 }
