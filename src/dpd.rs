@@ -43,26 +43,13 @@ pub const fn classify_bcd(bcd: u16) -> Pattern {
 }
 
 /// Classifies a DPD for unpacking into a BCD.
-pub fn classify_dpd(dpd: u16) -> Pattern {
+pub const fn classify_dpd(dpd: u16) -> Pattern {
     use Pattern::*;
 
-    // .... ..pq rstu vwxy
-    // .... .... ...v wxst
-
-    println!(
-        "dpd: ({:03b})({:03b})({:01b})({:03b})",
-        (dpd >> 7) & 0x7,
-        (dpd >> 4) & 0x7,
-        (dpd >> 3) & 0x1,
-        dpd & 0x7,
-    );
-
-    // Match `v`.
+    // Match bit `v`.
     if dpd & 0x8 == 0 {
         return AllSmall;
     }
-
-    println!("vwx = {:#x}", dpd & 0xe);
 
     // Match bits `vwx`.
     match dpd & 0xe {
@@ -71,8 +58,6 @@ pub fn classify_dpd(dpd: u16) -> Pattern {
         0xc => return LeftLarge,
         _ => {}
     }
-
-    println!("st = {:#x}", dpd & 0x60);
 
     // Match bits `st`.
     match dpd & 0x60 {
@@ -150,7 +135,7 @@ pub const fn pack(mut bcd: u16) -> u16 {
 }
 
 /// Unpacks a DPD into a BCD.
-pub fn unpack(mut dpd: u16) -> u16 {
+pub const fn unpack(mut dpd: u16) -> u16 {
     // (pqr)(stu)(v)(wxy) becomes (abcd)(efgh)(ijkm)
 
     // DPDs only use the lower 10 bits.
@@ -172,7 +157,7 @@ pub fn unpack(mut dpd: u16) -> u16 {
         AllSmall => {
             // .... ..pq rstu vwxy
             // .... 0pqr 0stu 0wxy
-            ((dpd & 0x380) << 1) | (dpd & 0x777)
+            ((dpd & 0x380) << 1) | (dpd & 0x077)
         }
         RightLarge => {
             // .... ..pq rstu vwxy
@@ -182,7 +167,7 @@ pub fn unpack(mut dpd: u16) -> u16 {
         MiddleLarge => {
             // .... ..pq rstu vwxy
             // .... 0pqr 100u 0sty
-            ((dpd & 0x380) << 1) | ((dpd & 0x60) >> 4) | (dpd & 1) | 0x10
+            ((dpd & 0x380) << 1) | ((dpd & 0x60) >> 4) | 0x80 | (dpd & 0x11)
         }
         LeftLarge => {
             // .... ..pq rstu vwxy
@@ -192,110 +177,32 @@ pub fn unpack(mut dpd: u16) -> u16 {
         RightSmall => {
             // .... ..pq rstu vwxy
             // .... 100r 100u 0pqy
-            todo!()
+            ((dpd & 0x80) << 1) | ((dpd & 0x30) >> 7) | (dpd & 0x11) | 0x880
         }
         MiddleSmall => {
             // .... ..pq rstu vwxy
             // .... 100r 0pqu 100y
-            todo!()
+            ((dpd & 0x80) << 1) | ((dpd & 0x30) >> 3) | (dpd & 0x11) | 0x808
         }
         LeftSmall => {
             // .... ..pq rstu vwxy
             // .... 0pqr 100u 100y
-            todo!()
+            ((dpd & 0x380) << 1) | (dpd & 0x11) | 0x88
         }
         AllLarge => {
             // .... ..pq rstu vwxy
             // .... 100r 100u 100y
-            todo!()
+            //
+            // .... ..10 1101 0101
+            //
+            // .... ..00 1000 0000
+            // .... ..00 0001 0001
+            // .... 1000 1000 1000
+            //
+            // .... 0111 0101 0101
+            ((dpd & 0x80) << 1) | (dpd & 0x11) | 0x888
         }
     }
-}
-
-macro_rules! bit {
-    ($x:ident, $idx:literal) => {{
-        (($x >> $idx) & 1) == 1
-    }};
-}
-
-/*
-/* dpd2bcd -- Expand Densely Packed Decimal to BCD
-   argument is a string of 10 characters, each 0 or 1; all 1024
-            possibilities are accepted (non-canonicals -> various)
-            (for example, 0110101101)
-   result   is a string of 12 characters, each 0 or 1
-            (for the example, 100100100011 -- 923)
-   */
-dpd2bcd: procedure
-  -- assign each bit to a variable, named as in the description
-  parse arg p +1 q +1 r +1 s +1 t +1 u +1 v +1 w +1 x +1 y +1
-
-  -- derive the result bits, using boolean expressions only
-  a= (v & w) & (\s | t | \x)
-  b=p & (\v | \w | (s & \t & x))
-  c=q & (\v | \w | (s & \t & x))
-  d=r
-  e=v & ((\w & x) | (\t & x) | (s & x))
-  f=(s & (\v | \x)) | (p & \s & t & v & w & x)
-  g=(t & (\v | \x)) | (q & \s & t & w)
-  h=u
-  i=v & ((\w & \x) | (w & x & (s | t)))
-  j=(\v & w) | (s & v & \w & x) | (p & w & (\x | (\s & \t)))
-  k=(\v & x) | (t & \w & x) | (q & v & w & (\x | (\s & \t)))
-  m=y
-  -- concatenate the bits and return
-  return a||b||c||d||e||f||g||h||i||j||k||m
-*/
-pub fn dpd2bcd(arg: u16) -> u16 {
-    let p = bit!(arg, 9);
-    let q = bit!(arg, 8);
-    let r = bit!(arg, 7);
-    let s = bit!(arg, 6);
-    let t = bit!(arg, 5);
-    let u = bit!(arg, 4);
-    let v = bit!(arg, 3);
-    let w = bit!(arg, 2);
-    let x = bit!(arg, 1);
-    let y = bit!(arg, 0);
-
-    print!("{:1b}{:1b}{:1b} ", p as u8, q as u8, r as u8);
-    print!("{:1b}{:1b}{:1b} ", s as u8, t as u8, u as u8);
-    print!("{:1b}{:1b}{:1b}{:1b} ", v as u8, w as u8, x as u8, y as u8);
-    println!("// input");
-    println!("pqr stu vwxy");
-
-    let a = (v & w) & (!s | t | !x);
-    let b = p & (!v | !w | (s & !t & x));
-    let c = q & (!v | !w | (s & !t & x));
-    let d = r;
-    let e = v & ((!w & x) | (!t & x) | (s & x));
-    let f = (s & (!v | !x)) | (p & !s & t & v & w & x);
-    let g = (t & (!v | !x)) | (q & !s & t & w);
-    let h = u;
-    let i = v & ((!w & !x) | (w & x & (s | t)));
-    let j = (!v & w) | (s & v & !w & x) | (p & w & (!x | (!s & !t)));
-    let k = (!v & x) | (t & !w & x) | (q & v & w & (!x | (!s & !t)));
-    let m = y;
-
-    println!("1001 1001 1001 // want");
-    print!("{:1b}{:1b}{:1b}{:1b} ", a as u8, b as u8, c as u8, d as u8);
-    print!("{:1b}{:1b}{:1b}{:1b} ", e as u8, f as u8, g as u8, h as u8);
-    print!("{:1b}{:1b}{:1b}{:1b} ", i as u8, j as u8, k as u8, m as u8);
-    println!("// got");
-    println!("abcd efgh ijkm");
-
-    (m as u16)
-        | ((k as u16) << 1)
-        | ((j as u16) << 2)
-        | ((i as u16) << 3)
-        | ((h as u16) << 4)
-        | ((g as u16) << 5)
-        | ((f as u16) << 6)
-        | ((e as u16) << 7)
-        | ((d as u16) << 8)
-        | ((c as u16) << 9)
-        | ((b as u16) << 10)
-        | ((a as u16) << 11)
 }
 
 #[cfg(test)]
@@ -304,14 +211,6 @@ mod tests {
 
     use super::*;
     use crate::bcd;
-
-    #[test]
-    fn test_dpd2bcd() {
-        let input = 0b001_111_1111;
-        let want = 0b1001_1001_1001; // 0x999
-        let got = dpd2bcd(input);
-        assert_eq!(got, want);
-    }
 
     struct Dpd(u16);
     impl fmt::Display for Dpd {
@@ -358,7 +257,17 @@ mod tests {
 
             let got = unpack(got);
             assert_eq!(got, bcd, "#{i} ({bin}): {} != {}", Bcd(got), Bcd(bcd));
-            println!();
+        }
+    }
+
+    #[test]
+    fn test_pack_unpack_exhaustive() {
+        for i in 0..=999 {
+            let bcd = bcd::from_u16(i);
+            let dpd = pack(bcd);
+            assert_eq!(classify_bcd(bcd), classify_dpd(dpd), "#{i}");
+            let got = unpack(dpd);
+            assert_eq!(got, bcd, "#{i}: dpd={}", Dpd(dpd));
         }
     }
 }
