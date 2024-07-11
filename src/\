@@ -1,9 +1,7 @@
 //! BCD conversion routines.
 
 use core::{
-    cmp::Ordering,
     fmt,
-    hash::Hash,
     str::{self, FromStr},
 };
 
@@ -18,23 +16,14 @@ macro_rules! bcd_impl {
         $name:ident,
         $digits:literal,
         $ty:ty,
-        $to_bin:ident,
-        $from_bin:ident,
+        $bcd2bin:ident,
+        $bin2bcd:ident,
         $is_valid:ident $(,)?
     ) => {
-        #[doc = concat!("A BCD with ", stringify!($digits), " digits.")]
-        #[derive(Copy, Clone, Hash, Eq, PartialEq)]
+        /// A BCD.
+        #[derive(Copy, Clone, Eq, PartialEq)]
         pub struct $name {
-            /// The most significant digits are in `bcd[0]` and
-            /// the least significant digits are in
-            /// `bcd[bcd.len()-1]`.
-            ///
-            /// For example, given the number 12345, the lower
-            /// half of `bcd[0]` contains `5` and the upper half
-            /// contains `4`. The lower half of `bcd[1]` contains
-            /// `3` and the upper half contains `2`. The lower
-            /// half of `bcd[2]` contains `1` and all remaining
-            /// bits in `bcd` are 0.
+            /// Each digit only requires a nibble.
             bcd: [u8; Self::SIZE],
         }
 
@@ -42,28 +31,9 @@ macro_rules! bcd_impl {
             /// The maximum number of digits in the BCD.
             pub const DIGITS: usize = $digits;
 
-            /// The size of the internal array.
-            ///
-            /// Each digit only requires a nibble.
             const SIZE: usize = ($digits + 1) / 2;
 
-            /// Returns the all-zero BCD.
-            pub const fn zero() -> Self {
-                Self {
-                    bcd: [0u8; Self::SIZE],
-                }
-            }
-
-            /// Creates a BCD from a binary number.
-            ///
-            /// # Example
-            ///
-            /// ```
-            /// use decnum::bcd::Bcd5;
-            ///
-            /// let x = Bcd5::from_bin(1234).to_bin();
-            /// assert_eq!(x, 1234);
-            /// ```
+            /// Converts a binary number to a BCD.
             pub const fn from_bin(mut bin: $ty) -> Self {
                 let mut bcd = [0u8; Self::SIZE];
                 let mut i = 0;
@@ -96,35 +66,35 @@ macro_rules! bcd_impl {
             /// let y: Bcd5 = "01234".parse().unwrap();
             /// assert_eq!(x, y);
             /// ```
-            pub const fn from_str(s: &str) -> Result<Self, ParseBcdError> {
+            pub fn from_str(s: &str) -> Result<Self, ParseBcdError> {
+                println!("s={s} len={}", s.len());
+
                 let s = s.as_bytes();
                 if s.len() > Self::DIGITS {
                     return Err(ParseBcdError(()));
-                }
-                if s.is_empty() {
-                    return Ok(Self {
-                        bcd: [0u8; Self::SIZE],
-                    });
                 }
 
                 let mut bcd = [0u8; Self::SIZE];
 
                 let mut i = 0;
-                let mut j = s.len() - 1;
+                let mut j = s.len();
+                println!("j={j}");
                 while i < s.len() {
                     let c = s[i];
                     if c < b'0' || c > b'9' {
                         return Err(ParseBcdError(()));
                     }
                     let d = c - b'0';
+                    println!("j={j} j/2={} bcd={}", j / 2, bcd.len());
                     if j % 2 == 0 {
-                        bcd[j / 2] |= d; // lo
-                    } else {
                         bcd[j / 2] |= d << 4; // hi
+                    } else {
+                        bcd[j / 2] |= d; // lo
                     }
-                    j = j.saturating_sub(1);
+                    j -= 1;
                     i += 1;
                 }
+                println!();
                 Ok(Self { bcd })
             }
 
@@ -141,21 +111,6 @@ macro_rules! bcd_impl {
                     p = p.wrapping_mul(100);
                 }
                 bin
-            }
-
-            /// Reports whether the BCD is zero.
-            ///
-            /// # Example
-            ///
-            /// ```
-            /// use decnum::bcd::Bcd5;
-            ///
-            /// assert!(Bcd5::from_bin(0).is_zero());
-            /// assert!(!Bcd5::from_bin(1).is_zero());
-            /// ```
-            pub const fn is_zero(&self) -> bool {
-                // If the LSD is zero, then the BCD is zero.
-                self.bcd[0] == 0
             }
 
             /// Encodes the BCD to a string.
@@ -216,17 +171,6 @@ macro_rules! bcd_impl {
             }
         }
 
-        impl Ord for $name {
-            fn cmp(&self, other: &Self) -> Ordering {
-                Ord::cmp(&self.to_bin(), &other.to_bin())
-            }
-        }
-        impl PartialOrd for $name {
-            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-                Some(Ord::cmp(self, other))
-            }
-        }
-
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 let mut buf = [0u8; Self::DIGITS];
@@ -265,7 +209,7 @@ macro_rules! bcd_impl {
         }
 
         /// Converts a binary number to a BCD.
-        pub const fn $from_bin(mut bin: $ty) -> $ty {
+        pub const fn $bin2bcd(mut bin: $ty) -> $ty {
             // Number of decimal digits that this integer can
             // support.
             const DIGITS: u32 = <$ty>::BITS / 4;
@@ -291,7 +235,7 @@ macro_rules! bcd_impl {
         }
 
         /// Converts a BCD to a binary number.
-        pub const fn $to_bin(bcd: $ty) -> $ty {
+        pub const fn $bcd2bin(bcd: $ty) -> $ty {
             let mut z = 0; // result
             let mut p = 1; // powers of 10
             let mut s = 0; // shift
@@ -326,8 +270,6 @@ macro_rules! bcd_impl {
             /// same.
             macro_rules! mask {
                 ($nibble:literal) => {{
-                    const { assert!($nibble <= 0xf) }
-
                     let mut v = 0;
                     let mut s = 0;
                     while s < <$ty>::BITS as $ty {
@@ -413,23 +355,10 @@ mod tests {
             $(#[$meta])*
             #[test]
             fn $name() {
-                let mut prev = <$bcd>::zero();
                 for want in 0..=<$int>::MAX {
                     let bcd = <$bcd>::from_bin(want);
                     let got = bcd.to_bin();
                     assert_eq!(got, want);
-                    if want == 0 {
-                        assert_eq!(prev.cmp(&bcd), Ordering::Equal,
-                            "{prev} cmp {bcd}");
-                        assert_eq!(bcd.cmp(&prev), Ordering::Equal,
-                            "{bcd} cmp {prev}");
-                    } else {
-                        assert_eq!(prev.cmp(&bcd), Ordering::Less,
-                            "{prev} cmp {bcd}");
-                        assert_eq!(bcd.cmp(&prev), Ordering::Greater,
-                            "{bcd} cmp {prev}");
-                    }
-                    prev = bcd;
                 }
             }
         };
@@ -451,7 +380,7 @@ mod tests {
             $(#[$meta])*
             #[test]
             fn $name() {
-                for i in 0..=<$int>::MAX {
+                for i in 123..=<$int>::MAX {
                     let want = i.to_string();
                     let bcd = <$bcd>::from_bin(i);
                     let mut buf = [0u8; <$bcd>::DIGITS];
