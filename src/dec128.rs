@@ -2,7 +2,10 @@
 
 use core::{fmt, mem};
 
-use super::tables::{BIN2CHAR, BIN2DPD, DPD2BIN, TEST_MSD};
+use super::{
+    bcd, dpd,
+    tables::{BIN2CHAR, BIN2DPD, DPD2BIN, TEST_MSD},
+};
 
 const E_MIN: i16 = -6143;
 const E_MAX: i16 = 6144;
@@ -158,17 +161,12 @@ impl d128 {
     }
 
     /// TODO
-    pub const fn from_u32(mut v: u32) -> Self {
-        let mut encode = BIN2DPD[(v % 1000) as usize] as u32;
-        v /= 1000;
-        encode |= (BIN2DPD[(v % 1000) as usize] as u32) << 10;
-        v /= 1000;
-        encode |= (BIN2DPD[(v % 1000) as usize] as u32) << 20;
-        v /= 1000;
-        encode |= v << 30;
+    pub const fn from_u32(v: u32) -> Self {
+        let bcd = bcd::from_u32(v);
+        let dpd = dpd::pack_u32(bcd);
 
         const ZERO: u32 = 0x22080000;
-        Self::from_words(ZERO, 0, v >> 2, encode as u32)
+        Self::from_words(ZERO, 0, v >> 2, dpd as u32)
     }
 
     const fn from_words(w0: u32, w1: u32, w2: u32, w3: u32) -> Self {

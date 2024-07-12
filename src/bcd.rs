@@ -7,11 +7,6 @@ use core::{
     str::{self, FromStr},
 };
 
-/// Returns the number of digits in an `n`-bit BCD.
-pub const fn digits(bits: u32) -> usize {
-    (bits / 4) as usize
-}
-
 /// `$digits` is the number of decimal digits in `<$ty>::MAX`.
 macro_rules! bcd_impl {
     (

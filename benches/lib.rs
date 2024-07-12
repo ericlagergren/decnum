@@ -1,96 +1,81 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use decnum::{
-    bcd::{self, Bcd16, Bcd2, Bcd32, Bcd4, Bcd8},
-    u96,
+    bcd::{self, Bcd10, Bcd20, Bcd3, Bcd39, Bcd5},
+    dpd, u96,
 };
 use rand::random;
+
+fn bench_dpd(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dpd");
+
+    group.bench_function("classify_bcd", |b| {
+        let bcd = bcd::from_u16(random());
+        b.iter(|| black_box(dpd::classify_bcd(black_box(bcd))))
+    });
+    group.bench_function("classify_dpd", |b| {
+        let dpd = dpd::pack(bcd::from_u16(random()));
+        b.iter(|| black_box(dpd::classify_dpd(black_box(dpd))))
+    });
+
+    group.bench_function("pack all small", |b| {
+        let bcd = bcd::from_u16(123);
+        b.iter(|| black_box(dpd::pack(dpd::unpack(bcd))))
+    });
+    group.bench_function("pack all large", |b| {
+        let bcd = bcd::from_u16(999);
+        b.iter(|| black_box(dpd::pack(dpd::unpack(bcd))))
+    });
+
+    group.bench_function("unpack all small", |b| {
+        let dpd = dpd::pack(bcd::from_u16(123));
+        b.iter(|| black_box(dpd::unpack(black_box(dpd))))
+    });
+    group.bench_function("unpack all large", |b| {
+        let dpd = dpd::pack(bcd::from_u16(999));
+        b.iter(|| black_box(dpd::unpack(black_box(dpd))))
+    });
+
+    group.finish();
+}
 
 fn bench_bcd(c: &mut Criterion) {
     let mut group = c.benchmark_group("bcd");
 
-    group.bench_function("to_u128", |b| {
-        let bcd = bcd::from_u128(random());
-        b.iter(|| black_box(bcd::to_u128(black_box(bcd))))
-    });
-    group.bench_function("to_u64", |b| {
-        let bcd = bcd::from_u64(random());
-        b.iter(|| black_box(bcd::to_u64(black_box(bcd))))
-    });
-    group.bench_function("to_u32", |b| {
-        let bcd = bcd::from_u32(random());
-        b.iter(|| black_box(bcd::to_u32(black_box(bcd))))
-    });
-    group.bench_function("to_u16", |b| {
-        let bcd = bcd::from_u16(random());
-        b.iter(|| black_box(bcd::to_u16(black_box(bcd))))
-    });
-    group.bench_function("to_u8", |b| {
-        let bcd = bcd::from_u8(random());
-        b.iter(|| black_box(bcd::to_u8(black_box(bcd))))
-    });
+    macro_rules! bench_to_from_int {
+        ($to:ident, $from:ident) => {
+            group.bench_function(stringify!($to), |b| {
+                let bcd = bcd::$from(random());
+                b.iter(|| black_box(bcd::$to(black_box(bcd))))
+            });
+            group.bench_function(stringify!($from), |b| {
+                let u = bcd::$to(random());
+                b.iter(|| black_box(bcd::$from(black_box(u))))
+            });
+        };
+    }
+    bench_to_from_int!(to_u128, from_u128);
+    bench_to_from_int!(to_u64, from_u64);
+    bench_to_from_int!(to_u32, from_u32);
+    bench_to_from_int!(to_u16, from_u16);
+    bench_to_from_int!(to_u8, from_u8);
 
-    group.bench_function("from_u128", |b| {
-        let u = bcd::to_u128(random());
-        b.iter(|| black_box(bcd::from_u128(black_box(u))))
-    });
-    group.bench_function("from_u64", |b| {
-        let u = bcd::to_u64(random());
-        b.iter(|| black_box(bcd::from_u64(black_box(u))))
-    });
-    group.bench_function("from_u32", |b| {
-        let u = bcd::to_u32(random());
-        b.iter(|| black_box(bcd::from_u32(black_box(u))))
-    });
-    group.bench_function("from_u16", |b| {
-        let u = bcd::to_u16(random());
-        b.iter(|| black_box(bcd::from_u16(black_box(u))))
-    });
-    group.bench_function("from_u8", |b| {
-        let u = bcd::to_u8(random());
-        b.iter(|| black_box(bcd::from_u8(black_box(u))))
-    });
-
-    group.bench_function("Bcd32::to_bin", |b| {
-        let bcd = Bcd32::from_bin(random());
-        b.iter(|| black_box(black_box(bcd).to_bin()))
-    });
-    group.bench_function("Bcd16::to_bin", |b| {
-        let bcd = Bcd16::from_bin(random());
-        b.iter(|| black_box(black_box(bcd).to_bin()))
-    });
-    group.bench_function("Bcd8::to_bin", |b| {
-        let bcd = Bcd8::from_bin(random());
-        b.iter(|| black_box(black_box(bcd).to_bin()))
-    });
-    group.bench_function("Bcd4::to_bin", |b| {
-        let bcd = Bcd4::from_bin(random());
-        b.iter(|| black_box(black_box(bcd).to_bin()))
-    });
-    group.bench_function("Bcd2::to_bin", |b| {
-        let bcd = Bcd2::from_bin(random());
-        b.iter(|| black_box(black_box(bcd).to_bin()))
-    });
-
-    group.bench_function("Bcd32::from_bin", |b| {
-        let u = Bcd32::to_bin(&Bcd32::from_bin(random()));
-        b.iter(|| black_box(Bcd32::from_bin(black_box(u))))
-    });
-    group.bench_function("Bcd16::from_bin", |b| {
-        let u = Bcd16::to_bin(&Bcd16::from_bin(random()));
-        b.iter(|| black_box(Bcd16::from_bin(black_box(u))))
-    });
-    group.bench_function("Bcd8::from_bin", |b| {
-        let u = Bcd8::to_bin(&Bcd8::from_bin(random()));
-        b.iter(|| black_box(Bcd8::from_bin(black_box(u))))
-    });
-    group.bench_function("Bcd4::from_bin", |b| {
-        let u = Bcd4::to_bin(&Bcd4::from_bin(random()));
-        b.iter(|| black_box(Bcd4::from_bin(black_box(u))))
-    });
-    group.bench_function("Bcd2::from_bin", |b| {
-        let u = Bcd2::to_bin(&Bcd2::from_bin(random()));
-        b.iter(|| black_box(Bcd2::from_bin(black_box(u))))
-    });
+    macro_rules! bench_to_from {
+        ($ty:ty) => {
+            group.bench_function(concat!(stringify!($ty, "::to_bin")), |b| {
+                let bcd = <$ty>::from_bin(random());
+                b.iter(|| black_box(black_box(bcd).to_bin()))
+            });
+            group.bench_function(concat!(stringify!($ty, "::from_bin")), |b| {
+                let u = <$ty>::to_bin(&<$ty>::from_bin(random()));
+                b.iter(|| black_box(<$ty>::from_bin(black_box(u))))
+            });
+        };
+    }
+    bench_to_from!(Bcd39);
+    bench_to_from!(Bcd20);
+    bench_to_from!(Bcd10);
+    bench_to_from!(Bcd5);
+    bench_to_from!(Bcd3);
 
     group.finish();
 }
@@ -161,5 +146,11 @@ fn bench_quorem(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_bcd, bench_overflowing_mul, bench_quorem);
+criterion_group!(
+    benches,
+    bench_bcd,
+    bench_dpd,
+    bench_overflowing_mul,
+    bench_quorem
+);
 criterion_main!(benches);

@@ -32,7 +32,7 @@
 
 pub mod bcd;
 mod dec128;
-mod dpd;
+pub mod dpd;
 mod macros;
 mod tables;
 mod uint96;
