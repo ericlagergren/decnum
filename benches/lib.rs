@@ -1,81 +1,217 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use decnum::{
-    bcd::{self, Bcd10, Bcd20, Bcd3, Bcd39, Bcd5},
+    bcd::{self, Bcd10, Bcd5},
     dpd, u96,
 };
-use rand::random;
+use rand::{random, thread_rng, Rng};
 
 fn bench_dpd(c: &mut Criterion) {
     let mut group = c.benchmark_group("dpd");
 
+    let bcds: Vec<u16> = (0..1024)
+        .map(|_| bcd::from_bin(thread_rng().gen_range(0..=999)))
+        .collect();
+    let dpds: Vec<u16> = bcds.iter().copied().map(dpd::pack).collect();
+
     group.bench_function("classify_bcd", |b| {
-        let bcd = bcd::from_u16(random());
-        b.iter(|| black_box(dpd::classify_bcd(black_box(bcd))))
+        let mut i = 0;
+        b.iter(|| {
+            let bcd = bcds[i % dpds.len()];
+            let _ = black_box(dpd::classify_bcd(black_box(bcd)));
+            i = i.wrapping_add(1);
+        })
     });
     group.bench_function("classify_dpd", |b| {
-        let dpd = dpd::pack(bcd::from_u16(random()));
-        b.iter(|| black_box(dpd::classify_dpd(black_box(dpd))))
+        let mut i = 0;
+        b.iter(|| {
+            let dpd = dpds[i % dpds.len()];
+            let _ = black_box(dpd::classify_dpd(black_box(dpd)));
+            i = i.wrapping_add(1);
+        })
     });
 
-    group.bench_function("pack all small", |b| {
-        let bcd = bcd::from_u16(123);
-        b.iter(|| black_box(dpd::pack(dpd::unpack(bcd))))
+    group.bench_function("compress/pack", |b| {
+        let mut i = 0;
+        b.iter(|| {
+            let bcd = bcds[i % bcds.len()];
+            let _ = black_box(dpd::pack(black_box(bcd)));
+            i = i.wrapping_add(1);
+        })
     });
-    group.bench_function("pack all large", |b| {
-        let bcd = bcd::from_u16(999);
-        b.iter(|| black_box(dpd::pack(dpd::unpack(bcd))))
+    group.bench_function("expand/unpack", |b| {
+        let mut i = 0;
+        b.iter(|| {
+            let dpd = dpds[i % bcds.len()];
+            let _ = black_box(dpd::unpack(black_box(dpd)));
+            i = i.wrapping_add(1);
+        })
     });
 
-    group.bench_function("unpack all small", |b| {
-        let dpd = dpd::pack(bcd::from_u16(123));
-        b.iter(|| black_box(dpd::unpack(black_box(dpd))))
+    group.bench_function("compress/bcd2dpd", |b| {
+        let mut i = 0;
+        b.iter(|| {
+            let bcd = bcds[i % bcds.len()];
+            let _ = black_box(bcd2dpd(black_box(bcd)));
+            i = i.wrapping_add(1);
+        })
     });
-    group.bench_function("unpack all large", |b| {
-        let dpd = dpd::pack(bcd::from_u16(999));
-        b.iter(|| black_box(dpd::unpack(black_box(dpd))))
+    group.bench_function("expand/dpd2bcd", |b| {
+        let mut i = 0;
+        b.iter(|| {
+            let dpd = dpds[i % bcds.len()];
+            let _ = black_box(dpd2bcd(black_box(dpd)));
+            i = i.wrapping_add(1);
+        })
     });
 
     group.finish();
 }
 
+macro_rules! bit {
+    ($x:ident, $idx:literal) => {{
+        (($x >> $idx) & 1) == 1
+    }};
+}
+
+const fn dpd2bcd(arg: u16) -> u16 {
+    let p = bit!(arg, 9);
+    let q = bit!(arg, 8);
+    let r = bit!(arg, 7);
+    let s = bit!(arg, 6);
+    let t = bit!(arg, 5);
+    let u = bit!(arg, 4);
+    let v = bit!(arg, 3);
+    let w = bit!(arg, 2);
+    let x = bit!(arg, 1);
+    let y = bit!(arg, 0);
+
+    let a = (v & w) & (!s | t | !x);
+    let b = p & (!v | !w | (s & !t & x));
+    let c = q & (!v | !w | (s & !t & x));
+    let d = r;
+    let e = v & ((!w & x) | (!t & x) | (s & x));
+    let f = (s & (!v | !x)) | (p & !s & t & v & w & x);
+    let g = (t & (!v | !x)) | (q & !s & t & w);
+    let h = u;
+    let i = v & ((!w & !x) | (w & x & (s | t)));
+    let j = (!v & w) | (s & v & !w & x) | (p & w & (!x | (!s & !t)));
+    let k = (!v & x) | (t & !w & x) | (q & v & w & (!x | (!s & !t)));
+    let m = y;
+
+    (m as u16)
+        | ((k as u16) << 1)
+        | ((j as u16) << 2)
+        | ((i as u16) << 3)
+        | ((h as u16) << 4)
+        | ((g as u16) << 5)
+        | ((f as u16) << 6)
+        | ((e as u16) << 7)
+        | ((d as u16) << 8)
+        | ((c as u16) << 9)
+        | ((b as u16) << 10)
+        | ((a as u16) << 11)
+}
+
+const fn bcd2dpd(arg: u16) -> u16 {
+    let a = bit!(arg, 11);
+    let b = bit!(arg, 10);
+    let c = bit!(arg, 9);
+    let d = bit!(arg, 8);
+    let e = bit!(arg, 7);
+    let f = bit!(arg, 6);
+    let g = bit!(arg, 5);
+    let h = bit!(arg, 4);
+    let i = bit!(arg, 3);
+    let j = bit!(arg, 2);
+    let k = bit!(arg, 1);
+    let m = bit!(arg, 0);
+
+    let p = b | (a & j) | (a & f & i);
+    let q = c | (a & k) | (a & g & i);
+    let r = d;
+    let s = (f & (!a | !i)) | (!a & e & j) | (e & i);
+    let t = g | (!a & e & k) | (a & i);
+    let u = h;
+    let v = a | e | i;
+    let w = a | (e & i) | (!e & j);
+    let x = e | (a & i) | (!a & k);
+    let y = m;
+
+    (y as u16)
+        | ((x as u16) << 1)
+        | ((w as u16) << 2)
+        | ((v as u16) << 3)
+        | ((u as u16) << 4)
+        | ((t as u16) << 5)
+        | ((s as u16) << 6)
+        | ((r as u16) << 7)
+        | ((q as u16) << 8)
+        | ((p as u16) << 9)
+}
+
 fn bench_bcd(c: &mut Criterion) {
     let mut group = c.benchmark_group("bcd");
 
-    macro_rules! bench_to_from_int {
-        ($to:ident, $from:ident) => {
-            group.bench_function(stringify!($to), |b| {
-                let bcd = bcd::$from(random());
-                b.iter(|| black_box(bcd::$to(black_box(bcd))))
-            });
-            group.bench_function(stringify!($from), |b| {
-                let u = bcd::$to(random());
-                b.iter(|| black_box(bcd::$from(black_box(u))))
-            });
-        };
-    }
-    bench_to_from_int!(to_u128, from_u128);
-    bench_to_from_int!(to_u64, from_u64);
-    bench_to_from_int!(to_u32, from_u32);
-    bench_to_from_int!(to_u16, from_u16);
-    bench_to_from_int!(to_u8, from_u8);
+    group.bench_function("to_bin", |b| {
+        let bcd = bcd::from_bin(random());
+        b.iter(|| black_box(bcd::to_bin(black_box(bcd))))
+    });
+    group.bench_function("from_bin", |b| {
+        let u = bcd::to_bin(random());
+        b.iter(|| black_box(bcd::from_bin(black_box(u))))
+    });
 
     macro_rules! bench_to_from {
-        ($ty:ty) => {
-            group.bench_function(concat!(stringify!($ty, "::to_bin")), |b| {
-                let bcd = <$ty>::from_bin(random());
-                b.iter(|| black_box(black_box(bcd).to_bin()))
+        ($ty:ty) => {{
+            let bcds: Vec<$ty> = (0..1024).map(|_| <$ty>::from_bin(random())).collect();
+            let bins: Vec<_> = bcds.iter().copied().map(<$ty>::to_bin).collect();
+
+            group.bench_function(concat!(stringify!($ty), "/to_bin"), |b| {
+                let mut i = 0;
+                b.iter(|| {
+                    let bcd = bcds[i % bcds.len()];
+                    black_box(black_box(bcd).to_bin());
+                    i = i.wrapping_add(1);
+                })
             });
-            group.bench_function(concat!(stringify!($ty, "::from_bin")), |b| {
-                let u = <$ty>::to_bin(&<$ty>::from_bin(random()));
-                b.iter(|| black_box(<$ty>::from_bin(black_box(u))))
+            group.bench_function(concat!(stringify!($ty), "/from_bin"), |b| {
+                let mut i = 0;
+                b.iter(|| {
+                    let bin = bins[i % bins.len()];
+                    black_box(<$ty>::from_bin(black_box(bin)));
+                    i = i.wrapping_add(1);
+                })
             });
-        };
+            group.bench_function(concat!(stringify!($ty), "/pack"), |b| {
+                let mut i = 0;
+                b.iter(|| {
+                    let bcd = bcds[i % bcds.len()];
+                    black_box(bcd.pack());
+                    i = i.wrapping_add(1);
+                })
+            });
+            group.bench_function(concat!(stringify!($ty), "/pack2"), |b| {
+                let mut i = 0;
+                b.iter(|| {
+                    let bcd = bcds[i % bcds.len()];
+                    black_box(bcd.pack2());
+                    i = i.wrapping_add(1);
+                })
+            });
+            group.bench_function(concat!(stringify!($ty), "/pack3"), |b| {
+                let mut i = 0;
+                b.iter(|| {
+                    let bcd = bcds[i % bcds.len()];
+                    black_box(bcd.pack3());
+                    i = i.wrapping_add(1);
+                })
+            });
+        }};
     }
-    bench_to_from!(Bcd39);
-    bench_to_from!(Bcd20);
+    //bench_to_from!(Bcd39);
     bench_to_from!(Bcd10);
     bench_to_from!(Bcd5);
-    bench_to_from!(Bcd3);
+    //bench_to_from!(Bcd3);
 
     group.finish();
 }

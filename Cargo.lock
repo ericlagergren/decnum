@@ -240,6 +240,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
+name = "cc"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18e2d530f35b40a84124146478cd16f34225306a8441998836466a2e2961c950"
+
+[[package]]
 name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -371,14 +377,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "dec"
+version = "0.4.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8aed775093963adbd1821f88d7934c839330b05f41c9877bdbc7b385e498b9c"
+dependencies = [
+ "decnumber-sys",
+ "libc",
+ "paste",
+ "static_assertions",
+]
+
+[[package]]
 name = "decnum"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "dec",
  "decnum",
+ "decnumber-sys",
  "itoa",
  "rand",
  "ruint",
+]
+
+[[package]]
+name = "decnumber-sys"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b4bc33814bd5bcd46dd13f9471a29ab1a22c4701ae0c4a182e45e8336d1a5b"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]

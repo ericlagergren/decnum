@@ -3,7 +3,8 @@
 use core::{fmt, mem};
 
 use super::{
-    bcd, dpd,
+    bcd::{self, Bcd10},
+    dpd,
     tables::{BIN2CHAR, BIN2DPD, DPD2BIN, TEST_MSD},
 };
 
@@ -31,10 +32,20 @@ const NAN_MASK: u32 = 0b0111111 << 25;
 pub struct d128(
     /// # Layout
     ///
-    /// [0]: sign
-    /// [1,5]: combination
-    /// [6,17]: exponent continuation
-    /// [17,127]: coefficient continuation
+    /// ## Bits
+    ///
+    /// 0: sign
+    /// 1-5: combination
+    /// 6-17: exponent continuation
+    /// 17-127: coefficient continuation
+    ///
+    /// ## Words
+    ///
+    /// 0: xxx
+    /// 1: xxx
+    /// 2: xxx
+    /// 3: xxx
+    ///
     ///
     /// # Combination field
     ///
@@ -160,13 +171,13 @@ impl d128 {
         todo!()
     }
 
-    /// TODO
+    /// Creates a `d128` from `v`.
     pub const fn from_u32(v: u32) -> Self {
-        let bcd = bcd::from_u32(v);
-        let dpd = dpd::pack_u32(bcd);
+        let bcd = Bcd10::from_bin(v);
+        let dpd = bcd.pack();
 
         const ZERO: u32 = 0x22080000;
-        Self::from_words(ZERO, 0, v >> 2, dpd as u32)
+        Self::from_words(ZERO, 0, (v / 1_000_000_000) >> 2, dpd)
     }
 
     const fn from_words(w0: u32, w1: u32, w2: u32, w3: u32) -> Self {
@@ -267,9 +278,12 @@ impl fmt::Display for d128 {
 
 impl fmt::Debug for d128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, " D128> ")?;
-        for c in self.0.to_be_bytes() {
+        write!(f, ">> ")?;
+        for (i, c) in self.0.to_be_bytes().iter().enumerate() {
             write!(f, "{c:02x}")?;
+            if ((i + 1) % 4) == 0 {
+                write!(f, " ")?;
+            }
         }
         let b = self.0.to_be_bytes();
         write!(
@@ -356,11 +370,20 @@ const COMB_MSD: [u32; 64] = [
 
 #[cfg(test)]
 mod tests {
+    use core::ptr;
+
+    use dec::Decimal128;
+    use decnumber_sys::{decQuad, decQuadFromUInt32, decQuadShow};
+
     use super::*;
 
     #[test]
     fn test_from_u32() {
-        let v = d128::from_u32(u32::MAX);
-        println!("{v:?}");
+        let d = d128::from_u32(u32::MAX);
+        println!("{d:?}");
+
+        let mut q = decQuad { bytes: [0u8; 16] };
+        unsafe { decQuadFromUInt32(&mut q, u32::MAX) };
+        unsafe { decQuadShow(&q, "\0".as_ptr().cast()) }
     }
 }
