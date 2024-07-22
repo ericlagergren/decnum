@@ -15,10 +15,15 @@ categories = [ "no-std", "no-std::no-alloc" ]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
 
 [features]
-default = []
+default = [
+	"dpd-tables",
+]
 
 # Enable `alloc`.
 alloc = []
+
+# Use lookup tables for DPD conversions.
+dpd-tables = []
 
 # Enable `rand`.
 rand = ["dep:rand"]
@@ -26,9 +31,11 @@ rand = ["dep:rand"]
 # Enable `std`.
 std = ["alloc"]
 
+# TODO
 slow-128 = []
 
 [dependencies]
+cfg-if = { version = "1.0.0", default-features = false }
 itoa = { version = "1.0.11", default-features = false }
 rand = { version = "0.8.5", default-features = false, optional = true }
 

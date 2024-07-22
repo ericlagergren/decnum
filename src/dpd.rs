@@ -2,6 +2,12 @@
 
 use core::{fmt, hint};
 
+use super::{
+    bcd,
+    tables::{BCD_TO_DPD, BIN_TO_DPD, DPD_TO_BCD},
+    util::assume,
+};
+
 /// A BCD's bit pattern.
 #[repr(u16)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -40,7 +46,7 @@ impl fmt::Display for Pattern {
     }
 }
 
-/// Classifies a BCD for packing into a DPD.
+/// Classifies a 12-bit BCD for packing into a 10-bit DPD.
 pub const fn classify_bcd(bcd: u16) -> Pattern {
     use Pattern::*;
     match bcd & 0x888 {
@@ -58,7 +64,7 @@ pub const fn classify_bcd(bcd: u16) -> Pattern {
     }
 }
 
-/// Classifies a DPD for unpacking into a BCD.
+/// Classifies a 10-bit DPD for unpacking into a 12-bit BCD.
 pub const fn classify_dpd(dpd: u16) -> Pattern {
     use Pattern::*;
 
@@ -87,8 +93,17 @@ pub const fn classify_dpd(dpd: u16) -> Pattern {
     }
 }
 
-/// Packs a three-digit BCD into a DPD.
-pub const fn pack(mut bcd: u16) -> u16 {
+/// Packs a 12-bit BCD into a 10-bit DPD.
+pub const fn pack(bcd: u16) -> u16 {
+    if cfg!(feature = "dpd-tables") {
+        BCD_TO_DPD[bcd as usize]
+    } else {
+        pack_via_bits(bcd)
+    }
+}
+
+/// Pack a 12-bit BCD into a 10-bit DPD using bit twiddling.
+pub(super) const fn pack_via_bits(mut bcd: u16) -> u16 {
     // (abcd)(efgh)(ijkm) becomes (pqr)(stu)(v)(wxy)
 
     // | aei | pqr stu v wxy   comments
@@ -150,30 +165,17 @@ pub const fn pack(mut bcd: u16) -> u16 {
     }
 }
 
-/// Packs a BCD into a DPD.
-pub const fn pack_u32(bcd: u32) -> u32 {
-    // [0000 .... ....] [.... .... ....] [.... .... ....]
-    //        d0               d1               d2
-    let d0 = pack((bcd & 0xfff) as u16) as u32;
-    let d1 = pack(((bcd >> 12) & 0xfff) as u16) as u32;
-    let d2 = pack(((bcd >> 24) & 0xfff) as u16) as u32;
-    (d2 << 20) | (d1 << 10) | d0
+/// Unpacks a 10-bit DPD into a 12-bit BCD.
+pub const fn unpack(dpd: u16) -> u16 {
+    if cfg!(feature = "dpd-tables") {
+        DPD_TO_BCD[dpd as usize]
+    } else {
+        unpack_via_bits(dpd)
+    }
 }
 
-/// Packs a BCD into a DPD.
-pub const fn pack_u64(bcd: u64) -> u64 {
-    // [0000 .... ....] [.... .... ....] [.... .... ....]
-    //        hi              mid               lo
-    let d0 = pack((bcd & 0xfff) as u16) as u64;
-    let d1 = pack(((bcd >> 12) & 0xfff) as u16) as u64;
-    let d2 = pack(((bcd >> 24) & 0xfff) as u16) as u64;
-    let d3 = pack(((bcd >> 36) & 0xfff) as u16) as u64;
-    let d4 = pack(((bcd >> 48) & 0xfff) as u16) as u64;
-    (d4 << 40) | (d3 << 30) | (d2 << 20) | (d1 << 10) | d0
-}
-
-/// Unpacks a DPD into a three-digit BCD.
-pub const fn unpack(mut dpd: u16) -> u16 {
+/// Unpacks a 10-bit DPD into a 12-bit BCD using bit twiddling.
+pub(super) const fn unpack_via_bits(mut dpd: u16) -> u16 {
     // (pqr)(stu)(v)(wxy) becomes (abcd)(efgh)(ijkm)
 
     // DPDs only use the lower 10 bits.
@@ -235,6 +237,127 @@ pub const fn unpack(mut dpd: u16) -> u16 {
     }
 }
 
+/// Packs a 32-bit binary number into a 40-bit DPD.
+///
+/// The most significant 10 bits will always be in [0,4].
+pub const fn from_u32(mut bin: u32) -> u64 {
+    let mut dpd = 0;
+    let mut i = 0;
+    while i < 3 {
+        let d = (bin % 1000) as u16;
+        dpd |= (bin_to_dpd(d) as u64) << (i * 10);
+        bin /= 1000;
+        i += 1;
+    }
+    dpd |= (bin_to_dpd((bin % 10) as u16) as u64) << (i * 10);
+    dpd
+}
+
+/// Packs a 113-bit binary number into a 120-bit DPD.
+///
+/// The most significant 10 bits will always be either `0` or
+/// `9`.
+///
+/// `bin` must be in the range `[0, (10^34)-1]`
+pub const fn from_u113(mut bin: u128) -> u128 {
+    const MASK: u128 = !(((1 << 15) - 1) << 113);
+    bin &= MASK;
+
+    let mut dpd = 0;
+    let mut i = 0;
+    while i < 11 {
+        let (q, r) = quorem1e3(bin);
+        dpd |= (bin_to_dpd(r) as u128) << (i * 10);
+        i += 1;
+        bin = q;
+    }
+    dpd |= (bin_to_dpd((bin % 10) as u16) as u128) << (i * 10);
+    dpd
+}
+
+/// Returns (q, r) such that
+///
+/// ```text
+/// q = n / 1000
+/// r = n % 1000
+/// ```
+const fn quorem1e3(n: u128) -> (u128, u16) {
+    #![allow(non_upper_case_globals)]
+
+    const d: u128 = 1000;
+
+    let q = {
+        // Implement division via recpirocal via "Division by
+        // Invariant Integers using Multiplication" by T.
+        // Granlund and P. Montgomery.
+        //
+        // https://gmplib.org/~tege/divcnst-pldi94.pdf
+
+        // l = ceil( log2(d) )
+        //   = ceil( 9.965... )
+        //   = 10
+        // m' = floor( 2^N * (2^l - d)/d ) + 1
+        //    = floor( (2^128) * (2^10 - 1000)/1000 ) + 1
+        //    = floor( (2^128) * 3/125 ) + 1
+        const REC: u128 = 8166776806102523123120990578362437075;
+
+        // t1 = muluh(m', n)
+        let t1 = muluh(REC, n);
+
+        // sh1 = min(l, 1)
+        // sh2 = max(l-1, 0)
+        //
+        // Since d > 1, l >= 1, therefore sh1 = 1 and sh2 = l-1.
+        //
+        // q = SRL(t1 + SRL(n−t1, 1), l−1)
+        // q = SRL(t1 + SRL(n−t1, 1), 10-1)
+        //   = SRL(t1 + SRL(n−t1, 1), 9)
+        (t1 + ((n - t1) >> 1)) >> 9
+    };
+    // Assert some invariants to help the compiler.
+    // SAFETY: `q = n/1000`.
+    unsafe {
+        assume(q <= n);
+        assume(q == n / d);
+        assume(q * d <= n);
+    }
+
+    let r = n - q * d;
+
+    // Assert some invariants to help the compiler.
+    // SAFETY: `q = n/1000` and `r = n % 1000`.
+    unsafe {
+        // NB: `r < d` must come first, otherwise the compiler
+        // doesn't use it in `from_u113`.
+        assume(r < d);
+        assume(r == (n % d));
+    }
+
+    (q, r as u16)
+}
+
+const fn muluh(x: u128, y: u128) -> u128 {
+    const MASK: u128 = (1 << 64) - 1;
+    let x0 = x & MASK;
+    let x1 = x >> 64;
+    let y0 = y & MASK;
+    let y1 = y >> 64;
+    let w0 = x0 * y0;
+    let t = x1 * y0 + (w0 >> 64);
+    let w1 = (t & MASK) + x0 * y1;
+    let w2 = t >> 64;
+    x1 * y1 + w2 + (w1 >> 64)
+}
+
+/// Converts a binary number in [0,999] to a 10-bit DPD.
+const fn bin_to_dpd(bin: u16) -> u16 {
+    if cfg!(feature = "dpd-tables") {
+        BIN_TO_DPD[bin as usize]
+    } else {
+        pack(bcd::from_bin(bin))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::{fmt, iter};
@@ -248,34 +371,8 @@ mod tests {
         }};
     }
 
-    /*
-    /* dpd2bcd -- Expand Densely Packed Decimal to BCD
-       argument is a string of 10 characters, each 0 or 1; all 1024
-                possibilities are accepted (non-canonicals -> various)
-                (for example, 0110101101)
-       result   is a string of 12 characters, each 0 or 1
-                (for the example, 100100100011 -- 923)
-       */
-    dpd2bcd: procedure
-      -- assign each bit to a variable, named as in the description
-      parse arg p +1 q +1 r +1 s +1 t +1 u +1 v +1 w +1 x +1 y +1
-      -- derive the result bits, using boolean expressions only
-      a= (v & w) & (\s | t | \x)
-      b=p & (\v | \w | (s & \t & x))
-      c=q & (\v | \w | (s & \t & x))
-      d=r
-      e=v & ((\w & x) | (\t & x) | (s & x))
-      f=(s & (\v | \x)) | (p & \s & t & v & w & x)
-      g=(t & (\v | \x)) | (q & \s & t & w)
-      h=u
-      i=v & ((\w & \x) | (w & x & (s | t)))
-      j=(\v & w) | (s & v & \w & x) | (p & w & (\x | (\s & \t)))
-      k=(\v & x) | (t & \w & x) | (q & v & w & (\x | (\s & \t)))
-      m=y
-      -- concatenate the bits and return
-      return a||b||c||d||e||f||g||h||i||j||k||m
-    */
-    pub const fn dpd2bcd(arg: u16) -> u16 {
+    // From https://speleotrove.com/decimal/DPDecimal.html
+    const fn dpd2bcd(arg: u16) -> u16 {
         let p = bit!(arg, 9);
         let q = bit!(arg, 8);
         let r = bit!(arg, 7);
@@ -314,34 +411,8 @@ mod tests {
             | ((a as u16) << 11)
     }
 
-    /*
-    /* bcd2dpd -- Compress BCD to Densely Packed Decimal
-       argument is a string of 12 characters, each 0 or 1, being 3 digits
-                of 4 bits, each being a valid BCD digit (0000-1001)
-                (for example, 923 is 100100100011)
-       result   is a string of 10 characters, each 0 or 1
-                (for the example, this would be 0110101101)
-       */
-    bcd2dpd: procedure
-      -- assign each bit to a variable, named as in the description
-      parse arg a +1 b +1 c +1 d +1 e +1 f +1 g +1 h +1 i +1 j +1 k +1 m +1
-
-      -- derive the result bits, using boolean expressions only
-      -- [the operators are: '&'=AND, '|'=OR, '\'=NOT.]
-      p=b | (a & j) | (a & f & i)
-      q=c | (a & k) | (a & g & i)
-      r=d
-      s=(f & (\a | \i)) | (\a & e & j) | (e & i)
-      t=g  | (\a & e &k) | (a & i)
-      u=h
-      v=a | e | i
-      w=a | (e & i) | (\e & j)
-      x=e | (a & i) | (\a & k)
-      y=m
-      -- concatenate the bits and return
-      return p||q||r||s||t||u||v||w||x||y
-    */
-    pub const fn bcd2dpd(arg: u16) -> u16 {
+    // From https://speleotrove.com/decimal/DPDecimal.html
+    const fn bcd2dpd(arg: u16) -> u16 {
         let a = bit!(arg, 11);
         let b = bit!(arg, 10);
         let c = bit!(arg, 9);
@@ -376,6 +447,11 @@ mod tests {
             | ((r as u16) << 7)
             | ((q as u16) << 8)
             | ((p as u16) << 9)
+    }
+
+    const fn bin2dpd(bin: u16) -> u16 {
+        assert!(bin <= 999);
+        bcd2dpd(bcd::from_bin(bin))
     }
 
     struct Dpd(u16);
@@ -417,6 +493,7 @@ mod tests {
                 let bin = idx;
                 let bcd = bcd::from_bin(bin);
                 let dpd = bcd2dpd(bcd);
+                assert_eq!(bcd, dpd2bcd(dpd), "#{bin}");
                 idx += 1;
                 Some(Tuple { bin, dpd, bcd })
             }
@@ -453,6 +530,50 @@ mod tests {
     }
 
     #[test]
+    fn test_from_u32() {
+        // TODO(eric): test the rest of the digits.
+        for bin in 0..=999 {
+            let got = from_u32(bin);
+            let want = bin2dpd(bin as u16) as u64;
+            assert_eq!(got, want, "#{bin}");
+        }
+
+        // Test `u32::MAX`.
+        let want = {
+            // pack(0x4_294_967_295)
+            let mut dpd = 0;
+            dpd |= pack(0x295) as u64;
+            dpd |= (pack(0x967) as u64) << 10;
+            dpd |= (pack(0x294) as u64) << 20;
+            dpd |= (pack(0x004) as u64) << 30;
+            dpd
+        };
+        let got = from_u32(u32::MAX);
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn test_from_u113() {
+        // TODO(eric): test (some of) the rest of the digits.
+        for bin in 0..=999 {
+            let got = from_u113(bin);
+            let want = bin2dpd(bin as u16) as u128;
+            assert_eq!(got, want, "#{bin}");
+        }
+
+        let want = {
+            // pack(0x9_999_999_999_999_999_999_999_999_999_999_999)
+            let mut dpd = 0;
+            for i in 0..11 {
+                dpd |= (pack(0x999) as u128) << (i * 10);
+            }
+            dpd | (pack(0x9) as u128) << 110
+        };
+        let got = from_u113(10u128.pow(34) - 1);
+        assert_eq!(got, want);
+    }
+
+    #[test]
     fn test_pack_unpack_exhaustive() {
         for (i, Tuple { bin, dpd, bcd }) in all().enumerate() {
             assert_eq!(classify_bcd(bcd), classify_dpd(dpd), "#{i}");
@@ -467,32 +588,23 @@ mod tests {
         }
     }
 
-    // #[test]
-    // fn test_pack_u32() {
-    //     for bin in 0..999_999 {
-    //         let bcd = bcd::from_u32(bin);
-    //         assert_eq!(bcd::to_u32(bcd), bin, "{bin}");
-    //         let lhs = bcd2dpd((bcd >> 16) as u16);
-    //         let rhs = bcd2dpd(bcd as u16);
-
-    //         let got = pack_u32(bcd);
-    //         let want = ((lhs as u32) << 10) | (rhs as u32);
-    //         assert_eq!(got, want, "{bin}");
-    //     }
-    // }
-
-    // TODO
-    // #[test]
-    // fn test_pack_u64() {
-    //     for bin in 0..999_999_999 {
-    //         let bcd = bcd::from_u64(bin);
-    //         assert_eq!(bcd::to_u64(bcd), bin, "{bin}");
-    //         let lhs = bcd2dpd((bcd >> 16) as u16);
-    //         let rhs = bcd2dpd(bcd as u16);
-    //
-    //         let got = pack_u64(bcd);
-    //         let want = ((lhs as u32) << 10) | (rhs as u32);
-    //         assert_eq!(got, want, "{bin}");
-    //     }
-    // }
+    #[test]
+    fn test_div1000() {
+        let mut n = u128::MAX;
+        let mut i = 0;
+        loop {
+            let want = {
+                let q = n / 1000;
+                let r = (n % 1000) as u16;
+                (q, r)
+            };
+            let got = quorem1e3(n);
+            assert_eq!(got, want, "#{i}: {n} / 1000");
+            if want == (0, 0) {
+                break;
+            }
+            n = want.0;
+            i += 1;
+        }
+    }
 }

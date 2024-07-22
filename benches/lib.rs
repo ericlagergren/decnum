@@ -163,7 +163,7 @@ fn bench_bcd(c: &mut Criterion) {
 
     macro_rules! bench_to_from {
         ($ty:ty) => {{
-            let bcds: Vec<$ty> = (0..1024).map(|_| <$ty>::from_bin(random())).collect();
+            let bcds: Vec<$ty> = (0..8192).map(|_| <$ty>::from_bin(random())).collect();
             let bins: Vec<_> = bcds.iter().copied().map(<$ty>::to_bin).collect();
 
             group.bench_function(concat!(stringify!($ty), "/to_bin"), |b| {
@@ -186,34 +186,28 @@ fn bench_bcd(c: &mut Criterion) {
                 let mut i = 0;
                 b.iter(|| {
                     let bcd = bcds[i % bcds.len()];
+                    clear();
                     black_box(bcd.pack());
-                    i = i.wrapping_add(1);
-                })
-            });
-            group.bench_function(concat!(stringify!($ty), "/pack2"), |b| {
-                let mut i = 0;
-                b.iter(|| {
-                    let bcd = bcds[i % bcds.len()];
-                    black_box(bcd.pack2());
-                    i = i.wrapping_add(1);
-                })
-            });
-            group.bench_function(concat!(stringify!($ty), "/pack3"), |b| {
-                let mut i = 0;
-                b.iter(|| {
-                    let bcd = bcds[i % bcds.len()];
-                    black_box(bcd.pack3());
                     i = i.wrapping_add(1);
                 })
             });
         }};
     }
-    //bench_to_from!(Bcd39);
-    bench_to_from!(Bcd10);
     bench_to_from!(Bcd5);
-    //bench_to_from!(Bcd3);
+    bench_to_from!(Bcd10);
 
     group.finish();
+}
+
+fn clear() {
+    // let addr: *const () = core::ptr::null();
+    // unsafe {
+    //     core::arch::asm!(
+    //         "dc civac, {addr}",
+    //         addr = in(reg) addr,
+    //         options(nostack),
+    //     )
+    // }
 }
 
 fn bench_overflowing_mul(c: &mut Criterion) {
