@@ -50,6 +50,9 @@ ruint = { version = "1.12.3" }
 dec = { version = "0.4.9" }
 decnumber-sys = { version = "0.1.6" }
 
+# [patch.crates-io]
+# decnumber-sys = { path = "/Users/eric/git/rust-dec/decnumber-sys" }
+
 [[bench]]
 name = "lib"
 harness = false

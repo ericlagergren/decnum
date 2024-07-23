@@ -1,6 +1,6 @@
 #![allow(dead_code, unused_imports)]
 
-use core::{fmt, mem, str};
+use core::{fmt, hint, mem, str};
 
 use super::{
     bcd::{self, Bcd10},
@@ -77,14 +77,18 @@ impl d128 {
     pub const MIN_COEFF: i128 = -Self::MAX_COEFF;
 
     /// The maximum allowed exponent.
-    pub const MAX_EXP: i16 = 6144;
+    pub const MAX_EXP: i16 = 6144 - Self::MAX_PREC + 1;
 
     /// The smallest allowed exponent.
-    pub const MIN_EXP: i16 = -6143;
+    pub const MIN_EXP: i16 = -6143 - Self::MAX_PREC + 1;
 
     /// The exponent's bias.
     const BIAS: i16 = 6176;
     const LIMIT: i16 = 12287;
+
+    /// The number of significant digits in base 10.
+    pub const DIGITS: u32 = 34;
+    const MAX_PREC: i16 = 34;
 
     /// Not a Number (NaN).
     pub const NAN: Self = Self::special(NAN);
@@ -189,27 +193,24 @@ impl d128 {
     }
 
     /// Returns the biased exponment.
-    fn exp(self) -> i16 {
+    const fn exp(self) -> i16 {
         // The exponent only has meaning for finite numbers.
         debug_assert!(self.is_finite());
 
         let econ = self.econ();
-        println!("econ = {econ:016b}");
 
         let comb = self.comb();
-        println!("comb = {comb:016b}");
         const AB: u16 = 0b11000; // ab...
         const CD: u16 = 0b00110; // ..cd.
         let msb = match comb & AB {
             AB => (comb & CD) << 12,
             b => b << 10,
         };
-        println!(" msb = {msb:016b}");
         (msb | econ) as i16
     }
 
     /// Returns the unbiased exponent.
-    fn unbiased_exp(self) -> i16 {
+    const fn unbiased_exp(self) -> i16 {
         self.exp() - Self::BIAS
     }
 
@@ -226,7 +227,7 @@ impl d128 {
     }
 
     /// Creates a `d128` from its coefficient and exponent.
-    pub fn new(coeff: i128, exp: i16) -> Self {
+    pub const fn new(coeff: i128, exp: i16) -> Self {
         // TODO(eric): the inf probably isn't correct.
         if coeff < Self::MIN_COEFF || exp < Self::MIN_EXP {
             Self::NEG_INFINITY
@@ -253,9 +254,10 @@ impl d128 {
     ///
     /// The result is always exact.
     pub const fn from_u32(coeff: u32) -> Self {
-        let dpd = dpd::from_u32(coeff);
-        const ZERO: u64 = 0x22080000u64 << 32;
-        Self::from_words64(ZERO, dpd)
+        let dpd = dpd::from_u32(coeff) as u128;
+        //Self::from_words64(0x22080000 << 32, dpd)
+        const ZERO: u128 = 0x22080000 << 64;
+        Self(ZERO | dpd)
     }
 
     const fn from_words32(w0: u32, w1: u32, w2: u32, w3: u32) -> Self {
@@ -266,29 +268,33 @@ impl d128 {
         Self(((w0 as u128) << 64) | (w1 as u128))
     }
 
-    fn from_parts(sign: bool, exp: i16, coeff: u128) -> Self {
+    const fn from_parts(sign: bool, exp: i16, coeff: u128) -> Self {
         debug_assert!(exp >= Self::MIN_EXP);
         debug_assert!(exp <= Self::MAX_EXP);
         debug_assert!(coeff <= Self::MAX_COEFF as u128);
-        println!("sign={sign}");
+
+        let dpd = dpd::from_u113(coeff);
+        let biased = (exp + Self::BIAS) as u128;
 
         let sign = (sign as u128) << Self::SIGN_SHIFT;
+        let comb = {
+            // `dpd` is 120 bits. The top 6 bits are always zero.
+            // The next 4 bits contain the MSD.
+            let msd = (dpd >> 110) & 0x9;
+            debug_assert!(msd <= 9);
 
-        // `dpd` is 120 bits. The top 6 bits are always zero.
-        // The next 4 bits contain the MSD.
-        let dpd = dpd::from_u113(coeff);
-        let msd = (dpd >> 110) & 0x9;
-        println!("msd = {msd:04b}");
-        debug_assert!(msd & !0x9 == 0);
+            let mut msb = (biased & 0x3000) >> 12;
+            debug_assert!(msb <= 2);
 
-        let biased = (exp + Self::BIAS) as u128;
-        println!("biased = {biased}");
-        println!("biased = {biased:016b}");
-        let msb = (biased & 0x3000) >> 12;
-        println!(" msb = {msb:02b}");
-        debug_assert!(msb & !0x3 == 0);
-
-        let comb = (((msb << 3) as u128) | msd) << Self::COMB_SHIFT;
+            // 0 c d e -> [0,7]
+            // 1 0 0 e -> [8,9]
+            if msd <= 7 {
+                msb <<= 3
+            } else {
+                msb <<= 1
+            }
+            (msb | msd) << Self::COMB_SHIFT
+        };
         debug_assert!(comb & !Self::COMB_MASK == 0);
 
         let econ = (biased << Self::ECON_SHIFT) & Self::ECON_MASK;
@@ -297,11 +303,11 @@ impl d128 {
         let coeff = dpd & Self::COEFF_MASK;
         debug_assert!(coeff & !Self::COEFF_MASK == 0);
 
-        println!("sign = {sign:0128b}");
-        println!("comb = {comb:0128b}");
-        println!("econ = {econ:0128b}");
-        println!("coef = {coeff:0128b}");
-        println!("     = {:0128b}", sign | comb | econ | coeff);
+        // println!("sign = {sign:0128b}");
+        // println!("comb = {comb:0128b}");
+        // println!("econ = {econ:0128b}");
+        // println!("coef = {coeff:0128b}");
+        // println!("     = {:0128b}", sign | comb | econ | coeff);
 
         Self(sign | comb | econ | coeff)
     }
@@ -322,8 +328,12 @@ impl d128 {
     }
 }
 
-// Conversions.
+// String conversions.
 impl d128 {
+    /// The maximum length in bytes of a `d128` encoded as
+    /// a string.
+    pub const MAX_STR_LEN: usize = "-9.999999999999999999999999999999999E+6144".len();
+
     /// Converts the `d128` to a string.
     ///
     /// # Panics
@@ -332,23 +342,26 @@ impl d128 {
     /// ensure it does not panic, `buf` should be at least TODO
     /// bytes long.
     pub fn to_str<'a>(self, buf: &'a mut [u8]) -> &'a str {
-        let mut buf = Buffer::new(buf);
+        let mut i = 0;
         if self.is_sign_negative() {
-            buf.write(&[b'-']);
+            buf[i] = b'-';
+            i += 1;
         }
 
         if self.is_special() {
             if self.is_infinite() {
-                buf.write(b"Infinity");
+                i += copy(&mut buf[i..], b"Infinity");
             } else if self.is_qnan() {
-                buf.write(b"NaN");
+                i += copy(&mut buf[i..], b"NaN");
             } else if self.is_snan() {
-                buf.write(b"qNaN");
+                i += copy(&mut buf[i..], b"sNaN");
             }
-            return buf.into_str();
+            // SAFETY: `buf` only ever contains UTF-8.
+            return unsafe { str::from_utf8_unchecked(&buf[..i]) };
         }
 
-        buf.into_str()
+        // SAFETY: `buf` only ever contains UTF-8.
+        return unsafe { str::from_utf8_unchecked(&buf[..i]) };
     }
 }
 
@@ -458,27 +471,10 @@ const COMB_MSD: [u32; 64] = [
     0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 8, 9, 8, 9, 0, 0,
 ];
 
-struct Buffer<'a> {
-    buf: &'a mut [u8],
-    idx: usize,
-}
-
-impl<'a> Buffer<'a> {
-    fn new(buf: &'a mut [u8]) -> Self {
-        Self { buf, idx: 0 }
-    }
-
-    fn write(&mut self, data: &[u8]) {
-        let dst = &mut self.buf[self.idx..self.idx + data.len()];
-        dst.copy_from_slice(data);
-        self.idx += data.len();
-    }
-
-    fn into_str(self) -> &'a str {
-        let buf = &self.buf[..self.idx];
-        // SAFETY: `buf` only ever contains UTF-8.
-        unsafe { str::from_utf8_unchecked(buf) }
-    }
+fn copy(dst: &mut [u8], src: &[u8]) -> usize {
+    let n = src.len();
+    dst[..n].copy_from_slice(src);
+    n
 }
 
 #[cfg(test)]
@@ -492,21 +488,13 @@ mod tests {
 
     impl PartialEq<decQuad> for d128 {
         fn eq(&self, other: &decQuad) -> bool {
-            self.0.to_be_bytes() == other.bytes
+            self.0.to_le_bytes() == other.bytes
         }
     }
 
     #[test]
     fn test_exp() {
         let got = d128::new(d128::MAX_COEFF, d128::MAX_EXP);
-        println!("{got:?}");
-        println!("got < 0 = {}", got.is_sign_negative());
-        println!(
-            "exp={} unbiased={} max={}",
-            got.exp(),
-            got.unbiased_exp(),
-            d128::MAX_EXP
-        );
 
         let want = {
             let mut d = decQuad { bytes: [0u8; 16] };
@@ -520,7 +508,6 @@ mod tests {
             }
             unsafe { decQuadFromBCD(&mut d, d128::MAX_EXP as i32, bcd.as_ptr().cast(), 0) };
             unsafe { decQuadShow(&d, "\0".as_ptr().cast()) };
-            println!("want = {}", unsafe { decQuadGetExponent(&d) });
             d
         };
 
