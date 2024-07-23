@@ -256,7 +256,7 @@ impl d128 {
     pub const fn from_u32(coeff: u32) -> Self {
         let dpd = dpd::from_u32(coeff) as u128;
         //Self::from_words64(0x22080000 << 32, dpd)
-        const ZERO: u128 = 0x22080000 << 64;
+        const ZERO: u128 = 0x22080000 << 96;
         Self(ZERO | dpd)
     }
 
