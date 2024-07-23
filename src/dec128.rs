@@ -255,7 +255,6 @@ impl d128 {
     /// The result is always exact.
     pub const fn from_u32(coeff: u32) -> Self {
         let dpd = dpd::from_u32(coeff) as u128;
-        //Self::from_words64(0x22080000 << 32, dpd)
         const ZERO: u128 = 0x22080000 << 96;
         Self(ZERO | dpd)
     }
@@ -339,8 +338,8 @@ impl d128 {
     /// # Panics
     ///
     /// This function panics if `buf` is not long enough. To
-    /// ensure it does not panic, `buf` should be at least TODO
-    /// bytes long.
+    /// ensure it does not panic, `buf` should be at least
+    /// [`MAX_STR_LEN`][Self::MAX_STR_LEN] bytes long.
     pub fn to_str<'a>(self, buf: &'a mut [u8]) -> &'a str {
         let mut i = 0;
         if self.is_sign_negative() {
@@ -360,6 +359,15 @@ impl d128 {
             return unsafe { str::from_utf8_unchecked(&buf[..i]) };
         }
 
+        let exp = self.unbiased_exp();
+
+        let len = 0;
+        let (e, pre) = if exp > 0 || (len + exp) < -5 {
+            (len + exp - 1, 1)
+        } else {
+            (0, len + exp)
+        };
+
         // SAFETY: `buf` only ever contains UTF-8.
         return unsafe { str::from_utf8_unchecked(&buf[..i]) };
     }
@@ -367,7 +375,7 @@ impl d128 {
 
 impl fmt::Display for d128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut buf = [0u8; 1024]; // TODO
+        let mut buf = [0u8; Self::MAX_STR_LEN];
         let str = self.to_str(&mut buf);
         write!(f, "{str}")
     }

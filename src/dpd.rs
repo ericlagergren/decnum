@@ -275,6 +275,11 @@ pub const fn from_u113(mut bin: u128) -> u128 {
     dpd
 }
 
+/// Unpacks a 120-bit DPD into a 113-bit binary number.
+pub const fn to_u113(_dpd: u128) -> u128 {
+    todo!()
+}
+
 /// Returns (q, r) such that
 ///
 /// ```text
