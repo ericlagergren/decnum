@@ -101,26 +101,6 @@ macro_rules! bcd_int_impl {
                 Self::new(0)
             }
 
-            /*
-            const fn nibble(self, i: usize) -> $bcd {
-                let bcd = (self.bcd >> (i * 4)) & 0xfff;
-                if bcd > 0x999 {
-                    // SAFETY: TODO
-                    unsafe { hint::unreachable_unchecked() }
-                }
-                bcd
-            }
-
-            const fn bcd_at(self, i: usize) -> $bcd {
-                let bcd = (self.bcd >> (i * 12)) & 0xfff;
-                if bcd > 0x999 {
-                    // SAFETY: TODO
-                    unsafe { hint::unreachable_unchecked() }
-                }
-                bcd
-            }
-            */
-
             /// Creates a BCD from a binary number.
             ///
             /// # Example
@@ -192,7 +172,6 @@ macro_rules! bcd_int_impl {
             pub const fn to_bin(self) -> $bin {
                 self.debug_check();
 
-                //println!("BCD = {:#0x}", self.bcd);
                 let mut bin = 0;
                 let mut s = 0;
                 let mut p = 1;
@@ -200,13 +179,9 @@ macro_rules! bcd_int_impl {
                     debug_assert!(p != <$bin>::MAX);
 
                     bin += (((self.bcd >> s) & 0xf) as $bin) * p;
-                    // println!("bin = {bin}");
-                    // println!("bin = {bin}");
                     s += 4;
                     p = p.saturating_mul(10);
-                    //println!("p = {p}");
                 }
-                //println!();
                 bin
             }
 
@@ -382,7 +357,7 @@ macro_rules! bcd_int_impl {
 bcd_int_impl!(Bcd5, 5, u32, u32, u16);
 bcd_int_impl!(Bcd10, 10, u64, u64, u32);
 
-/// Converts the three-digit BCD to a binary number.
+/// Converts the 12-bit BCD to a binary number.
 pub const fn to_bin(bcd: u16) -> u16 {
     let mut bin = 0;
     let mut s = 0;
@@ -394,7 +369,7 @@ pub const fn to_bin(bcd: u16) -> u16 {
     bin
 }
 
-/// Creates a three-digit BCD from a binary number.
+/// Creates a 12-bit BCD from a binary number.
 ///
 /// # Example
 ///
@@ -413,6 +388,25 @@ pub const fn from_bin(mut bin: u16) -> u16 {
         bin /= 10;
     }
     bcd
+}
+
+/// Converts the 12-bit BCD to a three-byte string.
+///
+/// The high octet contains the number of significant digits in
+/// the BCD.
+pub(super) const fn to_str(bcd: u16) -> u32 {
+    const MASK: u32 = 0x00303030;
+    let mut w = 0;
+    w |= (bcd & 0x00f) as u32;
+    w |= ((bcd & 0x0f0) as u32) << 4;
+    w |= ((bcd & 0xf00) as u32) << 8;
+    w |= sig_digits(bcd) << 24;
+    w | MASK
+}
+
+/// Returns the number of significant digits in a 12-bit BCD.
+pub(super) const fn sig_digits(bcd: u16) -> u32 {
+    (16 - (bcd & 0x888).leading_zeros()) / 4
 }
 
 macro_rules! impl_is_valid {
@@ -611,4 +605,19 @@ mod tests {
         test_bcd10_pack_unpack,
         Bcd10,
     );
+
+    #[test]
+    fn test_to_str() {
+        for bin in 0..=999 {
+            let bcd = from_bin(bin);
+            let got = to_str(bcd);
+            let want = u32::from_le_bytes([
+                ((bin % 10) as u8) + b'0',
+                ((bin % 100 / 10) as u8) + b'0',
+                ((bin % 1000 / 100) as u8) + b'0',
+                sig_digits(bcd) as u8,
+            ]);
+            assert_eq!(got, want, "#{bin}");
+        }
+    }
 }

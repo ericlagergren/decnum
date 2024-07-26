@@ -29,6 +29,7 @@
 // extern crate alloc;
 
 pub mod bcd;
+mod conv;
 mod dec128;
 pub mod dpd;
 //mod macros;
@@ -36,5 +37,6 @@ mod tables;
 //mod uint96;
 mod util;
 
+pub use conv::*;
 pub use dec128::d128;
 //pub use uint96::*;

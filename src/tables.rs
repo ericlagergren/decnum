@@ -66,6 +66,23 @@ pub(super) const DPD_TO_BIN: [u16; 1 << 10] = {
     t
 };
 
+/// Converts a 10-bit DPD to a three byte string.
+///
+/// The high octet contains the number of significant digits in
+/// the DPD.
+pub(super) const DPD_TO_STR: [u32; 1 << 10] = {
+    let mut t = [0u32; 1 << 10];
+    let mut bin = 0;
+    while bin <= 999 {
+        let bcd = bcd::from_bin(bin);
+        let dpd = dpd::pack_via_bits(bcd);
+        let s = dpd::unpack_to_str_via_bits(dpd);
+        t[dpd as usize] = s;
+        bin += 1;
+    }
+    t
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

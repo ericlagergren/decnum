@@ -4,7 +4,7 @@ use core::{fmt, hint};
 
 use super::{
     bcd,
-    tables::{BCD_TO_DPD, BIN_TO_DPD, DPD_TO_BCD},
+    tables::{BCD_TO_DPD, BIN_TO_DPD, DPD_TO_BCD, DPD_TO_STR},
     util::assume,
 };
 
@@ -237,10 +237,26 @@ pub(super) const fn unpack_via_bits(mut dpd: u16) -> u16 {
     }
 }
 
+/// Unpacks the 10-bit DPD into a three-byte string.
+///
+/// The high octet contains the number of significant digits in
+/// the DPD.
+pub const fn unpack_to_str(dpd: u16) -> u32 {
+    if cfg!(feature = "dpd-table") {
+        DPD_TO_STR[dpd as usize]
+    } else {
+        unpack_to_str_via_bits(dpd)
+    }
+}
+
+pub(super) const fn unpack_to_str_via_bits(dpd: u16) -> u32 {
+    bcd::to_str(unpack(dpd))
+}
+
 /// Packs a 32-bit binary number into a 40-bit DPD.
 ///
 /// The most significant 10 bits will always be in [0,4].
-pub const fn from_u32(mut bin: u32) -> u64 {
+pub const fn pack_bin_u32(mut bin: u32) -> u64 {
     let mut dpd = 0;
     let mut i = 0;
     while i < 3 {
@@ -259,7 +275,7 @@ pub const fn from_u32(mut bin: u32) -> u64 {
 /// `9`.
 ///
 /// `bin` must be in the range `[0, (10^34)-1]`
-pub const fn from_u113(mut bin: u128) -> u128 {
+pub const fn pack_bin_u113(mut bin: u128) -> u128 {
     const MASK: u128 = !(((1 << 15) - 1) << 113);
     bin &= MASK;
 
@@ -273,11 +289,6 @@ pub const fn from_u113(mut bin: u128) -> u128 {
     }
     dpd |= (bin_to_dpd((bin % 10) as u16) as u128) << (i * 10);
     dpd
-}
-
-/// Unpacks a 120-bit DPD into a 113-bit binary number.
-pub const fn to_u113(_dpd: u128) -> u128 {
-    todo!()
 }
 
 /// Returns (q, r) such that
@@ -330,7 +341,7 @@ const fn quorem1e3(n: u128) -> (u128, u16) {
     let r = n - q * d;
 
     // Assert some invariants to help the compiler.
-    // SAFETY: `q = n/1000` and `r = n % 1000`.
+    // SAFETY: `r = n % 1000`.
     unsafe {
         // NB: `r < d` must come first, otherwise the compiler
         // doesn't use it in `from_u113`.
@@ -361,6 +372,11 @@ const fn bin_to_dpd(bin: u16) -> u16 {
     } else {
         pack(bcd::from_bin(bin))
     }
+}
+
+/// Returns the number of significant digits in the 10-bit DPD.
+pub(super) const fn sig_digits(dpd: u16) -> u32 {
+    bcd::sig_digits(unpack(dpd))
 }
 
 #[cfg(test)]
@@ -535,10 +551,10 @@ mod tests {
     }
 
     #[test]
-    fn test_from_u32() {
+    fn test_pack_bin_u32() {
         // TODO(eric): test the rest of the digits.
         for bin in 0..=999 {
-            let got = from_u32(bin);
+            let got = pack_bin_u32(bin);
             let want = bin2dpd(bin as u16) as u64;
             assert_eq!(got, want, "#{bin}");
         }
@@ -553,15 +569,15 @@ mod tests {
             dpd |= (pack(0x004) as u64) << 30;
             dpd
         };
-        let got = from_u32(u32::MAX);
+        let got = pack_bin_u32(u32::MAX);
         assert_eq!(got, want);
     }
 
     #[test]
-    fn test_from_u113() {
+    fn test_pack_bin_u113() {
         // TODO(eric): test (some of) the rest of the digits.
         for bin in 0..=999 {
-            let got = from_u113(bin);
+            let got = pack_bin_u113(bin);
             let want = bin2dpd(bin as u16) as u128;
             assert_eq!(got, want, "#{bin}");
         }
@@ -574,7 +590,7 @@ mod tests {
             }
             dpd | (pack(0x9) as u128) << 110
         };
-        let got = from_u113(10u128.pow(34) - 1);
+        let got = pack_bin_u113(10u128.pow(34) - 1);
         assert_eq!(got, want);
     }
 
