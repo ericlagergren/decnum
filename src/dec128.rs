@@ -58,7 +58,7 @@ pub struct d128(
     /// ```
     u128,
 );
-const _: () = assert!(mem::size_of::<d128>() == 128 / 8);
+const _: () = assert!(size_of::<d128>() == 128 / 8);
 
 // Internal stuff.
 impl d128 {
@@ -66,7 +66,9 @@ impl d128 {
     const LIMIT: i16 = 12287;
     const MAX_PREC: i16 = 34;
 
-    const DECLETS: usize = 11;
+    /// The number of three digit declets in the full
+    /// coefficient.
+    const DECLETS: usize = 12;
 
     const SIGN_MASK: u128 = 1 << Self::SIGN_SHIFT;
     const SIGN_SHIFT: u32 = 128 - 1;
@@ -101,9 +103,8 @@ impl d128 {
         msd as u8
     }
 
-    /// Returns the coefficient MSD.
-    #[no_mangle]
-    pub const fn have_msd(self) -> bool {
+    /// Reports whether the MSD is non-zero.
+    const fn have_msd(self) -> bool {
         // The MSD only has meaning for finite numbers.
         debug_assert!(self.is_finite());
 
@@ -143,9 +144,14 @@ impl d128 {
         self.exp() - Self::BIAS
     }
 
-    /// Returns the coefficient.
+    /// Returns the coefficient, less the MSD.
     const fn coeff(self) -> u128 {
         self.0 & Self::COEFF_MASK
+    }
+
+    /// Returns the coefficient, including the MSD.
+    const fn full_coeff(self) -> u128 {
+        self.coeff() | ((self.msd() as u128) << 110)
     }
 
     /// Returns the most significant word.
@@ -405,84 +411,49 @@ impl d128 {
         }
         debug_assert!(self.is_finite());
 
-        let neg = self.is_sign_negative();
-        if neg {
-            buf[0] = b'-';
-        }
+        let mut i = 0;
+        let start = i;
 
-        let mut start = 1;
-        let msd = self.msd();
-        if msd != 0 {
-            buf[1] = msd + b'0';
-            start += 1;
-        }
-
-        let mut i = start;
-        let dpd = self.coeff();
-        for j in 0..Self::DECLETS {
-            let declet = ((dpd >> (j * 10)) & 0x3ff) as u16;
-
-            // The high octet in `w` contains the number of
-            // significant digits. For performance reasons, we
-            // write the entirety of `w` (4 bytes) to `buf`, but
-            // only increment `i` by the number of significant
-            // digits (0-3).
-            let w = dpd::unpack_to_str(declet);
-
-            let dst = &mut buf[i..i + 4];
-            let src = w.to_le_bytes();
-
-            // Have we written at least one declet?
-            if i > start {
-                dst.copy_from_slice(&src);
-                i += 3;
-                continue;
-            }
-
-            // Nope. The first declet must have at least one
-            // significant digit.
-            let sd = w >> 24;
-            if sd > 0 {
-                dst.copy_from_slice(&src);
-                i += sd as usize;
-            }
-        }
-
-        println!("i = {}", i - 1);
-        println!("? = {}", self.coeff_len());
-
-        // Did we write anything?
-        if i == start {
-            // Nope. The DPD must be zero.
-            debug_assert!(dpd == 0);
-            buf[i] = b'0';
-            i += 1;
-        }
-
-        // SAFETY: `buf` is large enough to hold all of the
-        // decimal's declets.
-        unsafe { assume(i < buf.len()) }
+        buf[0] = b'-';
+        i += 1;
 
         let exp = self.unbiased_exp() as i32;
-        println!("exp={exp} {}", self.exp());
-
+        let mut pre = (self.coeff_len() as i32) + exp;
         // The adjusted exponent.
         let mut e = 0;
         // Number of digits before the '.'.
-        let mut pre = ((i - 1) as i32) + exp;
+        let mut pre = ((i - start) as i32) + exp;
         if exp > 0 || pre < -5 {
             // Exponential form
             e = pre - 1;
             pre = 1;
         }
-        println!("pre={pre}");
+        //println!("pre={pre}");
+
+        let dot = if pre > 0 { pre as usize } else { usize::MAX };
+        i += self.coeff_to_str(&mut buf[i..], dot);
+
+        // println!("i = {}", i - 1);
+        // println!("? = {}", self.coeff_len());
+
+        //println!("i={i}");
+
+        // SAFETY: `buf` is large enough to hold all of the
+        // decimal's declets.
+        unsafe { assume(i < buf.len()) }
+
+        //println!("exp={exp} {}", self.exp());
 
         if pre > 0 {
-            let pre = pre as usize;
-            if pre < i {
-                buf.copy_within(pre..i, pre + 1);
+            let dot = start + pre as usize;
+            //println!("pre={pre} start={start} dot={dot} i={i}");
+            if dot < i {
+                //println!("pre={pre} i={i}");
+                buf.copy_within(dot..i, dot + 1);
+                buf[dot] = b'.';
+                i += 1;
             }
-            println!("e={e}");
+            //println!("e={e}");
             if e != 0 {
                 buf[i] = b'E';
                 i += 1;
@@ -495,12 +466,15 @@ impl d128 {
                 i += 1;
                 debug_assert!(e > 0);
 
+                //println!("i={i}");
                 let w = util::itoa4(e as u16);
-                buf[i..i + 4].copy_from_slice(&w.to_le_bytes());
-                i += util::str_len(w);
+                buf[i..i + 4].copy_from_slice(&w.to_bytes());
+                i += w.len();
             }
+
+            let start = self.is_sign_positive() as usize;
             // SAFETY: `buf` only ever contains UTF-8.
-            return unsafe { str::from_utf8_unchecked(&buf[..i]) };
+            return unsafe { str::from_utf8_unchecked(&buf[start..i]) };
         }
 
         // pre = -pre + 2;
@@ -509,6 +483,72 @@ impl d128 {
         // SAFETY: `buf` only ever contains UTF-8.
         return unsafe { str::from_utf8_unchecked(&buf[..i]) };
     }
+
+    fn coeff_to_str(self, dst: &mut [u8], dot: usize) -> usize {
+        let dst = &mut dst[..34 + 1];
+
+        // The coefficient is at most 114 bits.
+        let dpd = self.full_coeff() & (1 << 114) - 1;
+
+        let mut i = 0;
+        let mut shift = 110;
+        loop {
+            let declet = ((dpd >> shift) & 0x3ff) as u16;
+            let s = dpd::unpack_to_str(declet);
+            if i > 0 {
+                dst[i..i + 4].copy_from_slice(&s.to_bytes());
+                i += 3;
+            } else if s.len() > 0 {
+                let n = s.len();
+                dst[i..i + n].copy_from_slice(&s.to_bytes()[..n]);
+                i += n;
+            }
+            if shift == 0 {
+                break;
+            }
+            shift -= 10;
+        }
+
+        i
+    }
+
+    /*
+    fn coeff_to_str(self, dst: &mut [u8], dot: Option<usize>) -> usize {
+        let dst = &mut dst[..34 + 1];
+
+        // The coefficient is at most 114 bits.
+        let dpd = self.full_coeff() & (1 << 114) - 1;
+        if dpd == 0 {
+            dst[0] = b'0';
+            return 1;
+        }
+
+        // Skip past the leading zeros. This prevents the
+        // compiler from unrolling the loop, but simplifies the
+        // BCD to string conversion code.
+        let nlz = ((dpd.leading_zeros() - 14) + 9) / 10;
+        let nd = Self::DIGITS - nlz; // # non-zero digits
+
+        let mut shift = (nd / 3) * 10; // max 110
+
+        // The first declet is special since it shouldn't have
+        // leading zeros.
+        let declet = ((dpd >> shift) & 0x3ff) as u16;
+        let s = dpd::unpack_to_str(declet).trimmed();
+        dst[..3].copy_from_slice(&s.to_bytes());
+        let (_, rest) = dst.split_at_mut(s.len());
+
+        let mut i = 0;
+        while shift > 0 {
+            shift -= 10;
+            let declet = ((dpd >> shift) & 0x3ff) as u16;
+            let s = dpd::unpack_to_str(declet);
+            rest[i..i + 3].copy_from_slice(&s.to_bytes());
+            i += 3;
+        }
+        nd as usize
+    }
+    */
 }
 
 impl fmt::Display for d128 {
@@ -681,19 +721,22 @@ mod tests {
         let _got = d128::new(0, d128::MAX_EXP);
         // println!(" got={got}");
 
-        let got = d128::new(d128::MAX_COEFF, d128::MAX_EXP);
-        println!("got={got}");
+        // let x = d128::MAX_COEFF;
+        // let x = 1234567890_1234567890_1234567890_1234i128;
+        let x = 9_111_222_333_444_555_666_777_888_999_000_111;
+        assert!(x <= d128::MAX_COEFF);
+
+        let got = d128::new(x, d128::MAX_EXP);
         println!("exp={}", got.exp());
+        println!(" got={got}");
 
         fn to_str(mut bin: i128, exp: i16) -> String {
             let neg = bin < 0;
             let mut d = decQuad { bytes: [0u8; 16] };
             let mut bcd = [0u8; 34];
-            let mut i = 0;
-            while i < bcd.len() {
-                bcd[i] = (bin % 10) as u8;
+            for v in bcd.iter_mut().rev() {
+                *v = (bin % 10) as u8;
                 bin /= 10;
-                i += 1;
             }
             unsafe { decQuadFromBCD(&mut d, exp as i32, bcd.as_ptr().cast(), neg as i32) };
             unsafe { decQuadShow(&d, "\0".as_ptr().cast()) };
@@ -704,7 +747,8 @@ mod tests {
             cstr.to_str().unwrap().to_owned()
         }
         //println!("want={}", to_str(0, d128::MAX_EXP));
-        println!("want={}", to_str(d128::MAX_COEFF, d128::MAX_EXP));
+        //println!("want={}", to_str(d128::MAX_COEFF, d128::MAX_EXP));
+        println!("want={}", to_str(x, d128::MAX_EXP));
 
         assert!(false);
     }

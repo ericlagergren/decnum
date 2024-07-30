@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 
-use super::{bcd, dpd};
+use super::{
+    bcd::{self, Str3},
+    dpd,
+};
 
 #[rustfmt::skip]
 pub(super) const TEST_MSD: [i32; 64] = [
@@ -70,8 +73,8 @@ pub(super) const DPD_TO_BIN: [u16; 1 << 10] = {
 ///
 /// The high octet contains the number of significant digits in
 /// the DPD.
-pub(super) const DPD_TO_STR: [u32; 1 << 10] = {
-    let mut t = [0u32; 1 << 10];
+pub(super) const DPD_TO_STR: [Str3; 1 << 10] = {
+    let mut t = [Str3::zero(); 1 << 10];
     let mut bin = 0;
     while bin <= 999 {
         let bcd = bcd::from_bin(bin);

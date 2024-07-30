@@ -4,6 +4,7 @@ use core::{
     cmp::Ordering,
     fmt,
     hash::Hash,
+    mem::{self, size_of},
     str::{self, FromStr},
 };
 
@@ -390,23 +391,108 @@ pub const fn from_bin(mut bin: u16) -> u16 {
     bcd
 }
 
-/// Converts the 12-bit BCD to a three-byte string.
-///
-/// The high octet contains the number of significant digits in
-/// the BCD.
-pub(super) const fn to_str(bcd: u16) -> u32 {
-    const MASK: u32 = 0x00303030;
+/// Converts a 12-bit BCD to a string.
+pub(super) const fn to_str(bcd: u16) -> Str3 {
     let mut w = 0;
-    w |= (bcd & 0x00f) as u32;
-    w |= ((bcd & 0x0f0) as u32) << 4;
-    w |= ((bcd & 0xf00) as u32) << 8;
-    w |= sig_digits(bcd) << 24;
-    w | MASK
+    // Rewrite 0x0123 as 0x00030201.
+    w |= ((bcd & 0x000f) as u32) << 16;
+    w |= ((bcd & 0x00f0) as u32) << 4;
+    w |= ((bcd & 0x0f00) as u32) >> 8;
+    w |= 0x00303030; // b'0' | b'0'<<8 | ...
+
+    // Using transmute is ugly, but LLVM refuses to optimize
+    // a safe version like
+    //
+    // ```
+    // let b = w.to_le_bytes();
+    // [b[0], b[1], b[2]]
+    // ```
+    //
+    // SAFETY: `[u8; 3]` is smaller than `[u8; 4]`.
+    unsafe { mem::transmute_copy(&w.to_le_bytes()) }
 }
 
-/// Returns the number of significant digits in a 12-bit BCD.
-pub(super) const fn sig_digits(bcd: u16) -> u32 {
-    (16 - (bcd & 0x888).leading_zeros()) / 4
+/// A 12-bit BCD converted to a three-byte string.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct Str3(u32);
+
+impl Str3 {
+    pub(super) const fn zero() -> Self {
+        Self(0)
+    }
+
+    /// Converts the string to bytes.
+    pub const fn to_bytes(self) -> [u8; 4] {
+        self.0.to_le_bytes()
+    }
+
+    /// TODO
+    pub const fn len(self) -> usize {
+        const MASK: u32 = 0x00303030; // b'0' | b'0'<<8 | ...
+        let w = self.0 & !MASK;
+        ((w | 0xff000000).trailing_zeros() / 8) as usize
+    }
+
+    /// Trims leading '0' bytes from the string.
+    pub const fn trimmed(self) -> TrimmedStr3 {
+        const MASK: u32 = 0x00303030; // b'0' | b'0'<<8 | ...
+        let mut w = self.0 & !MASK;
+        // Get rid if insignificant leading zeros. For example,
+        // if we convert 0x0042 to 0x00020400, we need to shift
+        // off the rightmost byte.
+        let zeros = (w | 0xff000000).trailing_zeros() / 8;
+        w >>= zeros * 8;
+        // Add in the number of significant digits.
+        w |= ((3 - zeros) + (w == 0) as u32) << 24;
+        w |= MASK;
+        TrimmedStr3(w)
+    }
+}
+
+impl fmt::Display for Str3 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let b = &self.to_bytes();
+        // SAFETY: Up to `self.len()` bytes are valid UTF-8.
+        let s = unsafe { str::from_utf8_unchecked(b) };
+        write!(f, "{s}")
+    }
+}
+
+/// Like [`Str3`], but without leading zeros.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct TrimmedStr3(
+    // The first 24 bits are UTF-8 digits.
+    // The last 8 bits are the length of the string in [1,3].
+    u32,
+);
+
+impl TrimmedStr3 {
+    /// Returns the length of the string.
+    pub const fn len(self) -> usize {
+        ((self.0 >> 24) & 0x3) as usize
+    }
+
+    /// Converts the string to bytes.
+    pub const fn to_bytes(self) -> [u8; 3] {
+        const { assert!(size_of::<[u8; 3]>() <= size_of::<u32>()) }
+        // Using transmute is ugly, but LLVM refuses to optimize
+        // a safe version like
+        //
+        //    let b = w.to_le_bytes();
+        //    [b[0], b[1], b[2]]
+        //
+        // SAFETY: `[u8; 3]` is smaller than `[u8; 4]`.
+        unsafe { mem::transmute_copy(&self.0.to_le_bytes()) }
+    }
+}
+
+impl fmt::Display for TrimmedStr3 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let b = &self.to_bytes();
+        // SAFETY: Up to `self.len()` bytes are valid UTF-8.
+        let s = unsafe { str::from_utf8_unchecked(b) };
+        write!(f, "{s}")
+    }
 }
 
 macro_rules! impl_is_valid {
@@ -611,13 +697,25 @@ mod tests {
         for bin in 0..=999 {
             let bcd = from_bin(bin);
             let got = to_str(bcd);
-            let want = u32::from_le_bytes([
-                ((bin % 10) as u8) + b'0',
-                ((bin % 100 / 10) as u8) + b'0',
+            let sd = if bin < 10 {
+                1
+            } else if bin < 100 {
+                2
+            } else {
+                3
+            };
+            let want = [
                 ((bin % 1000 / 100) as u8) + b'0',
-                sig_digits(bcd) as u8,
-            ]);
-            assert_eq!(got, want, "#{bin}");
+                ((bin % 100 / 10) as u8) + b'0',
+                ((bin % 10) as u8) + b'0',
+            ];
+            assert_eq!(
+                got,
+                Str3(want),
+                "#{bin}: \"{}\" != \"{}\"",
+                str::from_utf8(&got.to_bytes()[..sd as usize]).unwrap(),
+                str::from_utf8(&want[..sd as usize]).unwrap(),
+            );
         }
     }
 }

@@ -14,12 +14,29 @@ pub(super) const unsafe fn assume(b: bool) {
     }
 }
 
-/// Converts `n` to a base-10 string.
+/// A string of length [1,4].
+#[derive(Copy, Clone, Debug)]
+pub(super) struct Str4(u32);
+
+impl Str4 {
+    /// Returns the number of valid bytes.
+    pub const fn len(self) -> usize {
+        (((32 - self.0.leading_zeros()) + 7) / 8) as usize
+    }
+
+    /// Converts the string to bytes.
+    ///
+    /// Only [`len`][Self::len] bytes are valid.
+    pub const fn to_bytes(self) -> [u8; 4] {
+        self.0.to_le_bytes()
+    }
+}
+
+/// Converts the binary number `n` to a base-10 string.
 ///
-/// `n` must be in [0,9999].
-pub(super) fn itoa4(n: u16) -> u32 {
-    println!("n={n}");
-    debug_assert!(n < 10_000);
+/// `n` must be in [1,9999].
+pub(super) fn itoa4(n: u16) -> Str4 {
+    debug_assert!(n > 0 && n < 10_000);
 
     const MASK: u32 = 0x30303030;
 
@@ -43,11 +60,7 @@ pub(super) fn itoa4(n: u16) -> u32 {
 
     v |= MASK;
     v >>= s;
-    v
-}
-
-pub(super) const fn str_len(w: u32) -> usize {
-    (((32 - w.leading_zeros()) + 7) / 8) as usize
+    Str4(v)
 }
 
 #[cfg(test)]
@@ -61,8 +74,8 @@ mod tests {
         let mut buf = itoa::Buffer::new();
         for n in 0..=9999 {
             let w = itoa4(n);
-            let i = ((32 - w.leading_zeros()) + 7) / 8;
-            let got = w.to_le_bytes();
+            let i = ((32 - w.0.leading_zeros()) + 7) / 8;
+            let got = w.to_bytes();
             let got = str::from_utf8(&got[..i as usize]).unwrap();
             let want = buf.format(n);
             assert_eq!(got, want, "#{n}");

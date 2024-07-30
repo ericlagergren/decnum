@@ -3,7 +3,7 @@
 use core::{fmt, hint};
 
 use super::{
-    bcd,
+    bcd::{self, Str3},
     tables::{BCD_TO_DPD, BIN_TO_DPD, DPD_TO_BCD, DPD_TO_STR},
     util::assume,
 };
@@ -241,15 +241,15 @@ pub(super) const fn unpack_via_bits(mut dpd: u16) -> u16 {
 ///
 /// The high octet contains the number of significant digits in
 /// the DPD.
-pub const fn unpack_to_str(dpd: u16) -> u32 {
-    if cfg!(feature = "dpd-table") {
+pub const fn unpack_to_str(dpd: u16) -> Str3 {
+    if cfg!(feature = "dpd-tables") {
         DPD_TO_STR[dpd as usize]
     } else {
         unpack_to_str_via_bits(dpd)
     }
 }
 
-pub(super) const fn unpack_to_str_via_bits(dpd: u16) -> u32 {
+pub(super) const fn unpack_to_str_via_bits(dpd: u16) -> Str3 {
     bcd::to_str(unpack(dpd))
 }
 
@@ -376,7 +376,11 @@ const fn bin_to_dpd(bin: u16) -> u16 {
 
 /// Returns the number of significant digits in the 10-bit DPD.
 pub(super) const fn sig_digits(dpd: u16) -> u32 {
-    bcd::sig_digits(unpack(dpd))
+    let bcd = unpack(dpd);
+    let nlz = bcd.leading_zeros();
+    let mut sd = ((16 - nlz) + 3) / 4;
+    sd |= (bcd == 0) as u32;
+    sd
 }
 
 #[cfg(test)]
