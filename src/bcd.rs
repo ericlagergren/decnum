@@ -4,11 +4,67 @@ use core::{
     cmp::Ordering,
     fmt,
     hash::Hash,
-    mem::{self, size_of},
+    hint, mem,
     str::{self, FromStr},
 };
 
 use super::{dpd, util::assume};
+
+/// A BCD's bit pattern.
+#[repr(u16)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Pattern {
+    /// All digits are small.
+    AllSmall = 0x000,
+    /// The right digit is large.
+    RightLarge = 0x008,
+    /// The middle digit is large.
+    MiddleLarge = 0x080,
+    /// The left digit is large.
+    LeftLarge = 0x800,
+    /// The right digit is small.
+    RightSmall = 0x880,
+    /// The middle digit is small.
+    MiddleSmall = 0x808,
+    /// The left digit is small.
+    LeftSmall = 0x088,
+    /// All digits are large.
+    AllLarge = 0x888,
+}
+
+impl fmt::Display for Pattern {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Pattern::*;
+        match self {
+            AllSmall => write!(f, "AllSmall"),
+            RightLarge => write!(f, "RightLarge"),
+            MiddleLarge => write!(f, "MiddleLarge"),
+            LeftLarge => write!(f, "LeftLarge"),
+            RightSmall => write!(f, "RightSmall"),
+            MiddleSmall => write!(f, "MiddleSmall"),
+            LeftSmall => write!(f, "LeftSmall"),
+            AllLarge => write!(f, "AllLarge"),
+        }
+    }
+}
+
+/// Classifies a 12-bit BCD for packing into a 10-bit DPD.
+pub const fn classify(bcd: u16) -> Pattern {
+    use Pattern::*;
+    match bcd & 0x888 {
+        0x000 => AllSmall,
+        0x008 => RightLarge,
+        0x080 => MiddleLarge,
+        0x800 => LeftLarge,
+        0x880 => RightSmall,
+        0x808 => MiddleSmall,
+        0x088 => LeftSmall,
+        0x888 => AllLarge,
+        // SAFETY: Given the bits we've set, these are the only
+        // possible results.
+        _ => unsafe { hint::unreachable_unchecked() },
+    }
+}
 
 macro_rules! bcd_int_impl {
     (
@@ -155,6 +211,9 @@ macro_rules! bcd_int_impl {
                 let mut i = 0;
                 let mut s = (buf.len() - 1) * 4;
                 while i < buf.len() {
+                    // The loop condition is `i < buf.len()`, so
+                    // this cannot panic.
+                    #[allow(clippy::indexing_slicing)]
                     let c = buf[i];
                     if c < b'0' || c > b'9' {
                         return Err(ParseBcdError(()));
@@ -214,7 +273,7 @@ macro_rules! bcd_int_impl {
             ///
             /// If the DPD is too large, excess bits are
             /// discarded.
-            pub fn unpack(dpd: $dpd) -> Self {
+            pub const fn unpack(dpd: $dpd) -> Self {
                 let mut bcd = 0;
                 let mut shl = 0;
                 let mut shr = 0;
@@ -231,8 +290,8 @@ macro_rules! bcd_int_impl {
 
             /// Unpacks the DPD into a BCD.
             ///
-            /// Returns `None` if the DPD is too large.
-            pub fn try_unpack(dpd: $dpd) -> Option<Self> {
+            /// Returns `None` if the DPD is invalid.
+            pub const fn try_unpack(dpd: $dpd) -> Option<Self> {
                 if dpd & Self::INVALID_DPD != 0 {
                     None
                 } else {
@@ -271,7 +330,7 @@ macro_rules! bcd_int_impl {
             /// let s = bcd.encode(&mut buf);
             /// assert_eq!(s, "1234");
             /// ```
-            pub fn encode<'a>(self, buf: &'a mut [u8; $digits]) -> &'a str {
+            pub fn encode(self, buf: &mut [u8; $digits]) -> &str {
                 self.debug_check();
 
                 let s = self.encode_full(buf).trim_start_matches('0');
@@ -296,7 +355,7 @@ macro_rules! bcd_int_impl {
             /// let s = bcd.encode_full(&mut buf);
             /// assert_eq!(s, "01234");
             /// ```
-            pub fn encode_full<'a>(self, buf: &'a mut [u8; $digits]) -> &'a str {
+            pub fn encode_full(self, buf: &mut [u8; $digits]) -> &str {
                 self.debug_check();
 
                 let mut bcd = self.bcd;
@@ -427,66 +486,15 @@ impl Str3 {
     }
 
     /// TODO
+    #[allow(clippy::len_without_is_empty)]
     pub const fn len(self) -> usize {
         const MASK: u32 = 0x00303030; // b'0' | b'0'<<8 | ...
         let w = self.0 & !MASK;
         ((w | 0xff000000).trailing_zeros() / 8) as usize
     }
-
-    /// Trims leading '0' bytes from the string.
-    pub const fn trimmed(self) -> TrimmedStr3 {
-        const MASK: u32 = 0x00303030; // b'0' | b'0'<<8 | ...
-        let mut w = self.0 & !MASK;
-        // Get rid if insignificant leading zeros. For example,
-        // if we convert 0x0042 to 0x00020400, we need to shift
-        // off the rightmost byte.
-        let zeros = (w | 0xff000000).trailing_zeros() / 8;
-        w >>= zeros * 8;
-        // Add in the number of significant digits.
-        w |= ((3 - zeros) + (w == 0) as u32) << 24;
-        w |= MASK;
-        TrimmedStr3(w)
-    }
 }
 
 impl fmt::Display for Str3 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let b = &self.to_bytes();
-        // SAFETY: Up to `self.len()` bytes are valid UTF-8.
-        let s = unsafe { str::from_utf8_unchecked(b) };
-        write!(f, "{s}")
-    }
-}
-
-/// Like [`Str3`], but without leading zeros.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct TrimmedStr3(
-    // The first 24 bits are UTF-8 digits.
-    // The last 8 bits are the length of the string in [1,3].
-    u32,
-);
-
-impl TrimmedStr3 {
-    /// Returns the length of the string.
-    pub const fn len(self) -> usize {
-        ((self.0 >> 24) & 0x3) as usize
-    }
-
-    /// Converts the string to bytes.
-    pub const fn to_bytes(self) -> [u8; 3] {
-        const { assert!(size_of::<[u8; 3]>() <= size_of::<u32>()) }
-        // Using transmute is ugly, but LLVM refuses to optimize
-        // a safe version like
-        //
-        //    let b = w.to_le_bytes();
-        //    [b[0], b[1], b[2]]
-        //
-        // SAFETY: `[u8; 3]` is smaller than `[u8; 4]`.
-        unsafe { mem::transmute_copy(&self.0.to_le_bytes()) }
-    }
-}
-
-impl fmt::Display for TrimmedStr3 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let b = &self.to_bytes();
         // SAFETY: Up to `self.len()` bytes are valid UTF-8.
@@ -704,17 +712,18 @@ mod tests {
             } else {
                 3
             };
-            let want = [
+            let want = u32::from_le_bytes([
                 ((bin % 1000 / 100) as u8) + b'0',
                 ((bin % 100 / 10) as u8) + b'0',
                 ((bin % 10) as u8) + b'0',
-            ];
+                0,
+            ]);
             assert_eq!(
                 got,
                 Str3(want),
                 "#{bin}: \"{}\" != \"{}\"",
                 str::from_utf8(&got.to_bytes()[..sd as usize]).unwrap(),
-                str::from_utf8(&want[..sd as usize]).unwrap(),
+                str::from_utf8(&want.to_le_bytes()[..sd as usize]).unwrap(),
             );
         }
     }

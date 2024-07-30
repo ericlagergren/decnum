@@ -1,71 +1,49 @@
 //! Densely Packed Decimal conversion routines.
 
-use core::{fmt, hint};
+use core::hint;
 
 use super::{
-    bcd::{self, Str3},
+    bcd::{self, Pattern, Str3},
     tables::{BCD_TO_DPD, BIN_TO_DPD, DPD_TO_BCD, DPD_TO_STR},
     util::assume,
 };
 
-/// A BCD's bit pattern.
-#[repr(u16)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Pattern {
-    /// All digits are small.
-    AllSmall = 0x000,
-    /// The right digit is large.
-    RightLarge = 0x008,
-    /// The middle digit is large.
-    MiddleLarge = 0x080,
-    /// The left digit is large.
-    LeftLarge = 0x800,
-    /// The right digit is small.
-    RightSmall = 0x880,
-    /// The middle digit is small.
-    MiddleSmall = 0x808,
-    /// The left digit is small.
-    LeftSmall = 0x088,
-    /// All digits are large.
-    AllLarge = 0x888,
-}
-
-impl fmt::Display for Pattern {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use Pattern::*;
-        match self {
-            AllSmall => write!(f, "AllSmall"),
-            RightLarge => write!(f, "RightLarge"),
-            MiddleLarge => write!(f, "MiddleLarge"),
-            LeftLarge => write!(f, "LeftLarge"),
-            RightSmall => write!(f, "RightSmall"),
-            MiddleSmall => write!(f, "MiddleSmall"),
-            LeftSmall => write!(f, "LeftSmall"),
-            AllLarge => write!(f, "AllLarge"),
-        }
+/// Reports whether the 10-bit DPD is valid.
+pub const fn is_valid(dpd: u16) -> bool {
+    if dpd > 1 << 10 {
+        return false;
     }
-}
-
-/// Classifies a 12-bit BCD for packing into a 10-bit DPD.
-pub const fn classify_bcd(bcd: u16) -> Pattern {
-    use Pattern::*;
-    match bcd & 0x888 {
-        0x000 => AllSmall,
-        0x008 => RightLarge,
-        0x080 => MiddleLarge,
-        0x800 => LeftLarge,
-        0x880 => RightSmall,
-        0x808 => MiddleSmall,
-        0x088 => LeftSmall,
-        0x888 => AllLarge,
-        // SAFETY: Given the bits we've set, these are the only
-        // possible results.
-        _ => unsafe { hint::unreachable_unchecked() },
-    }
+    !matches!(
+        dpd,
+        0x16e
+            | 0x16f
+            | 0x17e
+            | 0x17f
+            | 0x1ee
+            | 0x1ef
+            | 0x1fe
+            | 0x1ff
+            | 0x26e
+            | 0x26f
+            | 0x27e
+            | 0x27f
+            | 0x2ee
+            | 0x2ef
+            | 0x2fe
+            | 0x2ff
+            | 0x36e
+            | 0x36f
+            | 0x37e
+            | 0x37f
+            | 0x3ee
+            | 0x3ef
+            | 0x3fe
+            | 0x3ff,
+    )
 }
 
 /// Classifies a 10-bit DPD for unpacking into a 12-bit BCD.
-pub const fn classify_dpd(dpd: u16) -> Pattern {
+pub const fn classify(dpd: u16) -> Pattern {
     use Pattern::*;
 
     // Match bit `v`.
@@ -94,8 +72,14 @@ pub const fn classify_dpd(dpd: u16) -> Pattern {
 }
 
 /// Packs a 12-bit BCD into a 10-bit DPD.
+///
+/// # Panics
+///
+/// This function might panic if `dpd-tables` is enabled and
+/// `bcd` is greater than 0x999.
 pub const fn pack(bcd: u16) -> u16 {
     if cfg!(feature = "dpd-tables") {
+        #[allow(clippy::indexing_slicing)]
         BCD_TO_DPD[bcd as usize]
     } else {
         pack_via_bits(bcd)
@@ -121,7 +105,7 @@ pub(super) const fn pack_via_bits(mut bcd: u16) -> u16 {
     bcd &= 0x0fff;
 
     use Pattern::*;
-    match classify_bcd(bcd) {
+    match bcd::classify(bcd) {
         AllSmall => {
             // .... abcd efgh ijkm
             // .... ..bc dfgh 0jkm
@@ -166,8 +150,14 @@ pub(super) const fn pack_via_bits(mut bcd: u16) -> u16 {
 }
 
 /// Unpacks a 10-bit DPD into a 12-bit BCD.
+///
+/// # Panics
+///
+/// This function might panic if `dpd-tables` is enabled and
+/// `dpd` is greater than 1023.
 pub const fn unpack(dpd: u16) -> u16 {
     if cfg!(feature = "dpd-tables") {
+        #[allow(clippy::indexing_slicing)]
         DPD_TO_BCD[dpd as usize]
     } else {
         unpack_via_bits(dpd)
@@ -193,7 +183,7 @@ pub(super) const fn unpack_via_bits(mut dpd: u16) -> u16 {
     // | 11111 | 100r 100u 100y |
 
     use Pattern::*;
-    match classify_dpd(dpd) {
+    match classify(dpd) {
         AllSmall => {
             // .... ..pq rstu vwxy
             // .... 0pqr 0stu 0wxy
@@ -241,8 +231,14 @@ pub(super) const fn unpack_via_bits(mut dpd: u16) -> u16 {
 ///
 /// The high octet contains the number of significant digits in
 /// the DPD.
+///
+/// # Panics
+///
+/// This function might panic if `dpd-tables` is enabled and
+/// `dpd` is greater than 1023.
 pub const fn unpack_to_str(dpd: u16) -> Str3 {
     if cfg!(feature = "dpd-tables") {
+        #[allow(clippy::indexing_slicing)]
         DPD_TO_STR[dpd as usize]
     } else {
         unpack_to_str_via_bits(dpd)
@@ -366,8 +362,14 @@ const fn muluh(x: u128, y: u128) -> u128 {
 }
 
 /// Converts a binary number in [0,999] to a 10-bit DPD.
+///
+/// # Panics
+///
+/// This function might panic if `dpd-tables` is enabled and
+/// `bin` is greater than 999.
 const fn bin_to_dpd(bin: u16) -> u16 {
     if cfg!(feature = "dpd-tables") {
+        #[allow(clippy::indexing_slicing)]
         BIN_TO_DPD[bin as usize]
     } else {
         pack(bcd::from_bin(bin))
@@ -543,8 +545,8 @@ mod tests {
             let bcd = bcd::from_bin(bin);
 
             // Check the BCD/DPD classification.
-            assert_eq!(classify_bcd(bcd), pattern, "#{i}");
-            assert_eq!(classify_dpd(dpd), pattern, "#{i}");
+            assert_eq!(bcd::classify(bcd), pattern, "#{i}");
+            assert_eq!(classify(dpd), pattern, "#{i}");
 
             let got = pack(bcd);
             assert_eq!(got, dpd, "#{i} ({bin}): {} != {}", Dpd(got), Dpd(dpd));
@@ -601,7 +603,7 @@ mod tests {
     #[test]
     fn test_pack_unpack_exhaustive() {
         for (i, Tuple { bin, dpd, bcd }) in all().enumerate() {
-            assert_eq!(classify_bcd(bcd), classify_dpd(dpd), "#{i}");
+            assert_eq!(bcd::classify(bcd), classify(dpd), "#{i}");
 
             assert_eq!(bcd::from_bin(bin), bcd, "#{i}");
 

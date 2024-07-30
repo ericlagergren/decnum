@@ -35,7 +35,7 @@ impl Str4 {
 /// Converts the binary number `n` to a base-10 string.
 ///
 /// `n` must be in [1,9999].
-pub(super) fn itoa4(n: u16) -> Str4 {
+pub(super) const fn itoa4(n: u16) -> Str4 {
     debug_assert!(n > 0 && n < 10_000);
 
     const MASK: u32 = 0x30303030;

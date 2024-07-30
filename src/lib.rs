@@ -1,5 +1,6 @@
 //! TODO
 
+#![allow(clippy::unusual_byte_groupings)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(not(any(feature = "std", test)), deny(clippy::std_instead_of_core))]
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
