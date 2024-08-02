@@ -5,6 +5,7 @@ use core::hint;
 /// # Safety
 ///
 /// `b` must never be false.
+#[track_caller]
 pub(super) const unsafe fn assume(b: bool) {
     debug_assert!(b);
 
@@ -19,8 +20,8 @@ pub(super) const unsafe fn assume(b: bool) {
 pub(super) struct Str4(u32);
 
 impl Str4 {
-    /// Returns the number of valid bytes.
-    pub const fn len(self) -> usize {
+    /// Returns the number of significant digits.
+    pub const fn digits(self) -> usize {
         (((32 - self.0.leading_zeros()) + 7) / 8) as usize
     }
 

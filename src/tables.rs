@@ -108,14 +108,4 @@ mod tests {
             bin += 1;
         }
     }
-
-    #[test]
-    fn test_idk() {
-        for (dpd, bcd) in DPD_TO_BCD2.into_iter().enumerate() {
-            if bcd.is_some() {
-                continue;
-            }
-            println!("dpd = {dpd:#x}");
-        }
-    }
 }

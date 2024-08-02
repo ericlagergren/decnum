@@ -481,23 +481,43 @@ impl Str3 {
     }
 
     /// Converts the string to bytes.
+    ///
+    /// The first three digits are valid UTF-8.
     pub const fn to_bytes(self) -> [u8; 4] {
         self.0.to_le_bytes()
     }
 
-    /// TODO
-    #[allow(clippy::len_without_is_empty)]
-    pub const fn len(self) -> usize {
-        const MASK: u32 = 0x00303030; // b'0' | b'0'<<8 | ...
-        let w = self.0 & !MASK;
-        ((w | 0xff000000).trailing_zeros() / 8) as usize
+    const fn zero_digits(self) -> u32 {
+        let mut w = self.0;
+        w &= 0xffcfcfcf; // to unpacked BCD
+        w |= 0xff000000; // only check the BCD
+        w.trailing_zeros() / 8
+    }
+
+    /// Like [`to_bytes`][Self::to_bytes], but shifts the digits
+    /// to remove insignificant zeros.
+    ///
+    /// The first [`digits`][Self::digits] digits are valid
+    /// UTF-8.
+    pub const fn to_trimmed_bytes(self) -> [u8; 4] {
+        let zeros = self.zero_digits() * 8;
+        (self.0 >> zeros).to_le_bytes()
+    }
+
+    /// Returns the number of significant digits in the BCD.
+    ///
+    /// It returns 0 for "000".
+    ///
+    /// The result is always in [0,3].
+    pub const fn digits(self) -> usize {
+        (3 - self.zero_digits()) as usize
     }
 }
 
 impl fmt::Display for Str3 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let b = &self.to_bytes();
-        // SAFETY: Up to `self.len()` bytes are valid UTF-8.
+        // SAFETY: Up to three bytes are valid UTF-8.
         let s = unsafe { str::from_utf8_unchecked(b) };
         write!(f, "{s}")
     }
