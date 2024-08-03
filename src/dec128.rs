@@ -1,33 +1,14 @@
-#![allow(dead_code, unused_imports)]
-
-use core::{fmt, hint, mem, ptr, str};
+use core::{fmt, num::FpCategory, str};
 
 use super::{
-    bcd::{self, Bcd10},
     dpd,
-    tables::{BIN_TO_DPD, DPD_TO_BIN, TEST_MSD},
     util::{self, assume},
 };
-
-const BIAS: u32 = 6176;
-const E_LIMIT: i16 = 12287;
-const E_CONT_LEN: u32 = 12;
-
-const SIGNBIT: u32 = 1 << 31;
-
-/// Indicates an infinity or NaN.
-const SPECIAL: u32 = 0b0_11110_00 << 24;
-const INF: u32 = 0b0_11110_00 << 24;
-const NAN: u32 = 0b0_11111_00 << 24;
-const QNAN: u32 = 0b0_11111_00 << 24;
-const SNAN: u32 = 0b0_11111_10 << 24;
-
-/// Covers all of the NaN bits.
-const NAN_MASK: u32 = 0b0111111 << 25;
 
 /// A 128-bit decimal.
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone)]
+#[repr(transparent)]
 pub struct d128(
     /// # Layout
     ///
@@ -55,10 +36,7 @@ impl d128 {
 
     const MAX_PREC: i16 = 34;
 
-    /// The number of three digit declets in the full
-    /// coefficient.
-    const DECLETS: usize = 12;
-
+    #[allow(dead_code)] // TODO
     const SIGN_BIT: u32 = 1;
     const SIGN_SHIFT: u32 = 128 - 1;
     const SIGN_MASK: u128 = 1 << Self::SIGN_SHIFT;
@@ -73,13 +51,6 @@ impl d128 {
 
     const COEFF_BITS: u32 = 110;
     const COEFF_MASK: u128 = (1 << 110) - 1;
-
-    // TODO
-    const fn validate(self) {
-        // let comb = self.comb();
-        // let msb = comb >> 3;
-        // debug_assert!((msb & 1) ^ (msb >> 1) == 0);
-    }
 
     /// Returns the combination field.
     const fn comb(self) -> Comb {
@@ -99,30 +70,57 @@ impl d128 {
 
     /// Returns the exponent continuation field.
     ///
-    /// The top four bits are always zero.
+    /// The top four bits are always zero, so the result is
+    /// always in [0, 4095].
     const fn econ(self) -> u16 {
-        ((self.0 & Self::ECON_MASK) >> Self::ECON_SHIFT) as u16
+        let econ = ((self.0 & Self::ECON_MASK) >> Self::ECON_SHIFT) as u16;
+        // SAFETY: Given our mask and shift, the top four bits
+        // are always zero.
+        unsafe {
+            assume(econ & 0xf000 == 0);
+        }
+        econ
     }
 
     /// Returns the biased exponment.
     ///
-    /// The result is in [0, [`LIMIT`][Self::LIMIT]].
+    /// If the number is finite, the result is in [0,
+    /// [`LIMIT`][Self::LIMIT]].
     const fn exp(self) -> u16 {
         // The exponent only has meaning for finite numbers.
         debug_assert!(self.is_finite());
 
         let econ = self.econ();
         let msb = self.comb().msb() as u16;
-        (msb << 12) | econ
+        let exp = (msb << 12) | econ;
+
+        if self.is_finite() {
+            const _: () = assert!(d128::LIMIT < (1 << 14) - 1);
+
+            // SAFETY: `exp` is a 14 bit integer: `econ` is
+            // the lower 12 bits and `msb` is the upper 2 bits.
+            // Since `msb` is in [0, 2], the maximum value is
+            //   0b10_111111111111
+            //    msb      econ
+            // which is the same as LIMIT.
+            unsafe {
+                assume(msb <= 2);
+                assume(exp <= Self::LIMIT);
+            }
+        }
+        exp
     }
 
     /// Returns the unbiased exponent.
     ///
-    /// The result is in [[`MIN_EXP`][Self::MIN_EXP],
-    /// [`MAX_EXP`][Self::MAX_EXP]].
-    fn unbiased_exp(self) -> i16 {
+    /// If the number is finite, the result is in
+    /// [[`MIN_EXP`][Self::MIN_EXP], [`MAX_EXP`][Self::MAX_EXP]].
+    const fn unbiased_exp(self) -> i16 {
         const _: () = assert!(d128::LIMIT < i16::MAX as u16);
         const _: () = assert!(i16::MAX - (d128::LIMIT as i16) > d128::BIAS);
+
+        // The exponent only has meaning for finite numbers.
+        debug_assert!(self.is_finite());
 
         // `self.exp()` is in [0, LIMIT] and LIMIT < i16::MAX, so
         // the cast cannot wrap.
@@ -133,21 +131,42 @@ impl d128 {
         #[allow(clippy::cast_possible_wrap)]
         let exp = (self.exp() as i16) - Self::BIAS;
 
-        // SAFETY: `self.exp()` returns an integer in [0,LIMIT].
-        // Subtracting `BIAS` TODO
-        unsafe {
-            assume(exp >= Self::MIN_EXP);
-            assume(exp <= Self::MAX_EXP);
+        if self.is_finite() {
+            // SAFETY: `self.exp()` returns an integer in
+            // [0, LIMIT]. Subtracting `BIAS` TODO
+            unsafe {
+                assume(exp >= Self::MIN_EXP);
+                assume(exp <= Self::MAX_EXP);
+            }
         }
         exp
     }
 
+    /// Returns the adjusted exponent.
+    ///
+    /// This is `exp + digits - 1`.
+    const fn adjusted_exp(self) -> i16 {
+        const _: () = assert!(d128::DIGITS <= i16::MAX as u32);
+
+        debug_assert!(self.is_finite());
+
+        // `self.digits() as i16` does not wrap because it is in
+        // [1, DIGITS], and `DIGITS <= i16::MAX`.
+        #[allow(clippy::cast_possible_wrap)]
+        let digits = self.digits() as i16;
+
+        self.unbiased_exp() + digits - 1
+    }
+
     /// Returns the coefficient, less the MSD.
     const fn coeff(self) -> u128 {
+        debug_assert!(self.is_finite());
+
         self.0 & Self::COEFF_MASK
     }
 
     /// Returns the coefficient, including the MSD.
+    #[allow(dead_code)] // TODO
     const fn full_coeff(self) -> u128 {
         self.coeff() | ((self.msd() as u128) << 110)
     }
@@ -163,45 +182,40 @@ impl d128 {
         #[allow(clippy::cast_sign_loss)]
         let biased = (exp + Self::BIAS) as u128;
 
-        let sign = (sign as u128) << Self::SIGN_SHIFT;
         let comb = {
             // `dpd` is 120 bits. The top 6 bits are always zero.
             // The next 4 bits contain the MSD.
-            let msd = (dpd >> 110) & 0x9;
+            let msd = ((dpd >> 110) & 0x9) as u8;
             debug_assert!(msd <= 9);
 
-            let msb = (biased & 0x3000) >> 12;
+            let msb = ((biased & 0x3000) >> 12) as u8;
             debug_assert!(msb <= 2);
 
             // [0,7] -> 0cde
             // [8,9] -> 100e
-            let comb = if msd <= 7 {
+            if msd <= 7 {
                 (msb << 3) | msd
             } else {
                 0x18 | (msb << 1) | msd
-            };
-            comb << Self::COMB_SHIFT
+            }
         };
-        debug_assert!(comb & !Self::COMB_MASK == 0);
-
-        let econ = ((biased & 0xfff) << Self::ECON_SHIFT) & Self::ECON_MASK;
-        debug_assert!(econ & !Self::ECON_MASK == 0);
-
+        let econ = (biased & 0xfff) as u16;
         let coeff = dpd & Self::COEFF_MASK;
-        debug_assert!(coeff & !Self::COEFF_MASK == 0);
 
-        // println!("sign = {sign:0128b}");
-        // println!("comb = {comb:0128b}");
-        // println!("econ = {econ:0128b}");
-        // println!("coef = {coeff:0128b}");
-        // println!("     = {:0128b}", sign | comb | econ | coeff);
-
-        Self(sign | comb | econ | coeff)
+        Self::from_fields(sign, comb, econ, coeff)
     }
 
-    /// Creates a special decimal.
-    const fn special(w: u32) -> Self {
-        Self((w as u128) << 96)
+    const fn from_fields(sign: bool, comb: u8, econ: u16, coeff: u128) -> Self {
+        debug_assert!(comb & !((1 << Self::COMB_BITS) - 1) == 0);
+        debug_assert!(econ & !((1 << Self::ECON_BITS) - 1) == 0);
+        debug_assert!(coeff & !Self::COEFF_MASK == 0);
+
+        let mut bits = 0;
+        bits |= (sign as u128) << Self::SIGN_SHIFT;
+        bits |= (comb as u128) << Self::COMB_SHIFT;
+        bits |= (econ as u128) << Self::ECON_SHIFT;
+        bits |= coeff;
+        Self(bits)
     }
 }
 
@@ -228,17 +242,17 @@ impl d128 {
     /// The smallest allowed exponent.
     pub const MIN_EXP: i16 = Self::EMIN - Self::MAX_PREC + 1;
 
-    /// The number of significant digits in base 10.
+    /// The number of base 10 significant digits.
     pub const DIGITS: u32 = 34;
 
     /// Not a Number (NaN).
-    pub const NAN: Self = Self::special(NAN);
+    pub const NAN: Self = Self::from_fields(false, 0x1f, 0, 0);
 
     /// Infinity (∞).
-    pub const INFINITY: Self = Self::special(INF);
+    pub const INFINITY: Self = Self::from_fields(false, 0x1e, 0, 0);
 
     /// Negative infinity (−∞).
-    pub const NEG_INFINITY: Self = Self::special(INF | SIGNBIT);
+    pub const NEG_INFINITY: Self = Self::from_fields(true, 0x1e, 0, 0);
 
     /// Reports whether the number is neither infinite nor NaN.
     pub const fn is_finite(self) -> bool {
@@ -253,25 +267,32 @@ impl d128 {
 
     /// Reports whether the number is neither zero, infinite,
     /// subnormal, or NaN.
-    pub fn is_normal(self) -> bool {
+    pub const fn is_normal(self) -> bool {
         if self.is_special() || self.is_zero() {
             return false;
         }
-        // `self.digits() as i16` does not wrap because it is in
-        // [1,DIGITS], and `DIGITS <= i16::MAX`.
-        #[allow(clippy::cast_possible_wrap)]
-        let exp = self.unbiased_exp() + (self.digits() as i16) - 1;
-        exp > Self::EMIN
+        debug_assert!(self.is_finite());
+
+        self.adjusted_exp() > Self::EMIN
     }
 
     /// Reports whether the number is subnormal.
-    pub fn is_subnormal(self) -> bool {
-        !self.is_special() && !self.is_normal() && !self.is_zero()
+    pub const fn is_subnormal(self) -> bool {
+        if self.is_special() || self.is_zero() {
+            return false;
+        }
+        debug_assert!(self.is_finite());
+
+        self.adjusted_exp() <= Self::EMIN
     }
 
     /// Reports whether the number is `-0.0` or `+0.0`.
     pub const fn is_zero(self) -> bool {
-        self.is_finite() && self.full_coeff() == 0
+        // Covers the coefficient and MSD <= 7.
+        const MASK1: u128 = (0x7 << d128::COMB_SHIFT) | d128::COEFF_MASK;
+        // Covers MSD > 7 and specials.
+        const MASK2: u128 = 0x18 << d128::COMB_SHIFT;
+        (self.0 & MASK1) == 0 && (self.0 & MASK2) != MASK2
     }
 
     /// Reports whether the number is a NaN.
@@ -308,6 +329,39 @@ impl d128 {
         self.comb().is_special()
     }
 
+    /// Returns the floating point category for the number.
+    pub const fn classify(self) -> FpCategory {
+        let comb = (self.0 & Self::COMB_MASK) >> Self::COMB_SHIFT;
+        match comb & 0x1f {
+            0x1f => return FpCategory::Nan,
+            0x1e => return FpCategory::Infinite,
+            _ => {}
+        }
+        debug_assert!(self.is_finite());
+
+        if self.is_zero() {
+            return FpCategory::Zero;
+        }
+
+        if self.adjusted_exp() > Self::EMIN {
+            FpCategory::Normal
+        } else {
+            FpCategory::Subnormal
+        }
+
+        // if self.is_nan() {
+        //     FpCategory::Nan
+        // } else if self.is_infinite() {
+        //     FpCategory::Infinite
+        // } else if self.is_zero() {
+        //     FpCategory::Zero
+        // } else if self.is_normal() {
+        //     FpCategory::Normal
+        // } else {
+        //     FpCategory::Subnormal
+        // }
+    }
+
     /// Returns the number of significant digits in the number.
     ///
     /// If the number is infinity or zero, it returns 1.
@@ -317,20 +371,20 @@ impl d128 {
     ///
     /// TODO: NaN should return the number of digits in the
     /// payload.
-    pub const fn digits(self) -> usize {
+    pub const fn digits(self) -> u32 {
         if self.is_infinite() {
             return 1;
         }
+        if self.have_msd() {
+            return Self::DIGITS;
+        }
         let coeff = self.coeff();
-        // The number of whole declets. Less 18 for the sign,
-        // comb, and exp fields.
-        let declets = (110 - (coeff.leading_zeros() - 18)) / 10;
+        // The number of whole declets.
+        let declets = (128 - coeff.leading_zeros()) / 10;
+        // Shift off the whole declets to figure out how many
+        // significant digits are in the partial declet.
         let dpd = ((coeff >> (declets * 10)) & 0x3ff) as u16;
-        let mut nd = 0;
-        nd += dpd::sig_digits(dpd);
-        nd += declets * 3;
-        nd += self.have_msd() as u32;
-        nd as usize
+        dpd::sig_digits(dpd) + (declets * 3)
     }
 
     /// Creates a `d128` from its coefficient and exponent.
@@ -387,7 +441,7 @@ impl d128 {
     #[allow(clippy::indexing_slicing)]
     pub fn to_str(self, dst: &mut [u8; Self::MAX_STR_LEN]) -> &str {
         if self.is_special() {
-            let start = usize::from(self.is_sign_negative());
+            let start = usize::from(self.is_sign_positive());
             let end = if self.is_infinite() {
                 copy(dst, b"-Infinity")
             } else if self.is_qnan() {
@@ -401,7 +455,7 @@ impl d128 {
         debug_assert!(self.is_finite());
 
         let exp = i32::from(self.unbiased_exp());
-        println!("exp={exp}");
+        //println!("exp={exp}");
 
         let mut tmp = [0u8; 1 + Self::DIGITS as usize];
         let coeff = self.coeff_to_str(&mut tmp).as_bytes();
@@ -446,29 +500,20 @@ impl d128 {
                 assume(pre <= (Self::DIGITS + Self::MAX_EXP as u32) as i32);
             }
 
-            // We just checked that `pre > 0`.
-            #[allow(clippy::cast_sign_loss)]
-            let pre = pre as usize;
+            let pre = pre.unsigned_abs() as usize;
 
+            let mut i = 1;
             dst[0] = b'-';
 
             //println!("pre={pre} coeff={}", coeff.len());
-            let mut i = 1;
             if pre < coeff.len() {
                 let (pre, post) = coeff.split_at(pre);
-
                 dst[i..i + pre.len()].copy_from_slice(pre);
                 dst[i + pre.len()] = b'.';
                 dst[i + pre.len() + 1..i + pre.len() + 1 + post.len()].copy_from_slice(post);
-
                 i += 1;
             } else {
-                // SAFETY: TODO
-                // unsafe {
-                //     ptr::copy_nonoverlapping(coeff.as_ptr(), dst.as_mut_ptr().add(1), coeff.len());
-                // }
-                unsafe { dst.get_unchecked_mut(i..coeff.len()) }.copy_from_slice(coeff);
-                //dst[i..coeff.len()].copy_from_slice(coeff);
+                dst[i..i + coeff.len()].copy_from_slice(coeff);
             };
             i += coeff.len();
 
@@ -487,11 +532,14 @@ impl d128 {
 
                 //println!("i={i}");
 
+                const _: () = assert!((d128::DIGITS + d128::MAX_EXP as u32) < u16::MAX as u32,);
+
                 // We negate `e` if `e < 0`, so we cannot lose
                 // the sign here.
                 //
-                // `e` is either 0 or `pre-1`. `pre` is in TODO,
-                // so the cast cannot wrap.
+                // `e` is either 0 or `pre-1`. Since `pre` is in
+                // [1, DIGITS+MAX_EXP] and DIGITS+MAX_EXP <=
+                // u16::MAX, the cast cannot wrap.
                 #[allow(clippy::cast_sign_loss)]
                 let s = util::itoa4(e as u16);
                 dst[i..i + 4].copy_from_slice(&s.to_bytes());
@@ -504,13 +552,42 @@ impl d128 {
             return unsafe { str::from_utf8_unchecked(&dst[start..i]) };
         }
 
-        // pre = -pre + 2;
-        // let t = start + round_down4(i - start);
+        // SAFETY: TODO
+        unsafe {
+            assume(pre >= -5);
+            assume(pre <= 0);
+        }
 
-        let i = 1;
+        // -5 => 7
+        // -4 => 6
+        // -3 => 5
+        // -2 => 4
+        // -1 => 3
+        //  0 => 2
+        let pre = 2 + pre.unsigned_abs() as usize;
+        // SAFETY: TODO
+        unsafe {
+            assume(pre <= 7);
+            assume(pre >= 2);
+        }
+        let mut i = 1;
+        dst[0] = b'-';
+        dst[i..i + 7].copy_from_slice(b"0.00000");
+        // SAFETY: `pre` was in [-5, 0]. After negation and
+        // adding 2, `pre` is now in [2, 7]. `coeff` is in [1,
+        // DIGITS], so `i+pre+coeff.len()` is in [1+2+DIGITS,
+        // 1+7+DIGITS].
+        unsafe {
+            const _: () = assert!(1 + 7 + d128::DIGITS as usize <= d128::MAX_STR_LEN);
+            dst.get_unchecked_mut(i + pre..i + pre + coeff.len())
+        }
+        .copy_from_slice(coeff);
+        i += pre;
+        i += coeff.len();
 
+        let start = usize::from(self.is_sign_positive());
         // SAFETY: `buf` only ever contains UTF-8.
-        return unsafe { str::from_utf8_unchecked(&dst[..i]) };
+        return unsafe { str::from_utf8_unchecked(&dst[start..i]) };
     }
 
     /// Writes the coefficient to `dst`.
@@ -647,14 +724,22 @@ impl Comb {
     }
 
     /// Returns the encoded MSD.
+    ///
+    /// If the number is finite, the result is in [0, 9].
     const fn msd(self) -> u8 {
         // The MSD only has meaning for finite numbers.
         debug_assert!(self.is_finite());
 
-        match self.0 & Self::AB {
+        let msd = match self.0 & Self::AB {
             Self::AB => 0x8 | (self.0 & Self::E_), // 100e
             _ => self.0 & (Self::CD | Self::E_),   // 0cde
+        };
+        if self.is_finite() {
+            // SAFETY: `msd` is either `100e` (9 or 8) or `0cde`
+            // (0 through 7).
+            unsafe { assume(msd <= 9) }
         }
+        msd
     }
 
     /// Reports whether the encoded MSD is non-zero.
@@ -673,92 +758,27 @@ impl Comb {
 
     /// Returns the encoded two MSB for the exponent.
     ///
-    /// The result is always in [0,2].
+    /// If the number is finite, the result is always in [0, 2].
     const fn msb(self) -> u8 {
         // The exponent only has meaning for finite numbers.
         debug_assert!(self.is_finite());
 
-        match self.0 & Self::AB {
+        // self = abcde
+        let msb = match self.0 & Self::AB {
             // If bits `ab` are both set, then the MSBs are
             // encoded in bits `cd`. Otherwise, the MSBs are
             // encoded in `ab`.
             Self::AB => (self.0 & Self::CD) >> 1,
             b => b >> 3,
+        };
+        if self.is_finite() {
+            // SAFETY: We mask and shift exactly the bits we
+            // want. The only possibilities are in [0, 2].
+            unsafe { assume(msb <= 2) }
         }
+        msb
     }
 }
-
-pub(super) const COMB_EXP: [u32; 64] = [
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    0,
-    0,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    INF,
-    NAN,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    0,
-    0,
-    1 << E_CONT_LEN,
-    1 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    2 << E_CONT_LEN,
-    INF,
-    NAN,
-];
-
-const COMB_MSD: [u32; 64] = [
-    0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 8, 9, 8, 9, 0, 0,
-    0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 8, 9, 8, 9, 0, 0,
-];
 
 #[inline(always)]
 fn copy(dst: &mut [u8], src: &[u8]) -> usize {
@@ -769,15 +789,10 @@ fn copy(dst: &mut [u8], src: &[u8]) -> usize {
     n
 }
 
-const fn round_down4(v: usize) -> usize {
-    v & !3
-}
-
 #[cfg(test)]
 mod tests {
-    use std::{ffi::CStr, ptr};
+    use std::ffi::CStr;
 
-    use dec::Decimal128;
     use decnumber_sys::*;
 
     use super::*;
@@ -814,20 +829,56 @@ mod tests {
 
     #[test]
     fn test_to_str() {
-        // let got = d128::INFINITY;
-        // println!("got={got}");
+        let tests = [
+            (d128::NAN, "NaN"),
+            (d128::INFINITY, "Infinity"),
+            (d128::NEG_INFINITY, "-Infinity"),
+            (d128::new(0, 0), "0"),
+            (d128::new(0, d128::MAX_EXP), "0E+6111"),
+            (d128::new(0, d128::MIN_EXP), "0E-6176"),
+            (
+                d128::new(9111222333444555666777888999000111, d128::MAX_EXP),
+                "9.111222333444555666777888999000111E+6144",
+            ),
+            (
+                d128::new(9111222333444555666777888999000111, d128::MIN_EXP),
+                "9.111222333444555666777888999000111E-6143",
+            ),
+            (
+                d128::new(9111222333444555666777888999000111, 0),
+                "9111222333444555666777888999000111",
+            ),
+            (
+                d128::new(9111222333444555666777888999000111, -2),
+                "91112223334445556667778889990001.11",
+            ),
+            (
+                d128::new(9111222333444555666777888999000111, 2),
+                "9.111222333444555666777888999000111E+35",
+            ),
+            (
+                d128::new(9999999999999999999999999999999999, -39),
+                "0.000009999999999999999999999999999999999",
+            ),
+            (d128::new(42, 1), "4.2E+2"),
+            (d128::new(42, 0), "42"),
+            (d128::new(42, -1), "4.2"),
+            (d128::new(42, -2), "0.42"),
+            (d128::new(42, -3), "0.042"),
+            (d128::new(42, -4), "0.0042"),
+            (d128::new(42, -5), "0.00042"),
+            (d128::new(42, -6), "0.000042"),
+            (d128::new(42, -7), "0.0000042"),
+            (d128::new(42, -8), "4.2E-7"),
+        ];
+        for (i, (input, want)) in tests.into_iter().enumerate() {
+            println!("want={want}");
+            //println!("want={}", to_str(9999999999999999999999999999999999, -39));
+            let got = input.to_string();
+            assert_eq!(got, want, "#{i}");
+        }
 
-        let _got = d128::new(0, d128::MAX_EXP);
-        // println!(" got={got}");
-
-        // let x = d128::MAX_COEFF;
-        // let x = 1234567890_1234567890_1234567890_1234i128;
-        let x = 9_111_222_333_444_555_666_777_888_999_000_111;
-        assert!(x <= d128::MAX_COEFF);
-
-        let got = d128::new(x, d128::MAX_EXP);
-        println!(" got={got}");
-
+        #[allow(dead_code)] // TODO
         fn to_str(mut bin: i128, exp: i16) -> String {
             let neg = bin < 0;
             let mut d = decQuad { bytes: [0u8; 16] };
@@ -844,17 +895,11 @@ mod tests {
             let cstr = unsafe { CStr::from_ptr(ptr) };
             cstr.to_str().unwrap().to_owned()
         }
-        //println!("want={}", to_str(0, d128::MAX_EXP));
-        //println!("want={}", to_str(d128::MAX_COEFF, d128::MAX_EXP));
-        println!("want={}", to_str(x, d128::MAX_EXP));
-
-        assert!(false);
     }
 
     #[test]
     fn test_from_u32() {
         let got = d128::from_u32(u32::MAX);
-        println!("{got:?}");
 
         let want = {
             let mut d = decQuad { bytes: [0u8; 16] };
@@ -868,13 +913,12 @@ mod tests {
 
     #[test]
     fn test_digits() {
-        let mut i = 1;
-        while i < d128::DIGITS {
+        for i in 1..d128::DIGITS {
             let v = 10i128.pow(i);
             let got = d128::new(v - 1, 0).digits();
-            let want = v.ilog10() as usize;
+            let want = v.ilog10();
             assert_eq!(got, want, "#{}", v - 1);
-            i += 1;
+            println!();
         }
     }
 }

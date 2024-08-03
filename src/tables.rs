@@ -3,18 +3,6 @@ use super::{
     dpd,
 };
 
-#[rustfmt::skip]
-pub(super) const TEST_MSD: [i32; 64] = [
-    0, 1, 2, 3, 4, 5, 6, 7, 
-    0, 1, 2, 3, 4, 5, 6, 7,
-    0, 1, 2, 3, 4, 5, 6, 7,
-    8, 9, 8, 9, 8, 9, -32, -128,
-    0, 1, 2, 3, 4, 5, 6, 7,
-    0, 1, 2, 3, 4, 5, 6, 7,
-    0, 1, 2, 3, 4, 5, 6, 7,
-    8, 9, 8, 9, 8, 9, -32, -128,
-];
-
 /// Maps 12-bit BCDs to 10-bit DPDs.
 #[allow(clippy::indexing_slicing)]
 pub(crate) const BCD_TO_DPD: [u16; 0x999 + 1] = {
@@ -59,6 +47,7 @@ pub(super) const BIN_TO_DPD: [u16; 1000] = {
 
 /// Converts a 10-bit DPD to a binary number in [0,999].
 #[allow(clippy::indexing_slicing)]
+#[allow(dead_code)] // TODO
 pub(super) const DPD_TO_BIN: [u16; 1 << 10] = {
     let mut t = [0u16; 1 << 10];
     let mut bin = 0;
