@@ -1,5 +1,12 @@
 use core::hint;
 
+macro_rules! const_assert {
+    ($($tt:tt)*) => {
+        const _: () = ::core::assert!($($tt)*);
+    }
+}
+pub(crate) use const_assert;
+
 /// Hints to the compiler that `b` is always true.
 ///
 /// # Safety

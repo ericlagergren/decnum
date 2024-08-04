@@ -1,8 +1,9 @@
-use core::{fmt, num::FpCategory, str};
+use core::{fmt, mem::MaybeUninit, num::FpCategory, str};
 
 use super::{
+    conv::Decimal,
     dpd,
-    util::{self, assume},
+    util::{self, assume, const_assert},
 };
 
 /// A 128-bit decimal.
@@ -20,7 +21,7 @@ pub struct d128(
     /// 17-127: coefficient continuation
     u128,
 );
-const _: () = assert!(size_of::<d128>() == 128 / 8);
+const_assert!(size_of::<d128>() == 128 / 8);
 
 // Internal stuff.
 impl d128 {
@@ -95,7 +96,7 @@ impl d128 {
         let exp = (msb << 12) | econ;
 
         if self.is_finite() {
-            const _: () = assert!(d128::LIMIT < (1 << 14) - 1);
+            const_assert!(d128::LIMIT < (1 << 14) - 1);
 
             // SAFETY: `exp` is a 14 bit integer: `econ` is
             // the lower 12 bits and `msb` is the upper 2 bits.
@@ -116,8 +117,8 @@ impl d128 {
     /// If the number is finite, the result is in
     /// [[`MIN_EXP`][Self::MIN_EXP], [`MAX_EXP`][Self::MAX_EXP]].
     const fn unbiased_exp(self) -> i16 {
-        const _: () = assert!(d128::LIMIT < i16::MAX as u16);
-        const _: () = assert!(i16::MAX - (d128::LIMIT as i16) > d128::BIAS);
+        const_assert!(d128::LIMIT < i16::MAX as u16);
+        const_assert!(i16::MAX - (d128::LIMIT as i16) > d128::BIAS);
 
         // The exponent only has meaning for finite numbers.
         debug_assert!(self.is_finite());
@@ -146,7 +147,7 @@ impl d128 {
     ///
     /// This is `exp + digits - 1`.
     const fn adjusted_exp(self) -> i16 {
-        const _: () = assert!(d128::DIGITS <= i16::MAX as u32);
+        const_assert!(d128::DIGITS <= i16::MAX as u32);
 
         debug_assert!(self.is_finite());
 
@@ -432,14 +433,13 @@ impl d128 {
 }
 
 // String conversions.
-impl d128 {
-    /// The maximum length in bytes of a `d128` encoded as
-    /// a string.
-    pub const MAX_STR_LEN: usize = "-9.999999999999999999999999999999999E+6144".len();
+impl Decimal for d128 {
+    // /// The maximum length in bytes of a `d128` encoded as
+    // /// a string.
+    // pub const MAX_STR_LEN: usize = "-9.999999999999999999999999999999999E+6144".len();
 
-    /// Converts the `d128` to a string.
     #[allow(clippy::indexing_slicing)]
-    pub fn to_str(self, dst: &mut [u8; Self::MAX_STR_LEN]) -> &str {
+    fn format(self, dst: &mut [MaybeUninit<u8>; Self::MAX_STR_LEN]) -> &str {
         if self.is_special() {
             let start = usize::from(self.is_sign_positive());
             let end = if self.is_infinite() {
@@ -469,7 +469,7 @@ impl d128 {
 
         // `e` is the adjusted exponent.
         // `pre` is the number of digits before the '.'.
-        let (mut e, pre) = {
+        let (e, pre) = {
             let mut e = 0;
             #[allow(clippy::cast_possible_wrap)]
             let mut pre = (coeff.len() as i32) + exp;
@@ -523,25 +523,18 @@ impl d128 {
                 i += 1;
                 if e < 0 {
                     dst[i] = b'-';
-                    e = -e;
                 } else {
                     dst[i] = b'+';
                 };
                 i += 1;
-                debug_assert!(e > 0);
 
                 //println!("i={i}");
 
-                const _: () = assert!((d128::DIGITS + d128::MAX_EXP as u32) < u16::MAX as u32,);
-
-                // We negate `e` if `e < 0`, so we cannot lose
-                // the sign here.
-                //
                 // `e` is either 0 or `pre-1`. Since `pre` is in
                 // [1, DIGITS+MAX_EXP] and DIGITS+MAX_EXP <=
                 // u16::MAX, the cast cannot wrap.
-                #[allow(clippy::cast_sign_loss)]
-                let s = util::itoa4(e as u16);
+                const_assert!((d128::DIGITS + d128::MAX_EXP as u32) < u16::MAX as u32);
+                let s = util::itoa4(e.unsigned_abs() as u16);
                 dst[i..i + 4].copy_from_slice(&s.to_bytes());
                 i += s.digits();
             }
@@ -565,24 +558,24 @@ impl d128 {
         // -1 => 3
         //  0 => 2
         let pre = 2 + pre.unsigned_abs() as usize;
-        // SAFETY: TODO
+        // SAFETY: `pre` was in [-5, 0]. After negation and
+        // adding 2, `pre` is now in [2, 7].
         unsafe {
-            assume(pre <= 7);
             assume(pre >= 2);
+            assume(pre <= 7);
         }
-        let mut i = 1;
-        dst[0] = b'-';
-        dst[i..i + 7].copy_from_slice(b"0.00000");
+        const_assert!(1 + 7 + d128::DIGITS as usize <= d128::MAX_STR_LEN);
+
+        copy(dst, b"-0.00000");
+        let mut i = 1 + pre;
         // SAFETY: `pre` was in [-5, 0]. After negation and
         // adding 2, `pre` is now in [2, 7]. `coeff` is in [1,
         // DIGITS], so `i+pre+coeff.len()` is in [1+2+DIGITS,
         // 1+7+DIGITS].
-        unsafe {
-            const _: () = assert!(1 + 7 + d128::DIGITS as usize <= d128::MAX_STR_LEN);
-            dst.get_unchecked_mut(i + pre..i + pre + coeff.len())
-        }
-        .copy_from_slice(coeff);
-        i += pre;
+        // let tmp = unsafe { dst.get_unchecked_mut(i..i + coeff.len()) };
+        // tmp.copy_from_slice(coeff);
+        let (_, rest) = dst.split_at_mut(i);
+        rest[..coeff.len()].copy_from_slice(coeff);
         i += coeff.len();
 
         let start = usize::from(self.is_sign_positive());
@@ -642,7 +635,7 @@ impl d128 {
 impl fmt::Display for d128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut buf = [0u8; Self::MAX_STR_LEN];
-        let str = self.to_str(&mut buf);
+        let str = self.format(&mut buf, Fmt::Default);
         write!(f, "{str}")
     }
 }
@@ -650,6 +643,22 @@ impl fmt::Display for d128 {
 impl fmt::Binary for d128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Binary::fmt(&self.0, f)
+    }
+}
+
+impl fmt::LowerExp for d128 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut buf = [0u8; Self::MAX_STR_LEN];
+        let str = self.format(&mut buf, Fmt::LowerExp);
+        write!(f, "{str}")
+    }
+}
+
+impl fmt::UpperExp for d128 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut buf = [0u8; Self::MAX_STR_LEN];
+        let str = self.format(&mut buf, Fmt::UpperExp);
+        write!(f, "{str}")
     }
 }
 
@@ -828,7 +837,7 @@ mod tests {
     }
 
     #[test]
-    fn test_to_str() {
+    fn test_format() {
         let tests = [
             (d128::NAN, "NaN"),
             (d128::INFINITY, "Infinity"),
