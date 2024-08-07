@@ -1,7 +1,7 @@
 use core::{
     cmp::Ordering,
     fmt,
-    mem::{size_of, MaybeUninit},
+    mem::{self, size_of, MaybeUninit},
     num::FpCategory,
     str::{self, FromStr},
 };
@@ -754,7 +754,7 @@ impl d128 {
         }
 
         let mut i = 0;
-        let neg = s[0] == b'-';
+        let _neg = s[0] == b'-';
         if matches!(s[0], b'-' | b'+') {
             if s.len() == 1 {
                 return Err(ParseError::invalid("missing digits"));
@@ -762,13 +762,16 @@ impl d128 {
             i += 1;
         }
 
-        let (chunks, rest) = s.split_at((s.len() / 4) * 4);
+        let (chunks, _rest) = s.split_at((s.len() / 4) * 4);
         while i < chunks.len() {
-            let s = Str3::from_bytes(
-                // SAFETY: `chunks.len()` is a multiple of 4.
-                unsafe { chunks.as_ptr().cast::<[u8; 4]>().read() },
-            );
-            let dpd = s.to_dpd();
+            // SAFETY: `chunks.len()` is a multiple of 4.
+            // TODO(eric): Do this safely.
+            let chunk = unsafe { mem::transmute_copy(&chunks[i]) };
+            let Some(s) = Str3::try_from_bytes(chunk) else {
+                // We don't have three digits.
+                break;
+            };
+            let _dpd = s.to_dpd();
             i += 3;
         }
 
@@ -1129,7 +1132,7 @@ mod tests {
         for (i, (lhs, rhs, want)) in tests.into_iter().enumerate() {
             let x: d128 = lhs.parse().unwrap();
             let y: d128 = rhs.parse().unwrap();
-            let got = x.total_cmp(y);
+            let got = x.const_partial_cmp(y);
             assert_eq!(got, want, "#{i}: total_cmp({lhs}, {rhs})");
         }
     }

@@ -4,11 +4,11 @@ use core::{
     cmp::Ordering,
     fmt,
     hash::Hash,
-    hint, mem,
+    hint,
     str::{self, FromStr},
 };
 
-use super::{dpd, util::assume};
+use super::{conv, dpd, util::assume};
 
 /// A BCD's bit pattern.
 #[repr(u16)]
@@ -460,36 +460,34 @@ impl Str3 {
         Self(0)
     }
 
-    /// Reads a string from four ASCII bytes.
+    /// Reads a string from three ASCII bytes in little-endian
+    /// order.
     ///
     /// The fourth byte is discarded.
-    pub const fn from_bytes(b: [u8; 4]) -> Self {
-        debug_assert!(b[0] >= b'0' && b[0] <= b'9');
-        debug_assert!(b[1] >= b'0' && b[1] <= b'9');
-        debug_assert!(b[2] >= b'0' && b[2] <= b'9');
+    pub const fn try_from_u32(v: u32) -> Option<Self> {
+        if !conv::is_3digits(v) {
+            None
+        } else {
+            Some(Self(v))
+        }
+    }
 
-        Self(u32::from_le_bytes(b))
+    /// Reads a string from three ASCII bytes.
+    ///
+    /// The fourth byte is discarded.
+    pub const fn try_from_bytes(b: [u8; 4]) -> Option<Self> {
+        Self::try_from_u32(u32::from_le_bytes(b))
     }
 
     /// Converts a 12-bit BCD to a string.
     pub const fn from_bcd(bcd: u16) -> Self {
-        let mut w = 0;
         // Rewrite 0x0123 as 0x00030201.
+        let mut w = 0;
         w |= ((bcd & 0x000f) as u32) << 16;
         w |= ((bcd & 0x00f0) as u32) << 4;
         w |= ((bcd & 0x0f00) as u32) >> 8;
         w |= 0x00303030; // b'0' | b'0'<<8 | ...
-
-        // Using transmute is ugly, but LLVM refuses to optimize
-        // a safe version like
-        //
-        // ```
-        // let b = w.to_le_bytes();
-        // [b[0], b[1], b[2]]
-        // ```
-        //
-        // SAFETY: `[u8; 3]` is smaller than `[u8; 4]`.
-        unsafe { mem::transmute_copy(&w.to_le_bytes()) }
+        Self(w)
     }
 
     /// Converts the string to bytes.
@@ -501,7 +499,6 @@ impl Str3 {
 
     /// Converts the string into a 12-bit BCD.
     pub const fn to_bcd(self) -> u16 {
-        //let bcd = self.0 & 0x00cfcfcf; // to unpacked BCD
         let mut w = 0;
         w |= ((self.0 & 0x00000f) << 8) as u16;
         w |= ((self.0 & 0x000f00) >> 4) as u16;
@@ -742,6 +739,7 @@ mod tests {
         Bcd10,
     );
 
+    /// Test [`Str3`].
     #[test]
     fn test_to_from_str() {
         for bin in 0..=999 {

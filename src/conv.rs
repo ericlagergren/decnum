@@ -115,3 +115,25 @@ impl fmt::Display for ErrorKind {
         }
     }
 }
+
+/// Is `v` three digits?
+pub(super) const fn is_3digits(v: u32) -> bool {
+    let a = v.wrapping_add(0x0046_4646);
+    let b = v.wrapping_sub(0x0030_3030);
+    (a | b) & 0x0080_8080 == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_3digits() {
+        for d in 0..=u32::MAX {
+            let b = d.to_le_bytes();
+            let want = b[..3].iter().all(|b| matches!(b, b'0'..=b'9'));
+            let got = is_3digits(d);
+            assert_eq!(got, want, "{:?}", &b[..3]);
+        }
+    }
+}
