@@ -227,26 +227,33 @@ pub(super) const fn unpack_via_bits(mut dpd: u16) -> u16 {
     }
 }
 
-/// Unpacks the 10-bit DPD into a three-byte string.
-///
-/// The high octet contains the number of significant digits in
-/// the DPD.
-///
-/// # Panics
-///
-/// This function might panic if `dpd-tables` is enabled and
-/// `dpd` is greater than 1023.
-pub const fn unpack_to_str(dpd: u16) -> Str3 {
-    if cfg!(feature = "dpd-tables") {
-        #[allow(clippy::indexing_slicing)]
-        DPD_TO_STR[dpd as usize]
-    } else {
-        unpack_to_str_via_bits(dpd)
+impl Str3 {
+    /// Unpacks the 10-bit DPD into a three-byte string.
+    ///
+    /// The high octet contains the number of significant digits
+    /// in the DPD.
+    ///
+    /// # Panics
+    ///
+    /// This function might panic if `dpd-tables` is enabled and
+    /// `dpd` is greater than 1023.
+    pub const fn from_dpd(dpd: u16) -> Self {
+        if cfg!(feature = "dpd-tables") {
+            #[allow(clippy::indexing_slicing)]
+            DPD_TO_STR[dpd as usize]
+        } else {
+            unpack_to_str_via_bits(dpd)
+        }
+    }
+
+    /// Packs the three-byte string into a 10-bit DPD.
+    pub const fn to_dpd(self) -> u16 {
+        pack(self.to_bcd())
     }
 }
 
 pub(super) const fn unpack_to_str_via_bits(dpd: u16) -> Str3 {
-    bcd::to_str(unpack(dpd))
+    Str3::from_bcd(unpack(dpd))
 }
 
 /// Packs a 32-bit binary number into a 40-bit DPD.

@@ -1,12 +1,21 @@
-use core::{fmt, mem::MaybeUninit, num::FpCategory, str};
+use core::{
+    cmp::Ordering,
+    fmt,
+    mem::{size_of, MaybeUninit},
+    num::FpCategory,
+    str::{self, FromStr},
+};
 
 use super::{
-    conv::Decimal,
+    bcd::Str3,
+    conv::{Buffer, Fmt, ParseError},
     dpd,
     util::{self, assume, const_assert},
 };
 
-/// A 128-bit decimal.
+/// A 128-bit decimal floating point number.
+///
+/// TODO: docs
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone)]
 #[repr(transparent)]
@@ -52,6 +61,10 @@ impl d128 {
 
     const COEFF_BITS: u32 = 110;
     const COEFF_MASK: u128 = (1 << 110) - 1;
+
+    const fn signbit(self) -> bool {
+        (self.0 & Self::SIGN_MASK) != 0
+    }
 
     /// Returns the combination field.
     const fn comb(self) -> Comb {
@@ -220,6 +233,7 @@ impl d128 {
     }
 }
 
+// Public stuff.
 impl d128 {
     /// The largest value that can be represented by this type.
     pub const MAX: Self = Self::new(Self::MAX_COEFF, Self::MAX_EXP);
@@ -317,12 +331,12 @@ impl d128 {
 
     /// Reports whether the number is positive, including `+0.0`.
     pub const fn is_sign_positive(self) -> bool {
-        (self.0 & Self::SIGN_MASK) == 0
+        !self.is_sign_negative()
     }
 
     /// Reports whether the number is negative, including `-0.0`.
     pub const fn is_sign_negative(self) -> bool {
-        !self.is_sign_positive()
+        self.signbit()
     }
 
     /// Reports whether the number is infinite or NaN.
@@ -388,6 +402,71 @@ impl d128 {
         dpd::sig_digits(dpd) + (declets * 3)
     }
 
+    /// Reports whether `self == other`.
+    pub const fn const_eq(self, _other: Self) -> bool {
+        todo!()
+    }
+
+    /// Returns the ordering between `self` and `other`.
+    ///
+    /// If either number is NaN, it returns `None`.
+    #[no_mangle]
+    pub const fn const_partial_cmp(self, other: Self) -> Option<Ordering> {
+        if self.is_nan() || other.is_nan() {
+            return None;
+        }
+        if self.signbit() ^ other.signbit() {
+            return if self.signbit() {
+                Some(Ordering::Less)
+            } else {
+                Some(Ordering::Greater)
+            };
+        }
+        if self.exp() == other.exp() {}
+        None
+    }
+
+    /// Returns the total ordering between `self` and `other`.
+    ///
+    /// The values are oredered as follows:
+    ///
+    /// - negative quiet NaN
+    /// - negative signaling NaN
+    /// - negative infinity
+    /// - negative numbers
+    /// - negative subnormal numbers
+    /// - negative zero
+    /// - positive zero
+    /// - positive subnormal numbers
+    /// - positive numbers
+    /// - positive infinity
+    /// - positive signaling NaN
+    /// - positive quiet NaN
+    ///
+    /// The ordering established by this function does not always
+    /// agree with the [`PartialOrd`] and [`PartialEq`]. For
+    /// example, they consider negative and positive zero equal,
+    /// while `const_total_cmp` doesn't.
+    #[no_mangle]
+    pub const fn const_total_cmp(self, other: Self) -> Ordering {
+        let mut lhs = self.to_bits() as i128;
+        let mut rhs = other.to_bits() as i128;
+
+        lhs ^= (((lhs >> 127) as u128) >> 1) as i128;
+        rhs ^= (((rhs >> 127) as u128) >> 1) as i128;
+
+        if lhs < rhs {
+            Ordering::Less
+        } else if lhs > rhs {
+            Ordering::Greater
+        } else {
+            Ordering::Equal
+        }
+    }
+}
+
+// To/from reprs.
+impl d128 {
     /// Creates a `d128` from its coefficient and exponent.
     pub const fn new(coeff: i128, exp: i16) -> Self {
         // TODO(eric): the inf probably isn't correct.
@@ -408,8 +487,35 @@ impl d128 {
     }
 
     /// Creates a `d128` from its raw bits.
+    ///
+    /// ```rust
+    /// use decnum::d128;
+    ///
+    /// let got = d128::from_bits(0x2207c0000000000000000000000000a5);
+    /// let want = "12.5".parse::<d128>().unwrap();
+    /// assert_eq!(v, "12.5");
+    /// ```
     pub const fn from_bits(bits: u128) -> Self {
         Self(bits)
+    }
+
+    /// Creates a `d128` from a little-endian byte array.
+    ///
+    /// ```rust
+    /// use decnum::d128;
+    /// ```
+    pub const fn from_le_bytes(bytes: [u8; 16]) -> Self {
+        Self::from_bits(u128::from_le_bytes(bytes))
+    }
+
+    /// Creates a `d128` from a big-endian byte array.
+    pub const fn from_be_bytes(bytes: [u8; 16]) -> Self {
+        Self::from_bits(u128::from_be_bytes(bytes))
+    }
+
+    /// Creates a `d128` from a native-endian byte array.
+    pub const fn from_ne_bytes(bytes: [u8; 16]) -> Self {
+        Self::from_bits(u128::from_ne_bytes(bytes))
     }
 
     /// Creates a `d128` from `coeff` and an exponent of zero.
@@ -420,9 +526,18 @@ impl d128 {
         const ZERO: u128 = 0x22080000 << 96;
         Self(ZERO | dpd)
     }
+
+    /// Raw transmutation to `u128`.
+    ///
+    /// ```rust
+    /// use decnum::d128;
+    /// ```
+    pub const fn to_bits(self) -> u128 {
+        self.0
+    }
 }
 
-// Const.
+// Const arithmetic.
 impl d128 {
     /// Returns `self + other`.
     #[must_use = "this returns the result of the operation \
@@ -433,31 +548,28 @@ impl d128 {
 }
 
 // String conversions.
-impl Decimal for d128 {
-    // /// The maximum length in bytes of a `d128` encoded as
-    // /// a string.
-    // pub const MAX_STR_LEN: usize = "-9.999999999999999999999999999999999E+6144".len();
-
+impl d128 {
+    /// Converts the decimal to a string.
     #[allow(clippy::indexing_slicing)]
-    fn format(self, dst: &mut [MaybeUninit<u8>; Self::MAX_STR_LEN]) -> &str {
+    pub fn format(self, dst: &mut Buffer) -> &str {
+        let dst = &mut dst.buf;
+
         if self.is_special() {
             let start = usize::from(self.is_sign_positive());
-            let end = if self.is_infinite() {
-                copy(dst, b"-Infinity")
+            return if self.is_infinite() {
+                &"-Infinity"[start..]
             } else if self.is_qnan() {
-                copy(dst, b"-NaN")
+                &"-NaN"[start..]
             } else {
-                copy(dst, b"-sNaN")
+                &"-sNaN"[start..]
             };
-            // SAFETY: `buf` only ever contains UTF-8.
-            return unsafe { str::from_utf8_unchecked(&dst[start..end]) };
         }
         debug_assert!(self.is_finite());
 
         let exp = i32::from(self.unbiased_exp());
         //println!("exp={exp}");
 
-        let mut tmp = [0u8; 1 + Self::DIGITS as usize];
+        let mut tmp = [MaybeUninit::uninit(); 1 + Self::DIGITS as usize];
         let coeff = self.coeff_to_str(&mut tmp).as_bytes();
         // SAFETY: `coeff_to_str` writes [1, DIGITS] to `tmp`
         // returns a subslice of `tmp`, so the length of `coeff`
@@ -503,28 +615,31 @@ impl Decimal for d128 {
             let pre = pre.unsigned_abs() as usize;
 
             let mut i = 1;
-            dst[0] = b'-';
+            dst[0].write(b'-');
 
             //println!("pre={pre} coeff={}", coeff.len());
             if pre < coeff.len() {
                 let (pre, post) = coeff.split_at(pre);
-                dst[i..i + pre.len()].copy_from_slice(pre);
-                dst[i + pre.len()] = b'.';
-                dst[i + pre.len() + 1..i + pre.len() + 1 + post.len()].copy_from_slice(post);
+                copy_from_slice(&mut dst[i..i + pre.len()], pre);
+                dst[i + pre.len()].write(b'.');
+                copy_from_slice(
+                    &mut dst[i + pre.len() + 1..i + pre.len() + 1 + post.len()],
+                    post,
+                );
                 i += 1;
             } else {
-                dst[i..i + coeff.len()].copy_from_slice(coeff);
+                copy_from_slice(&mut dst[i..i + coeff.len()], coeff);
             };
             i += coeff.len();
 
             //println!("e={e}");
             if e != 0 {
-                dst[i] = b'E';
+                dst[i].write(b'E');
                 i += 1;
                 if e < 0 {
-                    dst[i] = b'-';
+                    dst[i].write(b'-');
                 } else {
-                    dst[i] = b'+';
+                    dst[i].write(b'+');
                 };
                 i += 1;
 
@@ -535,14 +650,14 @@ impl Decimal for d128 {
                 // u16::MAX, the cast cannot wrap.
                 const_assert!((d128::DIGITS + d128::MAX_EXP as u32) < u16::MAX as u32);
                 let s = util::itoa4(e.unsigned_abs() as u16);
-                dst[i..i + 4].copy_from_slice(&s.to_bytes());
+                copy_from_slice(&mut dst[i..i + 4], &s.to_bytes());
                 i += s.digits();
             }
 
             let start = usize::from(self.is_sign_positive());
             //println!("start={start} i={i} len={}", dst.len());
             // SAFETY: `buf` only ever contains UTF-8.
-            return unsafe { str::from_utf8_unchecked(&dst[start..i]) };
+            return unsafe { str::from_utf8_unchecked(slice_assume_init_ref(&dst[start..i])) };
         }
 
         // SAFETY: TODO
@@ -564,7 +679,7 @@ impl Decimal for d128 {
             assume(pre >= 2);
             assume(pre <= 7);
         }
-        const_assert!(1 + 7 + d128::DIGITS as usize <= d128::MAX_STR_LEN);
+        const_assert!(1 + 7 + d128::DIGITS as usize <= Buffer::len());
 
         copy(dst, b"-0.00000");
         let mut i = 1 + pre;
@@ -575,12 +690,12 @@ impl Decimal for d128 {
         // let tmp = unsafe { dst.get_unchecked_mut(i..i + coeff.len()) };
         // tmp.copy_from_slice(coeff);
         let (_, rest) = dst.split_at_mut(i);
-        rest[..coeff.len()].copy_from_slice(coeff);
+        copy_from_slice(&mut rest[..coeff.len()], coeff);
         i += coeff.len();
 
         let start = usize::from(self.is_sign_positive());
         // SAFETY: `buf` only ever contains UTF-8.
-        return unsafe { str::from_utf8_unchecked(&dst[start..i]) };
+        return unsafe { str::from_utf8_unchecked(slice_assume_init_ref(&dst[start..i])) };
     }
 
     /// Writes the coefficient to `dst`.
@@ -589,13 +704,13 @@ impl Decimal for d128 {
     /// `dst`. The extra byte is slop to let us write four bytes
     /// at a time.
     #[allow(clippy::indexing_slicing)]
-    fn coeff_to_str(self, dst: &mut [u8; 1 + Self::DIGITS as usize]) -> &str {
+    fn coeff_to_str(self, dst: &mut [MaybeUninit<u8>; 1 + Self::DIGITS as usize]) -> &str {
         // See the comment near the end of the method.
-        dst[0] = b'0';
+        dst[0].write(b'0');
 
         let mut i = 0;
         if self.msd() != 0 {
-            dst[i] = self.msd() + b'0';
+            dst[i].write(self.msd() + b'0');
             i += 1;
         }
         let dpd = self.coeff();
@@ -605,7 +720,7 @@ impl Decimal for d128 {
         // eliding the bounds checks.
         for shift in (0..Self::COEFF_BITS - 9).rev().step_by(10) {
             let declet = ((dpd >> shift) & 0x3ff) as u16;
-            let s = dpd::unpack_to_str(declet);
+            let s = Str3::from_dpd(declet);
             let (src, n) = if i > 0 {
                 (s.to_bytes(), 3)
             } else if s.digits() > 0 {
@@ -614,7 +729,7 @@ impl Decimal for d128 {
                 // This is an insignificant zero.
                 continue;
             };
-            dst[i..i + 4].copy_from_slice(&src);
+            copy_from_slice(&mut dst[i..i + 4], &src);
             i += n;
         }
 
@@ -628,14 +743,63 @@ impl Decimal for d128 {
         }
 
         // SAFETY: We only write UTF-8 to `dst`.
-        unsafe { str::from_utf8_unchecked(&dst[..i]) }
+        unsafe { str::from_utf8_unchecked(slice_assume_init_ref(&dst[..i])) }
+    }
+
+    /// Parses a decimal from a string.
+    pub const fn parse(s: &str) -> Result<Self, ParseError> {
+        let s = s.as_bytes();
+        if s.is_empty() {
+            return Err(ParseError::empty());
+        }
+
+        let mut i = 0;
+        let neg = s[0] == b'-';
+        if matches!(s[0], b'-' | b'+') {
+            if s.len() == 1 {
+                return Err(ParseError::invalid("missing digits"));
+            }
+            i += 1;
+        }
+
+        let (chunks, rest) = s.split_at((s.len() / 4) * 4);
+        while i < chunks.len() {
+            let s = Str3::from_bytes(
+                // SAFETY: `chunks.len()` is a multiple of 4.
+                unsafe { chunks.as_ptr().cast::<[u8; 4]>().read() },
+            );
+            let dpd = s.to_dpd();
+            i += 3;
+        }
+
+        todo!()
+    }
+}
+
+impl PartialEq for d128 {
+    fn eq(&self, other: &Self) -> bool {
+        self.const_eq(*other)
+    }
+}
+
+impl PartialOrd for d128 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.const_partial_cmp(*other)
+    }
+}
+
+impl FromStr for d128 {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        d128::parse(s)
     }
 }
 
 impl fmt::Display for d128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut buf = [0u8; Self::MAX_STR_LEN];
-        let str = self.format(&mut buf, Fmt::Default);
+        let mut buf = Buffer::new();
+        let str = buf.format(*self, Fmt::Default);
         write!(f, "{str}")
     }
 }
@@ -648,16 +812,16 @@ impl fmt::Binary for d128 {
 
 impl fmt::LowerExp for d128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut buf = [0u8; Self::MAX_STR_LEN];
-        let str = self.format(&mut buf, Fmt::LowerExp);
+        let mut buf = Buffer::new();
+        let str = buf.format(*self, Fmt::LowerExp);
         write!(f, "{str}")
     }
 }
 
 impl fmt::UpperExp for d128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut buf = [0u8; Self::MAX_STR_LEN];
-        let str = self.format(&mut buf, Fmt::UpperExp);
+        let mut buf = Buffer::new();
+        let str = buf.format(*self, Fmt::UpperExp);
         write!(f, "{str}")
     }
 }
@@ -789,12 +953,31 @@ impl Comb {
     }
 }
 
+/// See [`MaybeUninit::copy_from_slice`].
+fn copy_from_slice(dst: &mut [MaybeUninit<u8>], src: &[u8]) {
+    // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout
+    let uninit_src: &[MaybeUninit<u8>] =
+        unsafe { &*(src as *const [u8] as *const [MaybeUninit<u8>]) };
+    dst.copy_from_slice(uninit_src);
+}
+
+/// See [`MaybeUninit::slice_assume_init_ref`].
+const unsafe fn slice_assume_init_ref(slice: &[MaybeUninit<u8>]) -> &[u8] {
+    // SAFETY: casting `slice` to a `*const [T]` is safe since
+    // the caller guarantees that `slice` is initialized, and
+    // `MaybeUninit` is guaranteed to have the same layout as
+    // `T`. The pointer obtained is valid since it refers to
+    // memory owned by `slice` which is a reference and thus
+    // guaranteed to be valid for reads.
+    unsafe { &*(slice as *const [MaybeUninit<u8>] as *const [u8]) }
+}
+
 #[inline(always)]
-fn copy(dst: &mut [u8], src: &[u8]) -> usize {
+fn copy(dst: &mut [MaybeUninit<u8>], src: &[u8]) -> usize {
     let n = src.len();
     // The caller must verify the length of `dst`
     #[allow(clippy::indexing_slicing)]
-    dst[..n].copy_from_slice(src);
+    copy_from_slice(&mut dst[..n], src);
     n
 }
 
@@ -928,6 +1111,26 @@ mod tests {
             let want = v.ilog10();
             assert_eq!(got, want, "#{}", v - 1);
             println!();
+        }
+    }
+
+    #[test]
+    fn test_partial_cmp() {
+        let tests = [
+            ("NaN", "3", None),
+            ("3", "NaN", None),
+            ("2.1", "3", Some(Ordering::Less)),
+            ("2.1", "2.1", Some(Ordering::Equal)),
+            ("2.1", "2.10", Some(Ordering::Equal)),
+            ("3", "2.1", Some(Ordering::Greater)),
+            ("2.1", "-3", Some(Ordering::Greater)),
+            ("-3", "2.1", Some(Ordering::Less)),
+        ];
+        for (i, (lhs, rhs, want)) in tests.into_iter().enumerate() {
+            let x: d128 = lhs.parse().unwrap();
+            let y: d128 = rhs.parse().unwrap();
+            let got = x.total_cmp(y);
+            assert_eq!(got, want, "#{i}: total_cmp({lhs}, {rhs})");
         }
     }
 }

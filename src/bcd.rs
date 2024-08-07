@@ -450,29 +450,9 @@ pub const fn from_bin(mut bin: u16) -> u16 {
     bcd
 }
 
-/// Converts a 12-bit BCD to a string.
-pub(super) const fn to_str(bcd: u16) -> Str3 {
-    let mut w = 0;
-    // Rewrite 0x0123 as 0x00030201.
-    w |= ((bcd & 0x000f) as u32) << 16;
-    w |= ((bcd & 0x00f0) as u32) << 4;
-    w |= ((bcd & 0x0f00) as u32) >> 8;
-    w |= 0x00303030; // b'0' | b'0'<<8 | ...
-
-    // Using transmute is ugly, but LLVM refuses to optimize
-    // a safe version like
-    //
-    // ```
-    // let b = w.to_le_bytes();
-    // [b[0], b[1], b[2]]
-    // ```
-    //
-    // SAFETY: `[u8; 3]` is smaller than `[u8; 4]`.
-    unsafe { mem::transmute_copy(&w.to_le_bytes()) }
-}
-
-/// A 12-bit BCD converted to a three-byte string.
+/// A 12-bit BCD converted to a three-byte ASCII string.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(transparent)]
 pub struct Str3(u32);
 
 impl Str3 {
@@ -480,11 +460,53 @@ impl Str3 {
         Self(0)
     }
 
+    /// Reads a string from four ASCII bytes.
+    ///
+    /// The fourth byte is discarded.
+    pub const fn from_bytes(b: [u8; 4]) -> Self {
+        debug_assert!(b[0] >= b'0' && b[0] <= b'9');
+        debug_assert!(b[1] >= b'0' && b[1] <= b'9');
+        debug_assert!(b[2] >= b'0' && b[2] <= b'9');
+
+        Self(u32::from_le_bytes(b))
+    }
+
+    /// Converts a 12-bit BCD to a string.
+    pub const fn from_bcd(bcd: u16) -> Self {
+        let mut w = 0;
+        // Rewrite 0x0123 as 0x00030201.
+        w |= ((bcd & 0x000f) as u32) << 16;
+        w |= ((bcd & 0x00f0) as u32) << 4;
+        w |= ((bcd & 0x0f00) as u32) >> 8;
+        w |= 0x00303030; // b'0' | b'0'<<8 | ...
+
+        // Using transmute is ugly, but LLVM refuses to optimize
+        // a safe version like
+        //
+        // ```
+        // let b = w.to_le_bytes();
+        // [b[0], b[1], b[2]]
+        // ```
+        //
+        // SAFETY: `[u8; 3]` is smaller than `[u8; 4]`.
+        unsafe { mem::transmute_copy(&w.to_le_bytes()) }
+    }
+
     /// Converts the string to bytes.
     ///
-    /// The first three digits are valid UTF-8.
+    /// The first three digits are valid ASCII.
     pub const fn to_bytes(self) -> [u8; 4] {
         self.0.to_le_bytes()
+    }
+
+    /// Converts the string into a 12-bit BCD.
+    pub const fn to_bcd(self) -> u16 {
+        //let bcd = self.0 & 0x00cfcfcf; // to unpacked BCD
+        let mut w = 0;
+        w |= ((self.0 & 0x00000f) << 8) as u16;
+        w |= ((self.0 & 0x000f00) >> 4) as u16;
+        w |= ((self.0 & 0x0f0000) >> 16) as u16;
+        w & 0x0fff
     }
 
     const fn zero_digits(self) -> u32 {
@@ -498,7 +520,7 @@ impl Str3 {
     /// to remove insignificant zeros.
     ///
     /// The first [`digits`][Self::digits] digits are valid
-    /// UTF-8.
+    /// ASCII.
     pub const fn to_trimmed_bytes(self) -> [u8; 4] {
         let zeros = self.zero_digits() * 8;
         (self.0 >> zeros).to_le_bytes()
@@ -517,8 +539,8 @@ impl Str3 {
 impl fmt::Display for Str3 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let b = &self.to_bytes();
-        // SAFETY: Up to three bytes are valid UTF-8.
-        let s = unsafe { str::from_utf8_unchecked(b) };
+        // SAFETY: Up to three bytes are valid ASCII.
+        let s = unsafe { str::from_utf8_unchecked(&b[..3]) };
         write!(f, "{s}")
     }
 }
@@ -721,10 +743,10 @@ mod tests {
     );
 
     #[test]
-    fn test_to_str() {
+    fn test_to_from_str() {
         for bin in 0..=999 {
             let bcd = from_bin(bin);
-            let got = to_str(bcd);
+            let got = Str3::from_bcd(bcd);
             let sd = if bin < 10 {
                 1
             } else if bin < 100 {
@@ -745,6 +767,8 @@ mod tests {
                 str::from_utf8(&got.to_bytes()[..sd as usize]).unwrap(),
                 str::from_utf8(&want.to_le_bytes()[..sd as usize]).unwrap(),
             );
+
+            assert_eq!(got.to_bcd(), bcd, "#{bin}");
         }
     }
 }

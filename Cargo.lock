@@ -398,6 +398,7 @@ dependencies = [
  "decnum",
  "decnumber-sys",
  "itoa",
+ "memchr",
  "rand",
  "ruint",
 ]

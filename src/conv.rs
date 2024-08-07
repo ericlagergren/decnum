@@ -2,83 +2,116 @@ use core::{fmt, mem::MaybeUninit};
 
 use super::dec128::d128;
 
-const MAX_STR_LEN: usize = "-9.999999999999999999999999999999999E+6144".len();
-
 mod private {
-    use core::mem::MaybeUninit;
-
-    use super::MAX_STR_LEN;
+    use super::{Buffer, Fmt};
+    use crate::dec128::d128;
 
     pub trait Sealed {
-        fn format(self, buf: &[MaybeUninit<u8>; MAX_STR_LEN]);
+        fn write(self, buf: &mut Buffer, fmt: Fmt) -> &str;
+    }
+
+    impl Sealed for d128 {
+        fn write(self, buf: &mut Buffer, fmt: Fmt) -> &str {
+            match fmt {
+                Fmt::UpperExp => {
+                    todo!()
+                }
+                Fmt::LowerExp => {
+                    todo!()
+                }
+                Fmt::Default => self.format(buf),
+            }
+        }
     }
 }
+use private::Sealed;
 
+/// A floating point decimal number.
 pub trait Decimal: Sealed {}
 
-/// TODO
+impl Decimal for d128 {}
+
+/// A buffer for converting floating point decimals to text.
+#[derive(Copy, Clone, Debug)]
 pub struct Buffer {
-    buf: [MaybeUninit<u8>; MAX_STR_LEN],
+    pub(super) buf: [MaybeUninit<u8>; Self::MAX_STR_LEN],
 }
 
 impl Buffer {
+    const MAX_STR_LEN: usize = "-9.999999999999999999999999999999999E+6144".len();
+
     /// Creates a `Buffer`.
     pub const fn new() -> Self {
         Self {
-            buf: [MaybeUninit::<u8>::uninit(); MAX_STR_LEN],
+            buf: [MaybeUninit::uninit(); Self::MAX_STR_LEN],
         }
     }
 
-    /// TODO
-    pub fn format<D: Decimal>(&mut self, d: D) -> &str {
-        d.format(&mut self.buf)
+    #[allow(dead_code)] // false positive?
+    pub(super) const fn len() -> usize {
+        Self::MAX_STR_LEN
+    }
+
+    /// Prints the decimal to the buffer.
+    ///
+    /// The decimal is printed in scientific notation.
+    pub fn format<D: Decimal>(&mut self, d: D, fmt: Fmt) -> &str {
+        d.write(self, fmt)
     }
 }
 
-/// TODO
-#[derive(Copy, Clone, Default, Eq, PartialEq)]
+/// Controls how decimals are printed to [`Buffer`].
+#[derive(Copy, Clone, Debug, Default)]
 pub enum Fmt {
-    /// TODO
+    /// Use the default format.
     #[default]
     Default,
-    /// TODO
+    /// Use scientific notation with an uppercase `e`.
     UpperExp,
-    /// TODO
+    /// Use scientific notation with a lowercase `e`.
     LowerExp,
 }
 
-/// A decimal converted to scientific notation.
+/// An error returned when parsing a decimal from a string.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParseError {
+    kind: ErrorKind,
+}
+
+impl ParseError {
+    pub(super) const fn empty() -> Self {
+        Self {
+            kind: ErrorKind::Empty,
+        }
+    }
+
+    pub(super) const fn invalid(_reason: &'static str) -> Self {
+        Self {
+            kind: ErrorKind::Invalid,
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ParseError {}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.kind.fmt(f)
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct SciStr {
-    buf: [u8; d128::MAX_STR_LEN],
+enum ErrorKind {
+    Empty,
+    Invalid,
 }
 
-impl SciStr {
-    /// TODO
-    pub const fn as_str(&self) -> &str {
-        todo!()
-    }
-}
-
-impl fmt::Display for SciStr {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
-    }
-}
-
-/// A decimal converted to engineering notation.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct EngStr {}
-
-impl EngStr {
-    /// TODO
-    pub const fn as_str(&self) -> &str {
-        todo!()
-    }
-}
-
-impl fmt::Display for EngStr {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+impl fmt::Display for ErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(f, "cannot parse decimal from empty string"),
+            Self::Invalid => write!(f, "invalid decimal literal"),
+        }
     }
 }

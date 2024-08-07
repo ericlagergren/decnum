@@ -60,7 +60,7 @@ pub(super) const DPD_TO_BIN: [u16; 1 << 10] = {
     t
 };
 
-/// Converts a 10-bit DPD to a three byte string.
+/// Converts a 10-bit DPD to a three-byte string.
 ///
 /// The high octet contains the number of significant digits in
 /// the DPD.
