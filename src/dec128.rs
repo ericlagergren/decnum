@@ -3,12 +3,13 @@ use core::{
     fmt,
     mem::{self, size_of, MaybeUninit},
     num::FpCategory,
+    ops::Neg,
     str::{self, FromStr},
 };
 
 use super::{
     bcd::Str3,
-    conv::{Buffer, Fmt, ParseError},
+    conv::{self, Buffer, Fmt, ParseError},
     dpd,
     util::{self, assume, const_assert},
 };
@@ -68,8 +69,8 @@ impl d128 {
 
     /// Returns the combination field.
     const fn comb(self) -> Comb {
-        let v = (self.0 & Self::COMB_MASK) >> Self::COMB_SHIFT;
-        Comb(v as u8)
+        let comb = (self.0 & Self::COMB_MASK) >> Self::COMB_SHIFT;
+        Comb(comb as u8)
     }
 
     /// Returns the coefficient MSD.
@@ -261,13 +262,13 @@ impl d128 {
     pub const DIGITS: u32 = 34;
 
     /// Not a Number (NaN).
-    pub const NAN: Self = Self::from_fields(false, 0x1f, 0, 0);
+    pub const NAN: Self = Self::nan(false);
 
     /// Infinity (∞).
-    pub const INFINITY: Self = Self::from_fields(false, 0x1e, 0, 0);
+    pub const INFINITY: Self = Self::inf(false);
 
     /// Negative infinity (−∞).
-    pub const NEG_INFINITY: Self = Self::from_fields(true, 0x1e, 0, 0);
+    pub const NEG_INFINITY: Self = Self::inf(true);
 
     /// Reports whether the number is neither infinite nor NaN.
     pub const fn is_finite(self) -> bool {
@@ -403,26 +404,96 @@ impl d128 {
     }
 
     /// Reports whether `self == other`.
-    pub const fn const_eq(self, _other: Self) -> bool {
-        todo!()
+    ///
+    /// - If either number is NaN, it returns `false`.
+    /// - +0.0 and -0.0 are considered equal.
+    ///
+    /// This is a const version of [`PartialEq`].
+    pub const fn const_eq(self, other: Self) -> bool {
+        if self.comb().0 != other.comb().0 || self.is_nan() || other.is_nan() {
+            return false;
+        }
+        if self.signbit() ^ other.signbit() {
+            return false;
+        }
+        if self.exp() == other.exp() {
+            // let lhs = self.coeff();
+            // let rhs = other.coeff();
+            todo!()
+        }
+        true
     }
 
     /// Returns the ordering between `self` and `other`.
     ///
-    /// If either number is NaN, it returns `None`.
+    /// - If either number is NaN, it returns `None`.
+    /// - +0.0 and -0.0 are considered equal.
+    ///
+    /// This is a const version of [`PartialOrd`].
     #[no_mangle]
     pub const fn const_partial_cmp(self, other: Self) -> Option<Ordering> {
         if self.is_nan() || other.is_nan() {
             return None;
         }
+        // Neither are NaN.
+
         if self.signbit() ^ other.signbit() {
-            return if self.signbit() {
+            return if self.is_zero() && other.is_zero() {
+                Some(Ordering::Equal) // 0 == 0
+            } else if self.signbit() {
+                Some(Ordering::Less) // -x < +x
+            } else {
+                Some(Ordering::Greater) // +x > -x
+            };
+        }
+        // Signs are the same.
+
+        if self.is_infinite() && other.is_infinite() {
+            // +inf cmp +inf
+            // -inf cmp -inf
+            return Some(Ordering::Equal);
+        }
+        // Both are finite.
+        debug_assert!(self.is_finite() && other.is_finite());
+
+        if self.is_zero() || other.is_zero() {
+            return if self.is_zero() {
+                Some(Ordering::Less) // 0 < x
+            } else {
+                Some(Ordering::Greater) // x > 0
+            };
+        }
+        // Both are non-zero.
+        debug_assert!(!self.is_zero() && !other.is_zero());
+
+        // Bias doesn't matter for this comparison.
+        let shift = self.exp().abs_diff(other.exp());
+        if shift as u32 > Self::DIGITS {
+            // The shift is larger than the maximum precision, so
+            // the coefficients do not overlap. Therefore, the
+            // larger exponent is the larger number.
+            return if self.exp() < other.exp() {
                 Some(Ordering::Less)
             } else {
                 Some(Ordering::Greater)
             };
         }
-        if self.exp() == other.exp() {}
+        // `shift` is in [0, DIGITS].
+
+        // TODO
+
+        // if self.msd() != other.msd() {
+        //     return if self.msd() < other.msd() {
+        //         Some(Ordering::Less)
+        //     } else {
+        //         Some(Ordering::Greater)
+        //     };
+        // }
+        // // The MSDs are the same.
+
+        // let lhs = self.coeff();
+        // let rhs = other.coeff();
+
         None
     }
 
@@ -486,6 +557,21 @@ impl d128 {
         }
     }
 
+    /// Creates a quiet NaN.
+    const fn nan(sign: bool) -> Self {
+        Self::from_fields(sign, 0x1f, 0, 0)
+    }
+
+    /// Creates a signaling NaN.
+    const fn snan(sign: bool) -> Self {
+        Self::from_fields(sign, 0x1f, 0x800, 0)
+    }
+
+    /// Creates an infinity.
+    const fn inf(sign: bool) -> Self {
+        Self::from_fields(sign, 0x1e, 0, 0)
+    }
+
     /// Creates a `d128` from its raw bits.
     ///
     /// ```rust
@@ -545,10 +631,19 @@ impl d128 {
     pub const fn const_add(self, _rhs: Self) -> Self {
         todo!()
     }
+
+    /// Returns `-self`.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn const_neg(self) -> Self {
+        Self(self.0 ^ Self::SIGN_MASK)
+    }
 }
 
 // String conversions.
 impl d128 {
+    const MAX_STR_LEN: usize = Self::DIGITS as usize + "-.E1234".len();
+
     /// Converts the decimal to a string.
     #[allow(clippy::indexing_slicing)]
     pub fn format(self, dst: &mut Buffer) -> &str {
@@ -752,30 +847,74 @@ impl d128 {
         if s.is_empty() {
             return Err(ParseError::empty());
         }
+        if s.len() > Self::MAX_STR_LEN {
+            return Err(ParseError::invalid("too long"));
+        }
+        // `s.len()` is in [1, MAX_LEN].
 
         let mut i = 0;
-        let _neg = s[0] == b'-';
-        if matches!(s[0], b'-' | b'+') {
-            if s.len() == 1 {
-                return Err(ParseError::invalid("missing digits"));
-            }
-            i += 1;
+        let sign = s[0] == b'-';
+        match s[0] {
+            b'-' | b'+' => i += 1,
+            b'0'..=b'9' => {}
+            b'i' | b'I' | b'n' | b'N' => return Self::parse_special(sign, s),
+            _ => return Err(ParseError::invalid("expected digit or special")),
         }
+        // `i` is in [0, 1]
 
-        let (chunks, _rest) = s.split_at((s.len() / 4) * 4);
-        while i < chunks.len() {
-            // SAFETY: `chunks.len()` is a multiple of 4.
+        let mut coeff = 0;
+        let mut shift = 0;
+        while i + 4 < s.len() {
+            // SAFETY: `i+4` < s.len(), so we cannot read past
+            // the end of `s`.
             // TODO(eric): Do this safely.
-            let chunk = unsafe { mem::transmute_copy(&chunks[i]) };
+            let chunk = unsafe { mem::transmute_copy(&s[i]) };
             let Some(s) = Str3::try_from_bytes(chunk) else {
                 // We don't have three digits.
                 break;
             };
-            let _dpd = s.to_dpd();
+            let dpd = s.to_dpd() as u128;
+            coeff |= dpd << shift;
             i += 3;
+            shift += 10;
+            debug_assert!(shift <= 110);
         }
 
-        todo!()
+        if i >= s.len() {
+            return Ok(Self::from_parts(sign, 0, coeff));
+        }
+
+        match s[0] {
+            // That was just the prefix.
+            b'.' => {}
+            b'e' | b'E' => {}
+            b'0'..=b'9' => {}
+            d => {
+                //println!("d={d}");
+                return Err(ParseError::invalid("invalid digit"));
+            }
+        }
+
+        Ok(Self::from_parts(sign, 0, coeff))
+    }
+
+    const fn parse_special(sign: bool, s: &[u8]) -> Result<Self, ParseError> {
+        if conv::equal_fold(s, b"inf") || conv::equal_fold(s, b"infinity") {
+            Ok(Self::inf(sign))
+        } else if conv::equal_fold(s, b"nan") || conv::equal_fold(s, b"qnan") {
+            Ok(Self::nan(sign))
+        } else if conv::equal_fold(s, b"snan") {
+            Ok(Self::snan(sign))
+        } else {
+            Err(ParseError::invalid("unknown special"))
+        }
+    }
+}
+
+impl Neg for d128 {
+    type Output = Self;
+    fn neg(self) -> Self::Output {
+        self.const_neg()
     }
 }
 
@@ -992,6 +1131,12 @@ mod tests {
 
     use super::*;
 
+    impl d128 {
+        const SNAN: Self = Self::snan(true);
+        const NEG_NAN: Self = Self::nan(true);
+        const NEG_SNAN: Self = Self::snan(true);
+    }
+
     impl PartialEq<decQuad> for d128 {
         fn eq(&self, other: &decQuad) -> bool {
             self.0.to_le_bytes() == other.bytes
@@ -1022,55 +1167,58 @@ mod tests {
         });
     }
 
+    static STR_TESTS: &[(d128, &'static str)] = &[
+        (d128::NAN, "NaN"),
+        (d128::INFINITY, "Infinity"),
+        (d128::NEG_INFINITY, "-Infinity"),
+        (d128::NAN, "NaN"),
+        (d128::SNAN, "sNaN"),
+        (d128::NEG_NAN, "-NaN"),
+        (d128::NEG_SNAN, "-sNaN"),
+        (d128::new(0, 0), "0"),
+        (d128::new(0, d128::MAX_EXP), "0E+6111"),
+        (d128::new(0, d128::MIN_EXP), "0E-6176"),
+        (
+            d128::new(9111222333444555666777888999000111, d128::MAX_EXP),
+            "9.111222333444555666777888999000111E+6144",
+        ),
+        (
+            d128::new(9111222333444555666777888999000111, d128::MIN_EXP),
+            "9.111222333444555666777888999000111E-6143",
+        ),
+        (
+            d128::new(9111222333444555666777888999000111, 0),
+            "9111222333444555666777888999000111",
+        ),
+        (
+            d128::new(9111222333444555666777888999000111, -2),
+            "91112223334445556667778889990001.11",
+        ),
+        (
+            d128::new(9111222333444555666777888999000111, 2),
+            "9.111222333444555666777888999000111E+35",
+        ),
+        (
+            d128::new(9999999999999999999999999999999999, -39),
+            "0.000009999999999999999999999999999999999",
+        ),
+        (d128::new(42, 1), "4.2E+2"),
+        (d128::new(42, 0), "42"),
+        (d128::new(42, -1), "4.2"),
+        (d128::new(42, -2), "0.42"),
+        (d128::new(42, -3), "0.042"),
+        (d128::new(42, -4), "0.0042"),
+        (d128::new(42, -5), "0.00042"),
+        (d128::new(42, -6), "0.000042"),
+        (d128::new(42, -7), "0.0000042"),
+        (d128::new(42, -8), "4.2E-7"),
+    ];
+
     #[test]
     fn test_format() {
-        let tests = [
-            (d128::NAN, "NaN"),
-            (d128::INFINITY, "Infinity"),
-            (d128::NEG_INFINITY, "-Infinity"),
-            (d128::new(0, 0), "0"),
-            (d128::new(0, d128::MAX_EXP), "0E+6111"),
-            (d128::new(0, d128::MIN_EXP), "0E-6176"),
-            (
-                d128::new(9111222333444555666777888999000111, d128::MAX_EXP),
-                "9.111222333444555666777888999000111E+6144",
-            ),
-            (
-                d128::new(9111222333444555666777888999000111, d128::MIN_EXP),
-                "9.111222333444555666777888999000111E-6143",
-            ),
-            (
-                d128::new(9111222333444555666777888999000111, 0),
-                "9111222333444555666777888999000111",
-            ),
-            (
-                d128::new(9111222333444555666777888999000111, -2),
-                "91112223334445556667778889990001.11",
-            ),
-            (
-                d128::new(9111222333444555666777888999000111, 2),
-                "9.111222333444555666777888999000111E+35",
-            ),
-            (
-                d128::new(9999999999999999999999999999999999, -39),
-                "0.000009999999999999999999999999999999999",
-            ),
-            (d128::new(42, 1), "4.2E+2"),
-            (d128::new(42, 0), "42"),
-            (d128::new(42, -1), "4.2"),
-            (d128::new(42, -2), "0.42"),
-            (d128::new(42, -3), "0.042"),
-            (d128::new(42, -4), "0.0042"),
-            (d128::new(42, -5), "0.00042"),
-            (d128::new(42, -6), "0.000042"),
-            (d128::new(42, -7), "0.0000042"),
-            (d128::new(42, -8), "4.2E-7"),
-        ];
-        for (i, (input, want)) in tests.into_iter().enumerate() {
-            println!("want={want}");
-            //println!("want={}", to_str(9999999999999999999999999999999999, -39));
+        for (i, (input, want)) in STR_TESTS.iter().enumerate() {
             let got = input.to_string();
-            assert_eq!(got, want, "#{i}");
+            assert_eq!(got, *want, "#{i}");
         }
 
         #[allow(dead_code)] // TODO
@@ -1089,6 +1237,14 @@ mod tests {
             let ptr = unsafe { decQuadToString(&d, buf.as_mut_ptr()) };
             let cstr = unsafe { CStr::from_ptr(ptr) };
             cstr.to_str().unwrap().to_owned()
+        }
+    }
+
+    #[test]
+    fn test_parse() {
+        for (i, (want, output)) in STR_TESTS.iter().enumerate() {
+            let got: d128 = output.parse().unwrap();
+            assert_eq!(got, *want, "#{i}");
         }
     }
 

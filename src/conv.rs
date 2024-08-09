@@ -76,19 +76,25 @@ pub enum Fmt {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParseError {
     kind: ErrorKind,
+    #[cfg(test)]
+    reason: &'static str,
 }
 
 impl ParseError {
-    pub(super) const fn empty() -> Self {
+    const fn new(kind: ErrorKind, _reason: &'static str) -> Self {
         Self {
-            kind: ErrorKind::Empty,
+            kind,
+            #[cfg(test)]
+            reason: _reason,
         }
     }
 
-    pub(super) const fn invalid(_reason: &'static str) -> Self {
-        Self {
-            kind: ErrorKind::Invalid,
-        }
+    pub(super) const fn empty() -> Self {
+        Self::new(ErrorKind::Empty, "")
+    }
+
+    pub(super) const fn invalid(reason: &'static str) -> Self {
+        Self::new(ErrorKind::Invalid, reason)
     }
 }
 
@@ -97,6 +103,12 @@ impl std::error::Error for ParseError {}
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[cfg(test)]
+        {
+            write!(f, "{}: {}", self.kind, self.reason)
+        }
+
+        #[cfg(not(test))]
         self.kind.fmt(f)
     }
 }
@@ -121,6 +133,21 @@ pub(super) const fn is_3digits(v: u32) -> bool {
     let a = v.wrapping_add(0x0046_4646);
     let b = v.wrapping_sub(0x0030_3030);
     (a | b) & 0x0080_8080 == 0
+}
+
+/// Reports whether `a == b` using ASCII case folding.
+pub(super) const fn equal_fold(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() && i < b.len() {
+        if !a[i].eq_ignore_ascii_case(&b[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 #[cfg(test)]
