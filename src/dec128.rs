@@ -889,7 +889,7 @@ impl d128 {
             b'.' => {}
             b'e' | b'E' => {}
             b'0'..=b'9' => {}
-            d => {
+            _d => {
                 //println!("d={d}");
                 return Err(ParseError::invalid("invalid digit"));
             }

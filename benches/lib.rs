@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use decnum::{
     bcd::{self, Bcd10, Bcd5},
-    dpd, u96,
+    dpd,
 };
 use rand::{random, thread_rng, Rng};
 
@@ -13,19 +13,20 @@ fn bench_dpd(c: &mut Criterion) {
         .collect();
     let dpds: Vec<u16> = bcds.iter().copied().map(dpd::pack).collect();
 
-    group.bench_function("classify_bcd", |b| {
-        let mut i = 0;
-        b.iter(|| {
-            let bcd = bcds[i % dpds.len()];
-            let _ = black_box(dpd::classify_bcd(black_box(bcd)));
-            i = i.wrapping_add(1);
-        })
-    });
-    group.bench_function("classify_dpd", |b| {
+    group.bench_function("classify", |b| {
         let mut i = 0;
         b.iter(|| {
             let dpd = dpds[i % dpds.len()];
-            let _ = black_box(dpd::classify_dpd(black_box(dpd)));
+            let _ = black_box(dpd::classify(black_box(dpd)));
+            i = i.wrapping_add(1);
+        })
+    });
+
+    group.bench_function("compress/pack2", |b| {
+        let mut i = 0;
+        b.iter(|| {
+            let bcd = bcds[i % bcds.len()];
+            let _ = black_box(dpd::pack2(black_box(bcd)));
             i = i.wrapping_add(1);
         })
     });
@@ -63,6 +64,75 @@ fn bench_dpd(c: &mut Criterion) {
             i = i.wrapping_add(1);
         })
     });
+
+    group.finish();
+}
+
+fn bench_bcd(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bcd");
+
+    let bins: Vec<u16> = (0..1024).map(|_| thread_rng().gen_range(0..=999)).collect();
+    let bcds: Vec<u16> = bins.iter().copied().map(bcd::from_bin).collect();
+
+    group.bench_function("classify", |b| {
+        let mut i = 0;
+        b.iter(|| {
+            let bcd = bcds[i % bcds.len()];
+            let _ = black_box(bcd::classify(black_box(bcd)));
+            i = i.wrapping_add(1);
+        })
+    });
+    group.bench_function("to_bin", |b| {
+        let mut i = 0;
+        b.iter(|| {
+            let bcd = bcds[i % bcds.len()];
+            black_box(bcd::to_bin(black_box(bcd)));
+            i += 1;
+        })
+    });
+    group.bench_function("from_bin", |b| {
+        let mut i = 0;
+        b.iter(|| {
+            let bin = bins[i % bins.len()];
+            black_box(bcd::from_bin(black_box(bin)));
+            i += 1;
+        })
+    });
+
+    macro_rules! bench_to_from {
+        ($ty:ty) => {{
+            let bcds: Vec<$ty> = (0..8192).map(|_| <$ty>::from_bin(random())).collect();
+            let bins: Vec<_> = bcds.iter().copied().map(<$ty>::to_bin).collect();
+
+            group.bench_function(concat!(stringify!($ty), "/to_bin"), |b| {
+                let mut i = 0;
+                b.iter(|| {
+                    let bcd = bcds[i % bcds.len()];
+                    black_box(black_box(bcd).to_bin());
+                    i = i.wrapping_add(1);
+                })
+            });
+            group.bench_function(concat!(stringify!($ty), "/from_bin"), |b| {
+                let mut i = 0;
+                b.iter(|| {
+                    let bin = bins[i % bins.len()];
+                    black_box(<$ty>::from_bin(black_box(bin)));
+                    i = i.wrapping_add(1);
+                })
+            });
+            group.bench_function(concat!(stringify!($ty), "/pack"), |b| {
+                let mut i = 0;
+                b.iter(|| {
+                    let bcd = bcds[i % bcds.len()];
+                    clear();
+                    black_box(bcd.pack());
+                    i = i.wrapping_add(1);
+                })
+            });
+        }};
+    }
+    bench_to_from!(Bcd5);
+    bench_to_from!(Bcd10);
 
     group.finish();
 }
@@ -149,56 +219,6 @@ const fn bcd2dpd(arg: u16) -> u16 {
         | ((p as u16) << 9)
 }
 
-fn bench_bcd(c: &mut Criterion) {
-    let mut group = c.benchmark_group("bcd");
-
-    group.bench_function("to_bin", |b| {
-        let bcd = bcd::from_bin(random());
-        b.iter(|| black_box(bcd::to_bin(black_box(bcd))))
-    });
-    group.bench_function("from_bin", |b| {
-        let u = bcd::to_bin(random());
-        b.iter(|| black_box(bcd::from_bin(black_box(u))))
-    });
-
-    macro_rules! bench_to_from {
-        ($ty:ty) => {{
-            let bcds: Vec<$ty> = (0..8192).map(|_| <$ty>::from_bin(random())).collect();
-            let bins: Vec<_> = bcds.iter().copied().map(<$ty>::to_bin).collect();
-
-            group.bench_function(concat!(stringify!($ty), "/to_bin"), |b| {
-                let mut i = 0;
-                b.iter(|| {
-                    let bcd = bcds[i % bcds.len()];
-                    black_box(black_box(bcd).to_bin());
-                    i = i.wrapping_add(1);
-                })
-            });
-            group.bench_function(concat!(stringify!($ty), "/from_bin"), |b| {
-                let mut i = 0;
-                b.iter(|| {
-                    let bin = bins[i % bins.len()];
-                    black_box(<$ty>::from_bin(black_box(bin)));
-                    i = i.wrapping_add(1);
-                })
-            });
-            group.bench_function(concat!(stringify!($ty), "/pack"), |b| {
-                let mut i = 0;
-                b.iter(|| {
-                    let bcd = bcds[i % bcds.len()];
-                    clear();
-                    black_box(bcd.pack());
-                    i = i.wrapping_add(1);
-                })
-            });
-        }};
-    }
-    bench_to_from!(Bcd5);
-    bench_to_from!(Bcd10);
-
-    group.finish();
-}
-
 fn clear() {
     // let addr: *const () = core::ptr::null();
     // unsafe {
@@ -210,6 +230,7 @@ fn clear() {
     // }
 }
 
+/*
 fn bench_overflowing_mul(c: &mut Criterion) {
     let mut group = c.benchmark_group("overflowing_mul");
 
@@ -275,12 +296,7 @@ fn bench_quorem(c: &mut Criterion) {
 
     group.finish();
 }
+*/
 
-criterion_group!(
-    benches,
-    bench_bcd,
-    bench_dpd,
-    bench_overflowing_mul,
-    bench_quorem
-);
+criterion_group!(benches, bench_bcd, bench_dpd);
 criterion_main!(benches);
