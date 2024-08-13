@@ -3,7 +3,7 @@ use core::{
     fmt,
     mem::{self, size_of, MaybeUninit},
     num::FpCategory,
-    ops::Neg,
+    ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
     str::{self, FromStr},
 };
 
@@ -626,17 +626,44 @@ impl d128 {
 // Const arithmetic.
 impl d128 {
     /// Returns `self + other`.
+    ///
+    /// This is the same as [`Add`], but can be used in a const
+    /// context.
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn const_add(self, _rhs: Self) -> Self {
         todo!()
     }
 
+    /// Returns `self * other`.
+    ///
+    /// This is the same as [`Mul`], but can be used in a const
+    /// context.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn const_mul(self, _rhs: Self) -> Self {
+        todo!()
+    }
+
     /// Returns `-self`.
+    ///
+    /// This is the same as [`Neg`], but can be used in a const
+    /// context.
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn const_neg(self) -> Self {
         Self(self.0 ^ Self::SIGN_MASK)
+    }
+
+    /// Returns `self - other`.
+    ///
+    /// This is the same as [`Sub`], but can be used in a const
+    /// context.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn const_sub(self, rhs: Self) -> Self {
+        // x - y = x + -y
+        self.const_add(rhs.const_neg())
     }
 }
 
@@ -662,7 +689,6 @@ impl d128 {
         debug_assert!(self.is_finite());
 
         let exp = i32::from(self.unbiased_exp());
-        //println!("exp={exp}");
 
         let mut tmp = [MaybeUninit::uninit(); 1 + Self::DIGITS as usize];
         let coeff = self.coeff_to_str(&mut tmp).as_bytes();
@@ -712,7 +738,6 @@ impl d128 {
             let mut i = 1;
             dst[0].write(b'-');
 
-            //println!("pre={pre} coeff={}", coeff.len());
             if pre < coeff.len() {
                 let (pre, post) = coeff.split_at(pre);
                 copy_from_slice(&mut dst[i..i + pre.len()], pre);
@@ -828,7 +853,7 @@ impl d128 {
             i += n;
         }
 
-        // We didn't write anything. We already wrote '0' to
+        // We didn't write anything, but we already wrote '0' to
         // dst[0].
         //
         // Unfortunately, we can't do the write here since it
@@ -888,7 +913,9 @@ impl d128 {
             // That was just the prefix.
             b'.' => {}
             b'e' | b'E' => {}
-            b'0'..=b'9' => {}
+            b'0'..=b'9' => {
+                // At most three more digits.
+            }
             _d => {
                 //println!("d={d}");
                 return Err(ParseError::invalid("invalid digit"));
@@ -896,6 +923,12 @@ impl d128 {
         }
 
         Ok(Self::from_parts(sign, 0, coeff))
+    }
+
+    const fn parse_exp(s: &[u8]) -> Result<i16, ParseError> {
+        let mut i = 0;
+        while i < 3 && i < s.len() {}
+        todo!()
     }
 
     const fn parse_special(sign: bool, s: &[u8]) -> Result<Self, ParseError> {
@@ -911,10 +944,49 @@ impl d128 {
     }
 }
 
+impl Add for d128 {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        self.const_add(rhs)
+    }
+}
+
+impl AddAssign for d128 {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+impl Mul for d128 {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self::Output {
+        self.const_mul(rhs)
+    }
+}
+
+impl MulAssign for d128 {
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}
+
 impl Neg for d128 {
     type Output = Self;
     fn neg(self) -> Self::Output {
         self.const_neg()
+    }
+}
+
+impl Sub for d128 {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        self.const_sub(rhs)
+    }
+}
+
+impl SubAssign for d128 {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
     }
 }
 

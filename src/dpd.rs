@@ -105,23 +105,23 @@ pub(super) const fn pack_via_bits(mut bcd: u16) -> u16 {
     }
 
     let (hi, lo) = {
-        // Ideally, we'd use `pext` for x86. Rough benchmarks
-        // show it to be maybe 1 ns/op faster. But `core::arch`
-        // intrinsics are not `const` and LLVM currently does not
-        // recognize bit extraction.
+        // Ideally, we'd use `pext` for x86. Rough benchmarks on
+        // Intel Skylake show it to be maybe 1 ns/op faster. But
+        // `core::arch` intrinsics are not `const` and LLVM
+        // currently does not recognize bit extraction.
         // https://github.com/llvm/llvm-project/issues/72088
         let mut idx = if cfg!(target_arch = "aarch64") {
             // This is marginally faster since the compiler
             // rewrites it as
-            //    lsr
-            //    bfixl
-            //    lsr
-            //    and
-            //    bfi
+            //    lsr ..., #9
+            //    bfixl ..., #6, #2
+            //    lsr ..., #1
+            //    and ..., #0x8
+            //    bfi ..., #4, #2
             let mut idx = 0;
-            idx |= (bcd & 0x800) >> 8;
-            idx |= (bcd & 0x80) >> 5;
-            idx |= (bcd & 0x8) >> 2;
+            idx |= (bcd & 0x800) >> 9;
+            idx |= (bcd & 0x80) >> 6;
+            idx |= (bcd & 0x8) >> 3;
             idx
         } else {
             let mut idx = bcd;
@@ -129,24 +129,24 @@ pub(super) const fn pack_via_bits(mut bcd: u16) -> u16 {
             idx &= 0x888;
             // 0ae0 aei0 ei00 i000
             idx = idx.wrapping_mul(0x49);
-            // 0000 0000 0ae0 aei0
-            idx >>= 8;
-            // 0000 0000 0000 aei0
-            idx &= 0xe;
+            // 0000 0000 00ae 0aei
+            idx >>= 9;
+            // 0000 0000 0000 0aei
+            idx &= 0x7;
             idx
         };
-        idx /= 2;
+        // `idx` is in [0, 7].
 
         if cfg!(target_arch = "aarch64") {
             // Using two 64-bit constants is significantly faster
             // than one 128-bit constant.
-            const LO: u64 = 0x0081088100110000;
-            const HI: u64 = 0x6e0e2e0c4e0a0000;
+            const LO: u64 = 0x00_81_08_81_00_11_00_00;
+            const HI: u64 = 0x6e_0e_2e_0c_4e_0a_00_00;
 
             idx *= 8;
-            let lo = (LO >> idx) & 0xff;
-            let hi = (HI >> idx) & 0xff;
-            (hi as u16, lo as u16)
+            let lo = ((LO >> idx) & 0xff) as u16;
+            let hi = ((HI >> idx) & 0xff) as u16;
+            (hi, lo)
         } else {
             const LOOKUP: [u16; 8] = [
                 0x0000, 0x0000, 0x0a11, 0x4e00, 0x0c81, 0x2e08, 0x0e81, 0x6e00,
@@ -158,7 +158,6 @@ pub(super) const fn pack_via_bits(mut bcd: u16) -> u16 {
         }
     };
 
-    // 0000 0000 0fg0 0kl0
     let v = (dpd & 0x66).wrapping_mul(lo);
     dpd &= 0x397;
     dpd ^= v;
