@@ -10,7 +10,7 @@ pub(crate) const BCD_TO_DPD: [u16; 0x999 + 1] = {
     let mut bin = 0;
     while bin <= 999 {
         let bcd = bcd::from_bin(bin);
-        let dpd = dpd::pack_via_bits(bcd);
+        let dpd = dpd::pack_via_bits_obvious(bcd);
         t[bcd as usize] = dpd;
         bin += 1;
     }
@@ -24,7 +24,7 @@ pub(crate) const DPD_TO_BCD: [u16; 1 << 10] = {
     let mut bin = 0;
     while bin <= 999 {
         let bcd = bcd::from_bin(bin);
-        let dpd = dpd::pack_via_bits(bcd);
+        let dpd = dpd::pack_via_bits_obvious(bcd);
         t[dpd as usize] = bcd;
         bin += 1;
     }
@@ -38,7 +38,7 @@ pub(super) const BIN_TO_DPD: [u16; 1000] = {
     let mut bin = 0;
     while bin <= 999 {
         let bcd = bcd::from_bin(bin as u16);
-        let dpd = dpd::pack_via_bits(bcd);
+        let dpd = dpd::pack_via_bits_obvious(bcd);
         t[bin] = dpd;
         bin += 1;
     }
@@ -53,7 +53,7 @@ pub(super) const DPD_TO_BIN: [u16; 1 << 10] = {
     let mut bin = 0;
     while bin <= 999 {
         let bcd = bcd::from_bin(bin);
-        let dpd = dpd::pack_via_bits(bcd);
+        let dpd = dpd::pack_via_bits_obvious(bcd);
         t[dpd as usize] = bin;
         bin += 1;
     }
@@ -70,7 +70,7 @@ pub(super) const DPD_TO_STR: [Str3; 1 << 10] = {
     let mut bin = 0;
     while bin <= 999 {
         let bcd = bcd::from_bin(bin);
-        let dpd = dpd::pack_via_bits(bcd);
+        let dpd = dpd::pack_via_bits_obvious(bcd);
         let s = dpd::unpack_to_str_via_bits(dpd);
         t[dpd as usize] = s;
         bin += 1;
@@ -87,7 +87,7 @@ mod tests {
         let mut bin = 0;
         while bin <= 999 {
             let bcd = bcd::from_bin(bin);
-            let dpd = dpd::pack_via_bits(bcd);
+            let dpd = dpd::pack_via_bits_obvious(bcd);
 
             assert_eq!(BCD_TO_DPD[bcd as usize], dpd, "#{bin}");
             assert_eq!(DPD_TO_BCD[dpd as usize], bcd, "#{bin}");

@@ -2,6 +2,8 @@
 
 use core::hint;
 
+use cfg_if::cfg_if;
+
 use super::{
     bcd::{self, Pattern, Str3},
     tables::{BCD_TO_DPD, BIN_TO_DPD, DPD_TO_BCD, DPD_TO_STR},
@@ -87,6 +89,91 @@ pub const fn pack(bcd: u16) -> u16 {
 }
 
 /// Pack a 12-bit BCD into a 10-bit DPD using bit twiddling.
+pub(super) const fn pack_via_bits(mut bcd: u16) -> u16 {
+    // BCDs only use the lower 12 bits.
+    bcd &= 0x0fff;
+
+    // Shift the low byte left by one, then shift the whole thing
+    // right by one.
+    //
+    // 0000 abcd efgh ijkm
+    // 0000 abcd fghi klm0
+    // 0000 0abc dfgh iklm
+    let mut dpd = ((bcd & 0xff00) | ((bcd << 1) & 0x00ff)) >> 1;
+
+    if bcd & 0x880 == 0 {
+        // 0000 0bcd 0fgh ijkm
+        return dpd;
+    }
+
+    let (hi, lo) = {
+        let mut idx = 0; // 0aei
+        cfg_if! {
+            if #[cfg(target_arch = "aarch64")] {
+                // This is marginally faster since the compiler
+                // rewrites it into
+                //    lsr
+                //    bfixl
+                //    lsr
+                //    and
+                //    bfi
+                idx |= (bcd & 0x800) >> 8;
+                idx |= (bcd & 0x80) >> 5;
+                idx |= (bcd & 0x8) >> 2;
+            } else if #[cfg(all(
+                any(target_arch = "x86", target_arch = "x86_64"),
+                target_feature = "bmi2"
+            ))] {
+                idx = unsafe { core::arch::x86::_pext_u32(bcd, 0x888) }
+                if true {
+                    panic!("hi");
+                }
+            } else {
+                idx = bcd;
+                // 0000 a000 e000 i000
+                idx &= 0x888;
+                // 0ae0 aei0 ei00 i000
+                idx = idx.wrapping_mul(0x49);
+                // 0000 0000 0ae0 aei0
+                idx >>= 8;
+                // 0000 0000 0000 aei0
+                idx &= 0xe;
+            }
+        }
+        idx /= 2;
+
+        if cfg!(target_arch = "aarch64") {
+            // Using two 64-bit constants is significantly faster
+            // than one 128-bit constant.
+            const LO: u64 = 0x0081088100110000;
+            const HI: u64 = 0x6e0e2e0c4e0a0000;
+
+            idx *= 8;
+            let lo = (LO >> idx) & 0xff;
+            let hi = (HI >> idx) & 0xff;
+            (hi as u16, lo as u16)
+        } else {
+            const LOOKUP: [u16; 8] = [
+                0x0000, 0x0000, 0x0a11, 0x4e00, 0x0c81, 0x2e08, 0x0e81, 0x6e00,
+            ];
+            // `idx` is in [0, 7], so the compiler elides the
+            // bounds checks.
+            let v = LOOKUP[idx as usize];
+            (v >> 8, v & 0x00ff)
+        }
+    };
+
+    // 0000 0000 0fg0 0kl0
+    let v = (dpd & 0x66).wrapping_mul(lo);
+    dpd &= 0x397;
+    dpd ^= v;
+    dpd = (dpd & 0xff00) | (hi | (dpd & 0x00ff));
+    dpd &= 0x3ff;
+
+    dpd
+}
+
+/// Pack a 12-bit BCD into a 10-bit DPD using bit twiddling.
 pub(super) const fn pack_via_bits_obvious(mut bcd: u16) -> u16 {
     // (abcd)(efgh)(ijkm) becomes (pqr)(stu)(v)(wxy)
 
@@ -147,81 +234,6 @@ pub(super) const fn pack_via_bits_obvious(mut bcd: u16) -> u16 {
             ((bcd & 0x100) >> 1) | (bcd & 0x11) | 0x6e
         }
     }
-}
-
-/// Pack a 12-bit BCD into a 10-bit DPD using bit twiddling.
-pub(super) const fn pack_via_bits(mut bcd: u16) -> u16 {
-    // BCDs only use the lower 12 bits.
-    bcd &= 0x0fff;
-
-    // Shift the low byte left by one, then shift the whole thing
-    // right by one.
-    //
-    // 0000 abcd efgh ijkm
-    // 0000 abcd fghi klm0
-    // 0000 0abc dfgh iklm
-    let mut dpd = ((bcd & 0xff00) | ((bcd << 1) & 0x00ff)) >> 1;
-
-    if bcd & 0x880 == 0 {
-        // 0000 0bcd 0fgh ijkm
-        return dpd;
-    }
-
-    let (hi, lo) = {
-        let mut idx = 0; // aei0
-        if cfg!(target_arch = "aarch64") {
-            // This is marginally faster since the compiler can
-            // rewrite it into
-            //    lsr
-            //    bfixl
-            //    lsr
-            //    and
-            //    bfi
-            idx |= (bcd & 0x800) >> 8;
-            idx |= (bcd & 0x80) >> 5;
-            idx |= (bcd & 0x8) >> 2;
-        } else {
-            idx = bcd;
-            // 0000 a000 e000 i000
-            idx &= 0x888;
-            // 0ae0 aei0 ei00 i000
-            idx = idx.wrapping_mul(0x49);
-            // 0000 0000 0ae0 aei0
-            idx >>= 8;
-            // 0000 0000 0000 aei0
-            idx &= 0xe;
-        };
-        idx /= 2;
-
-        if cfg!(target_arch = "aarch64") {
-            // Using two 64-bit constants is significantly faster
-            // than oen 128-bit constant.
-            const LO: u64 = 0x0081088100110000;
-            const HI: u64 = 0x6e0e2e0c4e0a0000;
-
-            idx *= 8;
-            let lo = (LO >> idx) & 0xff;
-            let hi = (HI >> idx) & 0xff;
-            (hi as u16, lo as u16)
-        } else {
-            const LOOKUP: [u16; 8] = [
-                0x0000, 0x0000, 0x0a11, 0x4e00, 0x0c81, 0x2e08, 0x0e81, 0x6e00,
-            ];
-            // `idx` is in [0, 7], so the compiler elides the
-            // bounds checks.
-            let v = LOOKUP[idx as usize];
-            (v >> 8, v & 0x00ff)
-        }
-    };
-
-    // 0000 0000 0fg0 0kl0
-    let v = (dpd & 0x66).wrapping_mul(lo);
-    dpd &= 0x397;
-    dpd ^= v;
-    dpd = (dpd & 0xff00) | (hi | (dpd & 0x00ff));
-    dpd &= 0x3ff;
-
-    dpd
 }
 
 /// Unpacks a 10-bit DPD into a 12-bit BCD.

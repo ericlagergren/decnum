@@ -26,7 +26,7 @@ fn bench_dpd(c: &mut Criterion) {
         let mut i = 0;
         b.iter(|| {
             let bcd = bcds[i % bcds.len()];
-            let _ = black_box(dpd::pack2(black_box(bcd)));
+            let _ = black_box(dpd::pack_via_bits(black_box(bcd)));
             i = i.wrapping_add(1);
         })
     });
