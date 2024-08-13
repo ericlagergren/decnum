@@ -22,23 +22,6 @@ fn bench_dpd(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("compress/pack2", |b| {
-        let mut i = 0;
-        b.iter(|| {
-            let bcd = bcds[i % bcds.len()];
-            let _ = black_box(dpd::pack_via_bits(black_box(bcd)));
-            i = i.wrapping_add(1);
-        })
-    });
-    group.bench_function("compress/pack3", |b| {
-        let mut i = 0;
-        b.iter(|| {
-            let bcd = bcds[i % bcds.len()];
-            let _ = black_box(dpd::pack_via_bits2(black_box(bcd)));
-            i = i.wrapping_add(1);
-        })
-    });
-
     group.bench_function("compress/pack", |b| {
         let mut i = 0;
         b.iter(|| {
