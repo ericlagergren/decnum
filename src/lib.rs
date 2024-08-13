@@ -36,7 +36,6 @@ pub mod dpd;
 //mod macros;
 mod tables;
 //mod uint96;
-mod intrinsics;
 mod util;
 
 pub use conv::*;
