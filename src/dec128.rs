@@ -480,13 +480,46 @@ impl d128 {
         }
         // `shift` is in [0, DIGITS].
 
-        let mut lhs = self.full_coeff();
-        let mut rhs = other.full_coeff();
+        // For example:
+        //
+        // 123.0 exp=6175
+        // 123.00 exp=6174
+        // shift=1
+
         if shift == 0 {
+            // Easy case: compare straight across.
+            let lhs = self.full_coeff();
+            let rhs = other.full_coeff();
             return Some(dpd::cmp120(lhs, rhs));
         }
 
-        None
+        if shift > 0 {
+            debug_assert!(self.exp() > other.exp());
+
+            // `self.exp() > other.exp()`, so we need to shift
+            // `lhs` (`self`).
+
+            let lhs = self.full_coeff();
+            let rhs = other.full_coeff();
+
+            let mut i = 0;
+            while i < 10 {
+                let shift = 100 - (i * 10);
+                let lhs = dpd::unpack(((lhs >> shift) & 0x3ff) as u16);
+                let rhs = dpd::unpack(((rhs >> shift) & 0x3ff) as u16);
+                if lhs < rhs {
+                    return Some(Ordering::Less);
+                }
+                if lhs > rhs {
+                    return Some(Ordering::Greater);
+                }
+                i += 1;
+            }
+            Some(Ordering::Equal)
+        } else {
+            debug_assert!(self.exp() < other.exp());
+            None
+        }
     }
 
     /// Returns the total ordering between `self` and `other`.
@@ -1400,5 +1433,13 @@ mod tests {
             let got = x.const_partial_cmp(y);
             assert_eq!(got, want, "#{i}: total_cmp({lhs}, {rhs})");
         }
+    }
+
+    #[test]
+    fn test_shift() {
+        let lhs = d128::new(1230, -1);
+        let rhs = d128::new(12300, -2);
+        println!("lhs = {lhs} {}", lhs.unbiased_exp());
+        println!("rhs = {rhs} {}", rhs.unbiased_exp());
     }
 }

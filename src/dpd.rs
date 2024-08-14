@@ -473,11 +473,6 @@ pub(super) const fn sig_digits(dpd: u16) -> u32 {
     sd
 }
 
-/// TODO
-pub const fn unpack120(dpd: u128) -> [u8; 34] {
-    todo!()
-}
-
 /// Compares two 120-bit DPDs.
 pub const fn cmp120(lhs: u128, rhs: u128) -> Ordering {
     let mut i = 0;
@@ -494,6 +489,27 @@ pub const fn cmp120(lhs: u128, rhs: u128) -> Ordering {
         i += 1;
     }
     Ordering::Equal
+}
+
+pub(super) struct Bcd32 {
+    hi: u128, // 32
+    lo: u16,  // 2
+}
+
+impl Bcd32 {
+    pub const fn from_dpd(dpd: u128) -> Self {
+        let mut hi = 0;
+        let mut lo = 0;
+        let mut i = 0;
+        // Unpack the first 30 digits.
+        while i < 10 {
+            let shift = 100 - (i * 10);
+            let bcd = unpack(((dpd >> shift) & 0x3ff) as u16);
+            i += 1;
+        }
+        // Unpack the remaining 4 digits.
+        Self { hi, lo }
+    }
 }
 
 #[cfg(test)]
@@ -747,15 +763,5 @@ mod tests {
             n = want.0;
             i += 1;
         }
-    }
-
-    #[test]
-    fn test_shift() {
-        let bcd = 0x999;
-        let mut dpd = pack(bcd);
-        dpd <<= 4;
-        dpd &= 0x3ff;
-        let got = unpack(dpd);
-        println!("{got:#x}");
     }
 }
