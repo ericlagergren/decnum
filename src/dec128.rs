@@ -173,14 +173,14 @@ impl d128 {
         self.unbiased_exp() + digits - 1
     }
 
-    /// Returns the coefficient, less the MSD.
+    /// Returns the coefficient, less the MSD, as a DPD.
     const fn coeff(self) -> u128 {
         debug_assert!(self.is_finite());
 
         self.0 & Self::COEFF_MASK
     }
 
-    /// Returns the coefficient, including the MSD.
+    /// Returns the coefficient, including the MSD, as a DPD.
     #[allow(dead_code)] // TODO
     const fn full_coeff(self) -> u128 {
         self.coeff() | ((self.msd() as u128) << 110)
@@ -467,12 +467,12 @@ impl d128 {
         debug_assert!(!self.is_zero() && !other.is_zero());
 
         // Bias doesn't matter for this comparison.
-        let shift = self.exp().abs_diff(other.exp());
-        if shift as u32 > Self::DIGITS {
+        let shift = self.exp() as i16 - other.exp() as i16;
+        if shift.unsigned_abs() as u32 > Self::DIGITS {
             // The shift is larger than the maximum precision, so
             // the coefficients do not overlap. Therefore, the
             // larger exponent is the larger number.
-            return if self.exp() < other.exp() {
+            return if shift < 0 {
                 Some(Ordering::Less)
             } else {
                 Some(Ordering::Greater)
@@ -480,19 +480,11 @@ impl d128 {
         }
         // `shift` is in [0, DIGITS].
 
-        // TODO
-
-        // if self.msd() != other.msd() {
-        //     return if self.msd() < other.msd() {
-        //         Some(Ordering::Less)
-        //     } else {
-        //         Some(Ordering::Greater)
-        //     };
-        // }
-        // // The MSDs are the same.
-
-        // let lhs = self.coeff();
-        // let rhs = other.coeff();
+        let mut lhs = self.full_coeff();
+        let mut rhs = other.full_coeff();
+        if shift == 0 {
+            return Some(dpd::cmp120(lhs, rhs));
+        }
 
         None
     }
@@ -887,8 +879,35 @@ impl d128 {
         }
         // `i` is in [0, 1]
 
-        let mut coeff = 0;
-        let mut shift = 0;
+        let (mut coeff, mut i) = Self::parse_coeff(s, i, 0);
+        if i >= s.len() {
+            return Ok(Self::from_parts(sign, 0, coeff));
+        }
+        if s[0] == b'.' {
+            i += 1;
+            (coeff, i) = Self::parse_coeff(s, i, coeff);
+        }
+
+        let mut exp = 0;
+        if i < s.len() {
+            match s[i] {
+                b'e' | b'E' => {
+                    exp = match Self::parse_exp(s, i) {
+                        Ok(exp) => exp,
+                        Err(err) => return Err(err),
+                    };
+                }
+                _d => {
+                    //println!("d={d}");
+                    return Err(ParseError::invalid("invalid digit"));
+                }
+            }
+        }
+
+        Ok(Self::from_parts(sign, exp, coeff))
+    }
+
+    const fn parse_coeff(s: &[u8], mut i: usize, mut coeff: u128) -> (u128, usize) {
         while i + 4 < s.len() {
             // SAFETY: `i+4` < s.len(), so we cannot read past
             // the end of `s`.
@@ -899,36 +918,54 @@ impl d128 {
                 break;
             };
             let dpd = s.to_dpd() as u128;
-            coeff |= dpd << shift;
+            coeff <<= 10;
+            coeff |= dpd;
             i += 3;
-            shift += 10;
-            debug_assert!(shift <= 110);
         }
 
-        if i >= s.len() {
-            return Ok(Self::from_parts(sign, 0, coeff));
-        }
-
-        match s[0] {
-            // That was just the prefix.
-            b'.' => {}
-            b'e' | b'E' => {}
-            b'0'..=b'9' => {
-                // At most three more digits.
+        if i < s.len() {
+            // There might be at most three more digits.
+            let mut bcd = 0;
+            while i < s.len() {
+                let d = s[i].wrapping_sub(b'0');
+                if d >= 10 {
+                    break;
+                }
+                bcd <<= 4;
+                bcd |= d as u16;
+                i += 1;
             }
-            _d => {
-                //println!("d={d}");
-                return Err(ParseError::invalid("invalid digit"));
-            }
+            coeff |= dpd::pack(bcd) as u128;
         }
 
-        Ok(Self::from_parts(sign, 0, coeff))
+        (coeff, i)
     }
 
-    const fn parse_exp(s: &[u8]) -> Result<i16, ParseError> {
-        let mut i = 0;
-        while i < 3 && i < s.len() {}
-        todo!()
+    const fn parse_exp(s: &[u8], mut i: usize) -> Result<i16, ParseError> {
+        let neg = s[0] == b'-';
+        if matches!(s[0], b'-' | b'+') {
+            i += 1;
+        }
+        let mut exp: i16 = 0;
+        while i < s.len() {
+            let c = s[i];
+            if !matches!(c, b'0'..=b'9') {
+                return Err(ParseError::invalid("expected digit"));
+            }
+            exp = match exp.checked_mul(10) {
+                Some(exp) => exp,
+                None => return Err(ParseError::invalid("exp overflow")),
+            };
+            exp = match exp.checked_add((c - b'0') as i16) {
+                Some(exp) => exp,
+                None => return Err(ParseError::invalid("exp overflow")),
+            };
+            i += 1;
+        }
+        if neg {
+            exp = -exp;
+        }
+        Ok(exp)
     }
 
     const fn parse_special(sign: bool, s: &[u8]) -> Result<Self, ParseError> {

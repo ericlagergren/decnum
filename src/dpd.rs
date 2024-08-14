@@ -1,6 +1,6 @@
 //! Densely Packed Decimal conversion routines.
 
-use core::hint;
+use core::{cmp::Ordering, hint};
 
 use super::{
     bcd::{self, Pattern, Str3},
@@ -449,7 +449,7 @@ const fn muluh(x: u128, y: u128) -> u128 {
     x1 * y1 + w2 + (w1 >> 64)
 }
 
-/// Converts a binary number in [0,999] to a 10-bit DPD.
+/// Converts a binary number in [0, 999] to a 10-bit DPD.
 ///
 /// # Panics
 ///
@@ -471,6 +471,29 @@ pub(super) const fn sig_digits(dpd: u16) -> u32 {
     let mut sd = ((16 - nlz) + 3) / 4;
     sd |= (bcd == 0) as u32;
     sd
+}
+
+/// TODO
+pub const fn unpack120(dpd: u128) -> [u8; 34] {
+    todo!()
+}
+
+/// Compares two 120-bit DPDs.
+pub const fn cmp120(lhs: u128, rhs: u128) -> Ordering {
+    let mut i = 0;
+    while i < 10 {
+        let shift = 100 - (i * 10);
+        let lhs = unpack(((lhs >> shift) & 0x3ff) as u16);
+        let rhs = unpack(((rhs >> shift) & 0x3ff) as u16);
+        if lhs < rhs {
+            return Ordering::Less;
+        }
+        if lhs > rhs {
+            return Ordering::Greater;
+        }
+        i += 1;
+    }
+    Ordering::Equal
 }
 
 #[cfg(test)]
@@ -724,5 +747,15 @@ mod tests {
             n = want.0;
             i += 1;
         }
+    }
+
+    #[test]
+    fn test_shift() {
+        let bcd = 0x999;
+        let mut dpd = pack(bcd);
+        dpd <<= 4;
+        dpd &= 0x3ff;
+        let got = unpack(dpd);
+        println!("{got:#x}");
     }
 }
