@@ -1,6 +1,6 @@
 //! Densely Packed Decimal conversion routines.
 
-use core::{cmp::Ordering, hint};
+use core::hint;
 
 use super::{
     bcd::{self, Pattern, Str3},
@@ -471,45 +471,6 @@ pub(super) const fn sig_digits(dpd: u16) -> u32 {
     let mut sd = ((16 - nlz) + 3) / 4;
     sd |= (bcd == 0) as u32;
     sd
-}
-
-/// Compares two 120-bit DPDs.
-pub const fn cmp120(lhs: u128, rhs: u128) -> Ordering {
-    let mut i = 0;
-    while i < 10 {
-        let shift = 100 - (i * 10);
-        let lhs = unpack(((lhs >> shift) & 0x3ff) as u16);
-        let rhs = unpack(((rhs >> shift) & 0x3ff) as u16);
-        if lhs < rhs {
-            return Ordering::Less;
-        }
-        if lhs > rhs {
-            return Ordering::Greater;
-        }
-        i += 1;
-    }
-    Ordering::Equal
-}
-
-pub(super) struct Bcd32 {
-    hi: u128, // 32
-    lo: u16,  // 2
-}
-
-impl Bcd32 {
-    pub const fn from_dpd(dpd: u128) -> Self {
-        let mut hi = 0;
-        let mut lo = 0;
-        let mut i = 0;
-        // Unpack the first 30 digits.
-        while i < 10 {
-            let shift = 100 - (i * 10);
-            let bcd = unpack(((dpd >> shift) & 0x3ff) as u16);
-            i += 1;
-        }
-        // Unpack the remaining 4 digits.
-        Self { hi, lo }
-    }
 }
 
 #[cfg(test)]

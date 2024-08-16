@@ -135,6 +135,13 @@ pub(super) const fn is_3digits(v: u32) -> bool {
     (a | b) & 0x0080_8080 == 0
 }
 
+/// Is `v` four digits?
+pub(super) const fn is_4digits(v: u32) -> bool {
+    let a = v.wrapping_add(0x4646_4646);
+    let b = v.wrapping_sub(0x3030_3030);
+    (a | b) & 0x8080_8080 == 0
+}
+
 /// Reports whether `a == b` using ASCII case folding.
 pub(super) const fn equal_fold(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {

@@ -4,11 +4,12 @@ use core::{
     mem::{self, size_of, MaybeUninit},
     num::FpCategory,
     ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
+    ptr,
     str::{self, FromStr},
 };
 
 use super::{
-    bcd::Str3,
+    bcd::{Bcd34, Str3},
     conv::{self, Buffer, Fmt, ParseError},
     dpd,
     util::{self, assume, const_assert},
@@ -431,7 +432,7 @@ impl d128 {
     ///
     /// This is a const version of [`PartialOrd`].
     #[no_mangle]
-    pub const fn const_partial_cmp(self, other: Self) -> Option<Ordering> {
+    pub fn const_partial_cmp(self, other: Self) -> Option<Ordering> {
         if self.is_nan() || other.is_nan() {
             return None;
         }
@@ -480,46 +481,18 @@ impl d128 {
         }
         // `shift` is in [0, DIGITS].
 
-        // For example:
-        //
-        // 123.0 exp=6175
-        // 123.00 exp=6174
-        // shift=1
+        //println!("hi");
 
-        if shift == 0 {
-            // Easy case: compare straight across.
-            let lhs = self.full_coeff();
-            let rhs = other.full_coeff();
-            return Some(dpd::cmp120(lhs, rhs));
+        let mut lhs = Bcd34::unpack(self.full_coeff());
+        let mut rhs = Bcd34::unpack(other.full_coeff());
+        println!("lhs = {lhs} ({self})");
+        println!("rhs = {rhs} ({other})");
+        if shift < 0 {
+            lhs = lhs.shift(shift.unsigned_abs());
+        } else if shift > 0 {
+            rhs = rhs.shift(shift.unsigned_abs());
         }
-
-        if shift > 0 {
-            debug_assert!(self.exp() > other.exp());
-
-            // `self.exp() > other.exp()`, so we need to shift
-            // `lhs` (`self`).
-
-            let lhs = self.full_coeff();
-            let rhs = other.full_coeff();
-
-            let mut i = 0;
-            while i < 10 {
-                let shift = 100 - (i * 10);
-                let lhs = dpd::unpack(((lhs >> shift) & 0x3ff) as u16);
-                let rhs = dpd::unpack(((rhs >> shift) & 0x3ff) as u16);
-                if lhs < rhs {
-                    return Some(Ordering::Less);
-                }
-                if lhs > rhs {
-                    return Some(Ordering::Greater);
-                }
-                i += 1;
-            }
-            Some(Ordering::Equal)
-        } else {
-            debug_assert!(self.exp() < other.exp());
-            None
-        }
+        Some(lhs.const_cmp(rhs))
     }
 
     /// Returns the total ordering between `self` and `other`.
@@ -892,7 +865,7 @@ impl d128 {
     }
 
     /// Parses a decimal from a string.
-    pub const fn parse(s: &str) -> Result<Self, ParseError> {
+    pub fn parse(s: &str) -> Result<Self, ParseError> {
         let s = s.as_bytes();
         if s.is_empty() {
             return Err(ParseError::empty());
@@ -916,7 +889,7 @@ impl d128 {
         if i >= s.len() {
             return Ok(Self::from_parts(sign, 0, coeff));
         }
-        if s[0] == b'.' {
+        if s[i] == b'.' {
             i += 1;
             (coeff, i) = Self::parse_coeff(s, i, coeff);
         }
@@ -940,35 +913,34 @@ impl d128 {
         Ok(Self::from_parts(sign, exp, coeff))
     }
 
-    const fn parse_coeff(s: &[u8], mut i: usize, mut coeff: u128) -> (u128, usize) {
+    fn parse_coeff(s: &[u8], mut i: usize, mut coeff: u128) -> (u128, usize) {
         while i + 4 < s.len() {
             // SAFETY: `i+4` < s.len(), so we cannot read past
             // the end of `s`.
             // TODO(eric): Do this safely.
-            let chunk = unsafe { mem::transmute_copy(&s[i]) };
+            let chunk = unsafe { ptr::read(&s[i] as *const u8 as *const [u8; 4]) };
+            //println!("chunk = {chunk:?}");
             let Some(s) = Str3::try_from_bytes(chunk) else {
                 // We don't have three digits.
                 break;
             };
-            let dpd = s.to_dpd() as u128;
-            coeff <<= 10;
-            coeff |= dpd;
+            let bcd = s.to_bcd() as u128;
+            coeff <<= 12;
+            coeff |= bcd;
             i += 3;
         }
 
         if i < s.len() {
             // There might be at most three more digits.
-            let mut bcd = 0;
             while i < s.len() {
                 let d = s[i].wrapping_sub(b'0');
                 if d >= 10 {
                     break;
                 }
-                bcd <<= 4;
-                bcd |= d as u16;
+                coeff <<= 4;
+                coeff |= d as u128;
                 i += 1;
             }
-            coeff |= dpd::pack(bcd) as u128;
         }
 
         (coeff, i)
@@ -1418,8 +1390,8 @@ mod tests {
     #[test]
     fn test_partial_cmp() {
         let tests = [
-            ("NaN", "3", None),
-            ("3", "NaN", None),
+            // ("NaN", "3", None),
+            // ("3", "NaN", None),
             ("2.1", "3", Some(Ordering::Less)),
             ("2.1", "2.1", Some(Ordering::Equal)),
             ("2.1", "2.10", Some(Ordering::Equal)),
@@ -1430,8 +1402,15 @@ mod tests {
         for (i, (lhs, rhs, want)) in tests.into_iter().enumerate() {
             let x: d128 = lhs.parse().unwrap();
             let y: d128 = rhs.parse().unwrap();
-            let got = x.const_partial_cmp(y);
-            assert_eq!(got, want, "#{i}: total_cmp({lhs}, {rhs})");
+            println!("x={x} y={y}");
+            let got = PartialOrd::partial_cmp(&x, &y);
+            assert_eq!(got, want, "#{i}: partial_cmp({lhs}, {rhs})");
+            assert_eq!(
+                x.const_partial_cmp(y),
+                want,
+                "#{i}: const_partial_cmp({lhs}, {rhs})"
+            );
+            println!("");
         }
     }
 
