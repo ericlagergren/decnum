@@ -137,9 +137,28 @@ pub(super) const fn is_3digits(v: u32) -> bool {
 
 /// Is `v` four digits?
 pub(super) const fn is_4digits(v: u32) -> bool {
+    check_4digits(v) == 0
+}
+
+/// Returns a mask over the digits in `v`.
+///
+/// Each byte is 0x00 if it is a digit, or 0x80 otherwise.
+pub(super) const fn check_4digits(v: u32) -> u32 {
     let a = v.wrapping_add(0x4646_4646);
     let b = v.wrapping_sub(0x3030_3030);
-    (a | b) & 0x8080_8080 == 0
+    (a | b) & 0x8080_8080
+}
+
+pub(super) const fn find_invalid_4digit(v: u32) -> (u8, usize) {
+    // a b c d
+    // 4 8 8 8 = 28
+    //   4 8 8 = 20
+    //     4 8 = 12
+    //       4 = 4
+    let ntz = v.trailing_zeros() - 4;
+    let d = (v >> (ntz - 4)) as u8;
+    let idx = (ntz / 8) as usize;
+    (d, idx)
 }
 
 /// Reports whether `a == b` using ASCII case folding.

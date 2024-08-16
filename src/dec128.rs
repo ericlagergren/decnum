@@ -1,15 +1,14 @@
 use core::{
     cmp::Ordering,
     fmt,
-    mem::{self, size_of, MaybeUninit},
+    mem::{size_of, MaybeUninit},
     num::FpCategory,
     ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
-    ptr,
     str::{self, FromStr},
 };
 
 use super::{
-    bcd::{Bcd34, Str3},
+    bcd::{Bcd34, Str3, Str4},
     conv::{self, Buffer, Fmt, ParseError},
     dpd,
     util::{self, assume, const_assert},
@@ -866,108 +865,193 @@ impl d128 {
 
     /// Parses a decimal from a string.
     pub fn parse(s: &str) -> Result<Self, ParseError> {
-        let s = s.as_bytes();
+        let mut s = s.as_bytes();
         if s.is_empty() {
             return Err(ParseError::empty());
         }
-        if s.len() > Self::MAX_STR_LEN {
-            return Err(ParseError::invalid("too long"));
-        }
-        // `s.len()` is in [1, MAX_LEN].
 
-        let mut i = 0;
-        let sign = s[0] == b'-';
-        match s[0] {
-            b'-' | b'+' => i += 1,
-            b'0'..=b'9' => {}
-            b'i' | b'I' | b'n' | b'N' => return Self::parse_special(sign, s),
-            _ => return Err(ParseError::invalid("expected digit or special")),
-        }
-        // `i` is in [0, 1]
-
-        let (mut coeff, mut i) = Self::parse_coeff(s, i, 0);
-        if i >= s.len() {
-            return Ok(Self::from_parts(sign, 0, coeff));
-        }
-        if s[i] == b'.' {
-            i += 1;
-            (coeff, i) = Self::parse_coeff(s, i, coeff);
+        let mut sign = false;
+        if let Some((c @ (b'-' | b'+'), rest)) = s.split_first() {
+            sign = *c == b'-';
+            s = rest;
         }
 
-        let mut exp = 0;
-        if i < s.len() {
-            match s[i] {
-                b'e' | b'E' => {
-                    exp = match Self::parse_exp(s, i) {
-                        Ok(exp) => exp,
-                        Err(err) => return Err(err),
-                    };
-                }
-                _d => {
-                    //println!("d={d}");
-                    return Err(ParseError::invalid("invalid digit"));
-                }
-            }
+        match s.first() {
+            Some(b'0'..=b'9') => {}
+            Some(b'i' | b'I' | b'n' | b'N') => return Self::parse_special(sign, s),
+            Some(_) => return Err(ParseError::invalid("expected digit or special")),
+            None => return Err(ParseError::invalid("unexpected end of input")),
         }
 
+        let (coeff, dot, s) = match Self::parse_coeff(s) {
+            Ok((c, e, r)) => (c, e, r),
+            Err(err) => return Err(err),
+        };
+        let mut exp = match Self::parse_exp(s) {
+            Ok(exp) => exp,
+            Err(err) => return Err(err),
+        };
+        if let Some(dot) = dot {
+            exp -= dot as i16;
+        }
         Ok(Self::from_parts(sign, exp, coeff))
     }
 
-    fn parse_coeff(s: &[u8], mut i: usize, mut coeff: u128) -> (u128, usize) {
-        while i + 4 < s.len() {
-            // SAFETY: `i+4` < s.len(), so we cannot read past
-            // the end of `s`.
-            // TODO(eric): Do this safely.
-            let chunk = unsafe { ptr::read(&s[i] as *const u8 as *const [u8; 4]) };
-            //println!("chunk = {chunk:?}");
-            let Some(s) = Str3::try_from_bytes(chunk) else {
-                // We don't have three digits.
-                break;
-            };
-            let bcd = s.to_bcd() as u128;
-            coeff <<= 12;
-            coeff |= bcd;
-            i += 3;
+    /// Parses the coefficient.
+    ///
+    /// It returns the coefficient, position of the dot, and
+    /// unused remainder of the input.
+    #[no_mangle]
+    fn parse_coeff(mut s: &[u8]) -> Result<(u128, Option<usize>, &[u8]), ParseError> {
+        if s.is_empty() {
+            return Err(ParseError::invalid("empty `s`"));
         }
 
-        if i < s.len() {
-            // There might be at most three more digits.
-            while i < s.len() {
-                let d = s[i].wrapping_sub(b'0');
-                if d >= 10 {
-                    break;
+        let mut bcd = Bcd34::zero();
+        let mut dot = None;
+        let mut nd = 0; // number of digits
+        let mut nlz = 0; // number of leading zeros
+
+        // Skip insignificant leading zeros.
+        while let Some((&b'0', rest)) = s.split_first() {
+            s = rest;
+            nlz += 1;
+        }
+        if let Some((&b'.', rest)) = s.split_first() {
+            dot = Some(nlz);
+            s = rest;
+        }
+
+        let (mut lo, mut hi): (&[u8], &[u8]) = match s.split_at_checked(Bcd34::LO_DIGITS) {
+            Some((lo, hi)) => (lo, hi),
+            None => (s, &[]),
+        };
+        debug_assert!(hi.len() <= Bcd34::HI_DIGITS);
+
+        if s.len() > 32 {
+            // Max 2 iters = 2 digits
+            let iters = 32 - s.len();
+            while iters > 0 {
+                if let Some((&c, rest)) = s.split_first() {
+                    let d = c.wrapping_sub(b'0');
+                    if d >= 10 {
+                        if c != b'.' {
+                            return Ok((bcd.pack(), dot, s));
+                        }
+                        if dot.is_some() {
+                            return Err(ParseError::invalid("duplicate dot"));
+                        }
+                        dot = Some(nd);
+                        s = rest;
+                        continue;
+                    }
+                    bcd.hi <<= 4;
+                    bcd.hi |= d;
+                    s = rest;
+                    nd += 1;
                 }
-                coeff <<= 4;
-                coeff |= d as u128;
-                i += 1;
+                iters -= 1;
+            }
+
+            // Max 2 iters = 2 digits
+            while let Some((&c, rest)) = s.split_first() {
+                let d = c.wrapping_sub(b'0');
+                if d >= 10 {
+                    if c != b'.' {
+                        return Ok((bcd.pack(), dot, s));
+                    }
+                    if dot.is_some() {
+                        return Err(ParseError::invalid("duplicate dot"));
+                    }
+                    dot = Some(nd);
+                    s = rest;
+                    continue;
+                }
+                bcd.hi <<= 4;
+                bcd.hi |= d;
+                s = rest;
+                nd += 1;
             }
         }
 
-        (coeff, i)
+        // Max floor(34/4) = 8 iters = 32 digits
+        while let Some((chunk, rest)) = lo.split_first_chunk() {
+            lo = rest;
+            let s = match Str4::try_from_bytes(*chunk) {
+                Ok(s) => s,
+                Err(err) => {
+                    // Not four ASCII digits.
+                    if err.digit() != b'.' {
+                        // TODO: rest
+                        return Ok((bcd.pack(), dot, &[]));
+                    }
+                    if dot.is_some() {
+                        return Err(ParseError::invalid("duplicate dot"));
+                    }
+                    dot = Some(nd + err.idx());
+                    break;
+                }
+            };
+            bcd.lo <<= 16;
+            bcd.lo |= s.to_bcd() as u128;
+        }
+
+        // let (mut lo, rest) = match lo.split_at_checked(3) {
+        //     Some((a, b)) => (a, b),
+        //     None => todo!(),
+        // };
+
+        // Max 3 iters = 3 digits
+        while let Some((&c, rest)) = lo.split_first() {
+            lo = rest;
+
+            let d = c.wrapping_sub(b'0');
+            if d >= 10 {
+                if c != b'.' {
+                    // TODO: rest
+                    return Ok((bcd.pack(), dot, &[]));
+                }
+                if dot.is_some() {
+                    return Err(ParseError::invalid("duplicate dot"));
+                }
+                dot = Some(nd);
+                continue;
+            }
+            bcd.lo <<= 4;
+            bcd.lo |= d as u128;
+            nd += 1;
+        }
+
+        let coeff = bcd.pack();
+        Ok((coeff, dot, rest))
     }
 
-    const fn parse_exp(s: &[u8], mut i: usize) -> Result<i16, ParseError> {
-        let neg = s[0] == b'-';
-        if matches!(s[0], b'-' | b'+') {
-            i += 1;
+    const fn parse_exp(mut s: &[u8]) -> Result<i16, ParseError> {
+        if s.is_empty() {
+            return Ok(0);
+        }
+        let mut sign = false;
+        if let Some((c @ (b'-' | b'+'), rest)) = s.split_first() {
+            sign = *c == b'-';
+            s = rest;
         }
         let mut exp: i16 = 0;
-        while i < s.len() {
-            let c = s[i];
-            if !matches!(c, b'0'..=b'9') {
+        while let Some((&c, rest)) = s.split_first() {
+            let d = c.wrapping_sub(b'0');
+            if d >= 10 {
                 return Err(ParseError::invalid("expected digit"));
             }
             exp = match exp.checked_mul(10) {
                 Some(exp) => exp,
                 None => return Err(ParseError::invalid("exp overflow")),
             };
-            exp = match exp.checked_add((c - b'0') as i16) {
+            exp = match exp.checked_add(d as i16) {
                 Some(exp) => exp,
                 None => return Err(ParseError::invalid("exp overflow")),
             };
-            i += 1;
+            s = rest;
         }
-        if neg {
+        if sign {
             exp = -exp;
         }
         Ok(exp)

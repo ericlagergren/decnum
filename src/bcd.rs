@@ -4,7 +4,7 @@ use core::{
     cmp::Ordering,
     fmt,
     hash::Hash,
-    hint, mem, ptr,
+    hint,
     str::{self, FromStr},
 };
 
@@ -420,14 +420,24 @@ bcd_int_impl!(Bcd10, 10, u64, u64, u32);
 /// A 34 digit BCD.
 #[derive(Copy, Clone, Debug)]
 pub(super) struct Bcd34 {
-    lo: u128, // 32 digits = 128 bits
-    hi: u8,   // 2 digits = 8 bits
+    pub lo: u128, // 32 digits = 128 bits
+    pub hi: u8,   // 2 digits = 8 bits
 }
 
 impl Bcd34 {
     const fn debug_check(self) {
         debug_assert!(is_valid_u128(self.lo));
         debug_assert!(is_valid_u8(self.hi));
+    }
+
+    /// The number of digits in `lo`.
+    pub const LO_DIGITS: usize = 32;
+    /// The number of digits in `hi`.
+    pub const HI_DIGITS: usize = 2;
+
+    /// Returns the zero BCD.
+    pub const fn zero() -> Self {
+        Self { lo: 0, hi: 0 }
     }
 
     /// Creates a BCD from a DPD.
@@ -474,7 +484,13 @@ impl Bcd34 {
             i += 1;
         }
 
-        let bcd = (((self.hi & 0xf) as u16) << 8) | ((self.lo >> 120) as u16);
+        let bcd = (((self.hi & 0x00f) as u16) << 8) | ((self.lo >> 120) as u16);
+        // This check removes the bounds checks from the call to
+        // `dpd::pack`.
+        //
+        // SAFETY: `self.hi` and `self.lo` never have any invalid
+        // digits, so its maximum value is 0x999.
+        unsafe { assume(bcd <= 0x999) }
         dpd |= (dpd::pack(bcd) as u128) << 100;
         dpd |= ((self.hi >> 4) as u128) << 110;
 
@@ -483,67 +499,67 @@ impl Bcd34 {
 
     /// Parses a BCD from a string.
     #[no_mangle]
-    pub fn parse(s: &str) -> Result<Self, ParseBcdError> {
-        let s = s.as_bytes();
-        if s.is_empty() || s.len() > 34 {
+    pub const fn parse(s: &str) -> Result<Self, ParseBcdError> {
+        let mut s = s.as_bytes();
+        if s.is_empty() {
             return Err(ParseBcdError(()));
         }
-        // `s.len()` is in [0, 34].
 
-        let mut lo = 0;
-        let mut hi = 0;
-        let mut i = 0;
-
-        // Max floor(34/4) = 8 iters = 32 digits
-        while i + 4 < s.len() {
-            // SAFETY: `i+4` < s.len(), so we cannot read past
-            // the end of `s`.
-            // TODO(eric): Do this safely.
-            let chunk = unsafe { ptr::read(&s[i] as *const u8 as *const [u8; 4]) };
-            let Some(s) = Str4::try_from_bytes(chunk) else {
-                break;
-            };
-            lo <<= 16;
-            lo |= s.to_bcd() as u128;
-            i += 4;
+        // Skip leading zeros.
+        while let Some((&b'0', rest)) = s.split_first() {
+            s = rest;
         }
-        debug_assert!(i <= 32);
+        if s.len() > 34 {
+            return Err(ParseBcdError(()));
+        }
+        // `s.len()` is in [0, 34]
 
-        println!("i={i}");
-        println!("lo={lo:#x}");
+        let mut bcd = Self::zero();
 
-        // Max 3 iters.
-        let mut bcd = 0;
-        while i < s.len() {
-            let d = s[i].wrapping_sub(b'0');
+        let (mut lo, hi): (&[u8], &[u8]) = match s.split_at_checked(Self::LO_DIGITS) {
+            Some((lo, hi)) => (lo, hi),
+            None => (s, &[]),
+        };
+        debug_assert!(hi.len() <= Self::HI_DIGITS);
+
+        // Max 2 iters = 2 digits
+        let mut i = 0;
+        while i < hi.len() {
+            let d = hi[i].wrapping_sub(b'0');
             if d >= 10 {
                 return Err(ParseBcdError(()));
             }
-            bcd <<= 4;
-            bcd |= d as u16;
+            bcd.hi <<= 4;
+            bcd.hi |= d;
             i += 1;
         }
-        debug_assert!(bcd & 0xf000 == 0);
 
-        if i == 34 {
-            hi = (lo >> 120) as u8;
-            lo <<= 8;
-            lo |= (bcd & 0x00ff) as u128;
-        } else if i == 33 {
-            hi = (lo >> 124) as u8;
-            lo <<= 4;
-            lo |= (bcd & 0x00f) as u128;
-        } else if i == 32 {
-            debug_assert!(bcd == 0);
-        } else if i < 32 {
-            lo <<= (32 - i) * 4;
-            lo |= bcd as u128;
+        // Max floor(34/4) = 8 iters = 32 digits
+        while let Some((chunk, rest)) = lo.split_first_chunk() {
+            let Ok(s) = Str4::try_from_bytes(*chunk) else {
+                // Not four ASCII digits.
+                return Err(ParseBcdError(()));
+            };
+            bcd.lo <<= 16;
+            bcd.lo |= s.to_bcd() as u128;
+            lo = rest;
         }
 
-        debug_assert!(is_valid_u128(lo));
-        debug_assert!(is_valid_u8(hi));
+        // Max 3 iters = 3 digits
+        let mut i = 0;
+        while i < lo.len() {
+            let d = lo[i].wrapping_sub(b'0');
+            if d >= 10 {
+                return Err(ParseBcdError(()));
+            }
+            bcd.lo <<= 4;
+            bcd.lo |= d as u128;
+            i += 1;
+        }
 
-        Ok(Self { lo, hi: 0 })
+        bcd.debug_check();
+
+        Ok(bcd)
     }
 
     /// Shifts the BCD to the left by `shift` digits.
@@ -740,56 +756,58 @@ impl fmt::Display for Str3 {
     }
 }
 
-/// A 16-bit BCD converted to a four-byte ASCII string.
+/// A string containing four ASCII digits.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct Str4(u32);
 
 impl Str4 {
-    /// Reads a string from four ASCII bytes in little-endian
+    /// Reads a string from four ASCII digits in little-endian
     /// order.
-    pub const fn try_from_u32(v: u32) -> Option<Self> {
-        if !conv::is_4digits(v) {
-            None
+    pub const fn try_from_u32(v: u32) -> Result<Self, InvalidDigit> {
+        let mask = conv::check_4digits(v);
+        if mask == 0 {
+            Ok(Self(v))
         } else {
-            Some(Self(v))
+            Err(InvalidDigit(mask))
         }
     }
 
-    /// Reads a string from four ASCII bytes.
-    pub const fn try_from_bytes(b: [u8; 4]) -> Option<Self> {
+    /// Reads a string from four ASCII digits.
+    pub const fn try_from_bytes(b: [u8; 4]) -> Result<Self, InvalidDigit> {
         Self::try_from_u32(u32::from_le_bytes(b))
     }
 
-    /// Converts a 16-bit BCD to a string.
+    /// Creates a string from a 16-bit BCD.
     pub const fn from_bcd(bcd: u16) -> Self {
         debug_assert!(is_valid_u16(bcd));
 
         // Rewrite 0x00001234
         //      as 0x04030201
         let mut w = 0;
-        w |= ((bcd & 0x000f) as u32) << (6 * 4);
-        w |= ((bcd & 0x00f0) as u32) << (3 * 4);
+        w |= ((bcd & 0x000f) as u32) << 24;
+        w |= ((bcd & 0x00f0) as u32) << 12;
         w |= (bcd & 0x0f00) as u32;
-        w |= ((bcd & 0xf000) as u32) >> (3 * 4);
+        w |= ((bcd & 0xf000) as u32) >> 12;
         w |= 0x30303030; // b'0' | b'0'<<8 | ...
         Self(w)
     }
 
-    /// Converts the string to bytes.
+    /// Converts the string to four ASCII digits.
     pub const fn to_bytes(self) -> [u8; 4] {
         self.0.to_le_bytes()
     }
 
-    /// Converts the string into a 16-bit BCD.
+    /// Converts the string to a 16-bit BCD.
     pub const fn to_bcd(self) -> u16 {
         // Rewrite 0x04030201
         //      as 0x00001234
         let mut w = 0;
-        w |= ((self.0 & 0x0f000000) >> (6 * 4)) as u16;
-        w |= ((self.0 & 0x000f0000) >> (3 * 4)) as u16;
+        w |= ((self.0 & 0x0f000000) >> 24) as u16;
+        w |= ((self.0 & 0x000f0000) >> 12) as u16;
         w |= (self.0 & 0x00000f00) as u16;
-        w |= ((self.0 & 0x0000000f) << (3 * 4)) as u16;
+        w |= ((self.0 & 0x0000000f) << 12) as u16;
+        debug_assert!(is_valid_u16(w));
         w
     }
 
@@ -824,6 +842,34 @@ impl fmt::Display for Str4 {
         let b = &self.to_bytes();
         let s = unsafe { str::from_utf8_unchecked(b) };
         write!(f, "{s}")
+    }
+}
+
+/// An invalid digit.
+#[derive(Copy, Clone, Debug)]
+pub struct InvalidDigit(u32);
+
+impl InvalidDigit {
+    /// Returns the invalid digit.
+    pub const fn digit(self) -> u8 {
+        // a b c d
+        // 4 8 8 8 = 28
+        //   4 8 8 = 20
+        //     4 8 = 12
+        //       4 = 4
+        let ntz = self.0.trailing_zeros() - 4;
+        (self.0 >> (ntz - 4)) as u8
+    }
+
+    /// Returns the index of the invalid digit.
+    pub const fn idx(self) -> usize {
+        // a b c d
+        // 4 8 8 8 = 28
+        //   4 8 8 = 20
+        //     4 8 = 12
+        //       4 = 4
+        let ntz = self.0.trailing_zeros() - 4;
+        (ntz / 8) as usize
     }
 }
 
@@ -1103,6 +1149,10 @@ mod tests {
             (123, 123, Ordering::Equal),
             (123, 122, Ordering::Greater),
             (12345, 12345, Ordering::Equal),
+            (10u128.pow(30) - 1, 10u128.pow(30) - 1, Ordering::Equal),
+            (10u128.pow(31) - 1, 10u128.pow(31) - 1, Ordering::Equal),
+            (10u128.pow(32) - 1, 10u128.pow(32) - 1, Ordering::Equal),
+            (10u128.pow(33) - 1, 10u128.pow(33) - 1, Ordering::Equal),
             (10u128.pow(34) - 1, 10u128.pow(34) - 1, Ordering::Equal),
             (10u128.pow(34) - 2, 10u128.pow(34) - 1, Ordering::Less),
             (10u128.pow(34) - 1, 10u128.pow(33) - 1, Ordering::Greater),
@@ -1122,13 +1172,8 @@ mod tests {
             assert_eq!(lhs.pack(), lhs_dpd, "#{i}");
             assert_eq!(rhs.pack(), rhs_dpd, "#{i}");
 
-            assert_eq!(
-                Bcd34::parse(&lhs.to_string()).unwrap(),
-                lhs,
-                "#{i}: {rhs} {lhs}"
-            );
+            assert_eq!(Bcd34::parse(&lhs.to_string()).unwrap(), lhs, "#{i}");
             assert_eq!(Bcd34::parse(&rhs.to_string()).unwrap(), rhs, "#{i}");
-            println!("");
         }
     }
 }
