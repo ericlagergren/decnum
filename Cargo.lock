@@ -392,13 +392,13 @@ dependencies = [
 name = "decnum"
 version = "0.1.0"
 dependencies = [
+ "bitflags 2.6.0",
  "cfg-if",
  "criterion",
  "dec",
  "decnum",
  "decnumber-sys",
  "itoa",
- "memchr",
  "rand",
  "ruint",
 ]

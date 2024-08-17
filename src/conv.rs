@@ -149,18 +149,6 @@ pub(super) const fn check_4digits(v: u32) -> u32 {
     (a | b) & 0x8080_8080
 }
 
-pub(super) const fn find_invalid_4digit(v: u32) -> (u8, usize) {
-    // a b c d
-    // 4 8 8 8 = 28
-    //   4 8 8 = 20
-    //     4 8 = 12
-    //       4 = 4
-    let ntz = v.trailing_zeros() - 4;
-    let d = (v >> (ntz - 4)) as u8;
-    let idx = (ntz / 8) as usize;
-    (d, idx)
-}
-
 /// Reports whether `a == b` using ASCII case folding.
 pub(super) const fn equal_fold(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {

@@ -31,6 +31,7 @@
 
 pub mod bcd;
 mod conv;
+mod ctx;
 mod dec128;
 pub mod dpd;
 //mod macros;
@@ -39,5 +40,6 @@ mod tables;
 mod util;
 
 pub use conv::*;
+pub use ctx::*;
 pub use dec128::d128;
 //pub use uint96::*;

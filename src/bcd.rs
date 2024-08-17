@@ -499,7 +499,7 @@ impl Bcd34 {
 
     /// Parses a BCD from a string.
     #[no_mangle]
-    pub const fn parse(s: &str) -> Result<Self, ParseBcdError> {
+    pub fn parse(s: &str) -> Result<Self, ParseBcdError> {
         let mut s = s.as_bytes();
         if s.is_empty() {
             return Err(ParseBcdError(()));
@@ -516,22 +516,25 @@ impl Bcd34 {
 
         let mut bcd = Self::zero();
 
-        let (mut lo, hi): (&[u8], &[u8]) = match s.split_at_checked(Self::LO_DIGITS) {
-            Some((lo, hi)) => (lo, hi),
-            None => (s, &[]),
+        let (mut hi, mut lo): (&[u8], &[u8]) = {
+            if s.len() > 32 {
+                s.split_at(s.len() - 32)
+            } else {
+                (&[], s)
+            }
         };
         debug_assert!(hi.len() <= Self::HI_DIGITS);
+        debug_assert!(lo.len() <= Self::LO_DIGITS);
 
         // Max 2 iters = 2 digits
-        let mut i = 0;
-        while i < hi.len() {
-            let d = hi[i].wrapping_sub(b'0');
+        while let Some((&c, rest)) = hi.split_first() {
+            let d = c.wrapping_sub(b'0');
             if d >= 10 {
                 return Err(ParseBcdError(()));
             }
             bcd.hi <<= 4;
             bcd.hi |= d;
-            i += 1;
+            hi = rest;
         }
 
         // Max floor(34/4) = 8 iters = 32 digits
@@ -546,15 +549,14 @@ impl Bcd34 {
         }
 
         // Max 3 iters = 3 digits
-        let mut i = 0;
-        while i < lo.len() {
-            let d = lo[i].wrapping_sub(b'0');
+        while let Some((&c, rest)) = lo.split_first() {
+            let d = c.wrapping_sub(b'0');
             if d >= 10 {
                 return Err(ParseBcdError(()));
             }
             bcd.lo <<= 4;
             bcd.lo |= d as u128;
-            i += 1;
+            lo = rest;
         }
 
         bcd.debug_check();
@@ -623,10 +625,10 @@ impl PartialOrd for Bcd34 {
 impl fmt::Display for Bcd34 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { lo, hi } = *self;
-        write!(f, "{:x}", lo)?;
         if hi > 0 {
             write!(f, "{:x}", hi)?;
         }
+        write!(f, "{:x}", lo)?;
         Ok(())
     }
 }
@@ -1156,6 +1158,16 @@ mod tests {
             (10u128.pow(34) - 1, 10u128.pow(34) - 1, Ordering::Equal),
             (10u128.pow(34) - 2, 10u128.pow(34) - 1, Ordering::Less),
             (10u128.pow(34) - 1, 10u128.pow(33) - 1, Ordering::Greater),
+            (
+                9111222333444555666777888999000111,
+                9111222333444555666777888999000111,
+                Ordering::Equal,
+            ),
+            (
+                8111222333444555666777888999000111,
+                9111222333444555666777888999000111,
+                Ordering::Less,
+            ),
         ];
         for (i, &(lhs_bin, rhs_bin, want)) in TESTS.iter().enumerate() {
             let lhs_dpd = dpd::pack_bin_u113(lhs_bin);
