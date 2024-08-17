@@ -907,76 +907,106 @@ impl d128 {
             return Err(ParseError::invalid("empty `s`"));
         }
 
-        let mut bcd = Bcd34::zero();
-        let mut lo = 0;
-        let mut hi = 0;
-        let mut dot = None;
-        let mut nd = 0; // number of digits
-        let mut nlz = 0; // number of leading zeros
+        // Make two passes over `s`. The first pass trims leading
+        // zeros, finds the dot, and validates each character.
+        // The second pass parses the validated characters as
+        // a BCD, then converts the BCD to a DPD.
 
         // Skip insignificant leading zeros.
         while let Some((&b'0', rest)) = s.split_first() {
             s = rest;
-            nlz += 1;
         }
-        if let Some((&b'.', rest)) = s.split_first() {
-            dot = Some(nlz);
-            s = rest;
+        if s.is_empty() {
+            return Ok((0, None, &[]));
         }
 
-        let (mut hi, mut lo): (&[u8], &[u8]) = {
-            if s.len() > 32 {
-                s.split_at(s.len() - 32)
-            } else {
-                (&[], s)
+        let (pre, post, rest, bcd) = {
+            let mut bcd = Bcd34::zero();
+            let mut pre: &[u8] = &[];
+            let mut post: &[u8] = &[];
+            let mut rest: &[u8] = &[];
+            let mut dot = false;
+            let mut i = 0;
+            while i < s.len() {
+                let c = s[i];
+                match c {
+                    b'0'..=b'9' => {
+                        bcd.lo <<= 4;
+                        bcd.lo |= (c - b'0') as u128;
+                    }
+                    b'.' => {
+                        if dot {
+                            return Err(ParseError::invalid("duplicate dot"));
+                        }
+                        dot = true;
+                        (pre, s) = s.split_at(i);
+                    }
+                    _ => {
+                        (post, rest) = s.split_at(i);
+                        break;
+                    }
+                }
+                i += 1;
             }
+            if !dot && pre.is_empty() {
+                pre = post;
+                post = &[];
+            }
+            (pre, post, rest, bcd)
         };
-        debug_assert!(hi.len() <= Bcd34::HI_DIGITS);
-        debug_assert!(lo.len() <= Bcd34::LO_DIGITS);
 
-        // let (mut lo, rest): (&[u8], &[u8]) = match s.split_at_checked(Bcd34::LO_DIGITS) {
-        //     Some((lo, rest)) => (lo, rest),
-        //     None => (s, &[]),
-        // };
-        // let (mut hi, rest): (&[u8], &[u8]) = match rest.split_at_checked(Bcd34::HI_DIGITS) {
-        //     Some((hi, rest)) => (hi, rest),
-        //     None => (s, &[]),
-        // };
-
-        // Max floor(34/4) = 8 iters = 32 digits
-        while let Some((chunk, rest)) = lo.split_first_chunk() {
-            let Ok(str) = Str4::try_from_bytes(*chunk) else {
-                // Not four ASCII digits. Fall back to
-                // digit-by-digit parsing.
-                break;
-            };
-            bcd.lo <<= 16;
-            bcd.lo |= str.to_bcd() as u128;
-            lo = rest;
-            nd += 4;
-        }
-
-        while let Some((&c, rest)) = s.split_first() {
-            let d = c.wrapping_sub(b'0');
-            if d >= 10 {
-                if c != b'.' {
-                    return Ok((bcd.pack(), dot, s));
+        fn parse_bcd(mut bcd: Bcd34, mut s: &[u8], num_hi: usize) -> Bcd34 {
+            // If `bcd.hi` < 9 then we've written either zero or
+            // one digits to `bcd.hi`.
+            if num_hi > 0 && bcd.hi < 9 {
+                // Max 2 iters = 2 digits
+                let mut i = 0;
+                while i < num_hi {
+                    if let Some((&c, rest)) = s.split_first() {
+                        bcd.hi <<= 4;
+                        bcd.hi |= c - b'0';
+                        s = rest;
+                    }
+                    i += 1;
                 }
-                if dot.is_some() {
-                    return Err(ParseError::invalid("duplicate dot"));
-                }
-                dot = Some(nd);
-                s = rest;
-                continue;
             }
-            bcd.lo <<= 4;
-            bcd.lo |= d as u128;
-            s = rest;
-            nd += 1;
+
+            // Max floor(34/4) = 8 iters = 32 digits
+            while let Some((chunk, rest)) = s.split_first_chunk() {
+                // SAFETY: We've already checked that each byte
+                // in `s` is a valid digit.
+                let str = unsafe { Str4::from_bytes_unchecked(*chunk) };
+                bcd.lo <<= 16;
+                bcd.lo |= str.to_bcd() as u128;
+                s = rest;
+            }
+
+            while let Some((&c, rest)) = s.split_first() {
+                bcd.lo <<= 4;
+                bcd.lo |= (c - b'0') as u128;
+                s = rest;
+            }
+
+            bcd
         }
 
-        let coeff = bcd.pack();
-        Ok((coeff, dot, s))
+        let dot = if post.is_empty() {
+            None
+        } else {
+            Some(pre.len())
+        };
+
+        let nd = pre.len() + post.len();
+        if nd <= 32 {
+            return Ok((bcd.pack(), dot, rest));
+        }
+        let num_hi = 32 - nd;
+
+        let mut bcd = Bcd34::zero();
+        bcd = parse_bcd(bcd, pre, num_hi);
+        bcd = parse_bcd(bcd, post, num_hi);
+
+        Ok((bcd.pack(), dot, rest))
     }
 
     const fn parse_exp(mut s: &[u8]) -> Result<i16, ParseError> {

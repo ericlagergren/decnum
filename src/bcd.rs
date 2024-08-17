@@ -780,6 +780,15 @@ impl Str4 {
         Self::try_from_u32(u32::from_le_bytes(b))
     }
 
+    /// Reads a string from four ASCII digits.
+    ///
+    /// # Safety
+    ///
+    /// All four bytes in `b` must be ASCII digits.
+    pub const unsafe fn from_bytes_unchecked(b: [u8; 4]) -> Self {
+        Self(u32::from_le_bytes(b))
+    }
+
     /// Creates a string from a 16-bit BCD.
     pub const fn from_bcd(bcd: u16) -> Self {
         debug_assert!(is_valid_u16(bcd));
