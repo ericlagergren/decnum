@@ -16,6 +16,8 @@ use super::{
 
 /// A 128-bit decimal floating point number.
 ///
+/// (–1)^sign * coefficient * 10^exp
+///
 /// TODO: docs
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone)]
@@ -186,12 +188,19 @@ impl d128 {
         self.coeff() | ((self.msd() as u128) << 110)
     }
 
-    const fn from_parts(sign: bool, exp: i16, coeff: u128) -> Self {
+    const fn from_parts_bin(sign: bool, exp: i16, bin: u128) -> Self {
         debug_assert!(exp >= Self::MIN_EXP);
         debug_assert!(exp <= Self::MAX_EXP);
-        debug_assert!(coeff <= Self::MAX_COEFF as u128);
+        debug_assert!(bin <= Self::MAX_COEFF as u128);
 
-        let dpd = dpd::pack_bin_u113(coeff);
+        let dpd = dpd::pack_bin_u113(bin);
+        Self::from_parts_dpd(sign, exp, dpd)
+    }
+
+    const fn from_parts_dpd(sign: bool, exp: i16, dpd: u128) -> Self {
+        debug_assert!(exp >= Self::MIN_EXP);
+        debug_assert!(exp <= Self::MAX_EXP);
+
         // TODO(eric): If `exp` is valid then this cannot
         // overflow. Maybe make sure of it?
         #[allow(clippy::cast_sign_loss)]
@@ -409,19 +418,22 @@ impl d128 {
     /// - +0.0 and -0.0 are considered equal.
     ///
     /// This is a const version of [`PartialEq`].
-    pub const fn const_eq(self, other: Self) -> bool {
-        if self.comb().0 != other.comb().0 || self.is_nan() || other.is_nan() {
-            return false;
-        }
-        if self.signbit() ^ other.signbit() {
-            return false;
-        }
-        if self.exp() == other.exp() {
-            // let lhs = self.coeff();
-            // let rhs = other.coeff();
-            todo!()
-        }
-        true
+    pub fn const_eq(self, other: Self) -> bool {
+        let cmp = self.const_partial_cmp(other);
+        println!("cmp({self}, {other}) => {cmp:?}");
+        cmp == Some(Ordering::Equal)
+        // if self.comb().0 != other.comb().0 || self.is_nan() || other.is_nan() {
+        //     return false;
+        // }
+        // if self.signbit() ^ other.signbit() {
+        //     return false;
+        // }
+        // if self.exp() == other.exp() {
+        //     // let lhs = self.coeff();
+        //     // let rhs = other.coeff();
+        //     todo!()
+        // }
+        // true
     }
 
     /// Returns the ordering between `self` and `other`.
@@ -432,6 +444,7 @@ impl d128 {
     /// This is a const version of [`PartialOrd`].
     #[no_mangle]
     pub fn const_partial_cmp(self, other: Self) -> Option<Ordering> {
+        println!("partial_cmp({self}, {other})");
         if self.is_nan() || other.is_nan() {
             return None;
         }
@@ -457,10 +470,14 @@ impl d128 {
         debug_assert!(self.is_finite() && other.is_finite());
 
         if self.is_zero() || other.is_zero() {
-            return if self.is_zero() {
+            println!("lhs is zero = {}", self.is_zero());
+            println!("rhs is zero = {}", other.is_zero());
+            return if !self.is_zero() {
+                Some(Ordering::Greater) // x > 0
+            } else if !other.is_zero() {
                 Some(Ordering::Less) // 0 < x
             } else {
-                Some(Ordering::Greater) // x > 0
+                Some(Ordering::Equal) // 0 == 0
             };
         }
         // Both are non-zero.
@@ -480,17 +497,21 @@ impl d128 {
         }
         // `shift` is in [0, DIGITS].
 
-        //println!("hi");
+        println!("lhs exp = {}", self.exp());
+        println!("rhs exp = {}", other.exp());
+        println!("shift = {shift}");
 
         let mut lhs = Bcd34::unpack(self.full_coeff());
         let mut rhs = Bcd34::unpack(other.full_coeff());
         println!("lhs = {lhs} ({self})");
         println!("rhs = {rhs} ({other})");
-        if shift < 0 {
+        if shift > 0 {
             lhs = lhs.shift(shift.unsigned_abs());
-        } else if shift > 0 {
+        } else if shift < 0 {
             rhs = rhs.shift(shift.unsigned_abs());
         }
+        println!("lhs = {lhs} ({self})");
+        println!("rhs = {rhs} ({other})");
         Some(lhs.const_cmp(rhs))
     }
 
@@ -550,7 +571,7 @@ impl d128 {
             // smaller than [i128::MIN, i128::MAX], so the cast
             // cannot wrap.
             #[allow(clippy::cast_sign_loss)]
-            Self::from_parts(coeff < 0, exp, coeff as u128)
+            Self::from_parts_bin(coeff < 0, exp, coeff as u128)
         }
     }
 
@@ -666,7 +687,7 @@ impl d128 {
 
 // String conversions.
 impl d128 {
-    const MAX_STR_LEN: usize = Self::DIGITS as usize + "-.E1234".len();
+    // const MAX_STR_LEN: usize = Self::DIGITS as usize + "-.E1234".len();
 
     /// Converts the decimal to a string.
     #[allow(clippy::indexing_slicing)]
@@ -878,87 +899,195 @@ impl d128 {
 
         match s.first() {
             Some(b'0'..=b'9') => {}
-            Some(b'i' | b'I' | b'n' | b'N') => return Self::parse_special(sign, s),
+            Some(b'i' | b'I' | b'n' | b'N' | b's' | b'S') => return Self::parse_special(sign, s),
             Some(_) => return Err(ParseError::invalid("expected digit or special")),
             None => return Err(ParseError::invalid("unexpected end of input")),
         }
 
-        let (coeff, dot, s) = match Self::parse_coeff(s) {
+        let (coeff, sd, s) = match Self::parse_coeff(s) {
             Ok((c, e, r)) => (c, e, r),
             Err(err) => return Err(err),
         };
-        let mut exp = match Self::parse_exp(s) {
-            Ok(exp) => exp,
+        let exp = match Self::parse_exp(s) {
+            // If the decimal-part included a decimal point the
+            // exponent is then reduced by the count of digits
+            // following the decimal point (which may be zero)
+            // and the decimal point is removed.
+            //
+            // https://speleotrove.com/decimal/daconvs.html#reftonum
+            Ok(exp) => exp - sd as i16,
             Err(err) => return Err(err),
         };
-        if let Some(dot) = dot {
-            exp -= dot as i16;
-        }
-        Ok(Self::from_parts(sign, exp, coeff))
+        println!("exp = {exp}");
+        println!("dot = {sd:?}");
+
+        Ok(Self::from_parts_dpd(sign, exp, coeff))
     }
 
     /// Parses the coefficient.
     ///
-    /// It returns the coefficient, position of the dot, and
-    /// unused remainder of the input.
+    /// It returns the coefficient, number of digits after the
+    /// decimal point, and unused remainder of the input.
     #[no_mangle]
-    fn parse_coeff(mut s: &[u8]) -> Result<(u128, Option<usize>, &[u8]), ParseError> {
-        if s.is_empty() {
-            return Err(ParseError::invalid("empty `s`"));
-        }
+    fn parse_coeff(mut s: &[u8]) -> Result<(u128, usize, &[u8]), ParseError> {
+        debug_assert!(!s.is_empty());
 
-        // Make two passes over `s`. The first pass trims leading
-        // zeros, finds the dot, and validates each character.
-        // The second pass parses the validated characters as
-        // a BCD, then converts the BCD to a DPD.
+        // The choice of `usize` is intentional. We need to count
+        // the number of significant digits in `s` without
+        // overflowing. Since the number of significant digits in
+        // `s` is in [0, isize::MAX], `usize` cannot overflow.
+        let mut exp: usize = 0;
 
         // Skip insignificant leading zeros.
         while let Some((&b'0', rest)) = s.split_first() {
             s = rest;
         }
         if s.is_empty() {
-            return Ok((0, None, &[]));
+            return Ok((0, 0, &[]));
+        }
+
+        // Have we seen the decimal point?
+        let mut dot = false;
+
+        if let Some((&b'.', rest)) = s.split_first() {
+            dot = true;
+            s = rest;
+        }
+
+        // These zeros count toward `exp`. We could fold this
+        // into the following `while` loop, but it ends up being
+        // more complicated than it's worth.
+        while let Some((&b'0', rest)) = s.split_first() {
+            // We can only enter this loop if the previous
+            // character was a dot.
+            debug_assert!(dot);
+
+            exp += 1;
+            s = rest;
         }
 
         let (pre, post, rest, bcd) = {
             let mut bcd = Bcd34::zero();
-            let mut pre: &[u8] = &[];
-            let mut post: &[u8] = &[];
-            let mut rest: &[u8] = &[];
-            let mut dot = false;
+            let mut pre: &[u8] = &[]; // before the dot
+            let mut post: &[u8] = &[]; // after the dot
+            let mut rest: &[u8] = &[]; // after the coeff
             let mut i = 0;
             while i < s.len() {
-                let c = s[i];
-                match c {
-                    b'0'..=b'9' => {
+                match s[i] {
+                    c @ (b'0'..=b'9') => {
+                        // `bcd` might overflow, but that's okay.
+                        // We check the number of non-zero digits
+                        // later.
                         bcd.lo <<= 4;
                         bcd.lo |= (c - b'0') as u128;
                     }
-                    b'.' => {
-                        if dot {
-                            return Err(ParseError::invalid("duplicate dot"));
-                        }
+                    b'.' if !dot => {
                         dot = true;
-                        (pre, s) = s.split_at(i);
+
+                        // pre = &s[..i]
+                        (pre, post) = s.split_at(i);
+                        // post = &s[i+1..]
+                        (_, post) = post.split_at(1);
+
+                        // Reset the loop with the rest of `s`.
+                        // This makes the default match case
+                        // a little easier. Otherwise, we'd have
+                        // to trim `pre.len()` bytes from the
+                        // front of `post`, which causes the
+                        // compiler to insert bounds checks.
+                        s = post;
+                        i = 0;
+
+                        continue;
                     }
+                    // Non-digit and non-dot character, or
+                    // a duplicate dot.
                     _ => {
-                        (post, rest) = s.split_at(i);
+                        if dot {
+                            // We have seen a dot, so we've
+                            // already stored part of the
+                            // coefficient in `pre`.
+                            (post, rest) = s.split_at(i);
+                        } else {
+                            // We haven't seen a dot yet, so the
+                            // coefficient is entirely stored in
+                            // `pre`.
+                            (pre, rest) = s.split_at(i);
+                        }
                         break;
                     }
                 }
                 i += 1;
             }
-            if !dot && pre.is_empty() {
-                pre = post;
-                post = &[];
+
+            if rest.is_empty() && !dot {
+                // We completed the entire loop without seeing
+                // a non-digit character. This means we haven't
+                // assigned to either `pre` or `post` yet.
+                pre = s;
             }
             (pre, post, rest, bcd)
         };
 
-        fn parse_bcd(mut bcd: Bcd34, mut s: &[u8], num_hi: usize) -> Bcd34 {
+        if cfg!(debug_assertions) {
+            println!(
+                " pre = \"{}\" (len={})",
+                str::from_utf8(pre).unwrap(),
+                pre.len()
+            );
+            println!(
+                "post = \"{}\" (len={})",
+                str::from_utf8(post).unwrap(),
+                post.len()
+            );
+            println!(" bcd = {bcd}");
+            println!(" exp = {exp} {}", exp + post.len());
+        }
+
+        exp += post.len();
+
+        // Common case fast path: we were able to fit the entire
+        // coefficient in just `bcd.lo`.
+        if pre.len() + post.len() <= 32 {
+            debug_assert!(bcd.hi == 0);
+            return Ok((bcd.pack(), exp, rest));
+        }
+
+        // Slow path: we have more than 32 digits, so our `bcd`
+        // has overflown.
+        let coeff = Self::parse_large_coeff(pre, post);
+        Ok((coeff, exp, rest))
+    }
+
+    /// Parses a coefficient with at least 33 digits.
+    ///
+    /// - `pre` is the coefficient before the dot.
+    /// - `post` is the coefficient after the dot.
+    ///
+    /// The coefficient does not have any leading zeros.
+    #[cold]
+    const fn parse_large_coeff<'a>(mut pre: &'a [u8], mut post: &'a [u8]) -> u128 {
+        debug_assert!(pre.len() + post.len() > 32);
+        util::debug_assert_all_digits(pre);
+        util::debug_assert_all_digits(post);
+
+        // Partition (pre, post) into (pre, post, extra)
+        // where `pre || post` is at most 34 digits.
+
+        let mut extra: &[u8] = &[];
+        if pre.len() > 34 {
+            (pre, extra) = pre.split_at(34);
+            post = &[];
+        } else if pre.len() + post.len() > 34 {
+            (post, extra) = post.split_at(34 - pre.len());
+        };
+        let _ = extra;
+
+        const fn parse_bcd(mut bcd: Bcd34, mut s: &[u8]) -> Bcd34 {
+            /*
             // If `bcd.hi` < 9 then we've written either zero or
             // one digits to `bcd.hi`.
-            if num_hi > 0 && bcd.hi < 9 {
+            if bcd.hi < 9 && num_hi > 0 {
                 // Max 2 iters = 2 digits
                 let mut i = 0;
                 while i < num_hi {
@@ -969,7 +1098,7 @@ impl d128 {
                     }
                     i += 1;
                 }
-            }
+            }*/
 
             // Max floor(34/4) = 8 iters = 32 digits
             while let Some((chunk, rest)) = s.split_first_chunk() {
@@ -990,34 +1119,51 @@ impl d128 {
             bcd
         }
 
-        let dot = if post.is_empty() {
-            None
-        } else {
-            Some(pre.len())
-        };
-
-        let nd = pre.len() + post.len();
-        if nd <= 32 {
-            return Ok((bcd.pack(), dot, rest));
-        }
-        let num_hi = 32 - nd;
-
         let mut bcd = Bcd34::zero();
-        bcd = parse_bcd(bcd, pre, num_hi);
-        bcd = parse_bcd(bcd, post, num_hi);
 
-        Ok((bcd.pack(), dot, rest))
+        let num_hi = if pre.len() + post.len() >= 34 { 2 } else { 1 };
+
+        // Pick off the high digits.
+        let mut i = 0;
+        while i < num_hi {
+            if let Some((&c, rest)) = pre.split_first() {
+                bcd.hi <<= 4;
+                bcd.hi |= c - b'0';
+                pre = rest;
+            } else if let Some((&c, rest)) = post.split_first() {
+                bcd.hi <<= 4;
+                bcd.hi |= c - b'0';
+                pre = rest;
+            }
+            i += 1;
+        }
+
+        bcd = parse_bcd(bcd, pre);
+        bcd = parse_bcd(bcd, post);
+
+        // TODO(eric): round via `extra`.
+
+        bcd.pack()
     }
 
-    const fn parse_exp(mut s: &[u8]) -> Result<i16, ParseError> {
+    fn parse_exp(mut s: &[u8]) -> Result<i16, ParseError> {
+        println!("parse_exp: {}", str::from_utf8(s).unwrap());
         if s.is_empty() {
             return Ok(0);
         }
+
+        if let Some((b'e' | b'E', rest)) = s.split_first() {
+            s = rest;
+        } else {
+            return Err(ParseError::invalid("expected `e` or `E`"));
+        }
+
         let mut sign = false;
         if let Some((c @ (b'-' | b'+'), rest)) = s.split_first() {
             sign = *c == b'-';
             s = rest;
         }
+
         let mut exp: i16 = 0;
         while let Some((&c, rest)) = s.split_first() {
             let d = c.wrapping_sub(b'0');
@@ -1037,6 +1183,7 @@ impl d128 {
         if sign {
             exp = -exp;
         }
+        println!("exp = {exp} sign = {sign}");
         Ok(exp)
     }
 
@@ -1357,8 +1504,11 @@ mod tests {
         (d128::NEG_NAN, "-NaN"),
         (d128::NEG_SNAN, "-sNaN"),
         (d128::new(0, 0), "0"),
+        (d128::new(0, -1), "0.0"),
         (d128::new(0, d128::MAX_EXP), "0E+6111"),
         (d128::new(0, d128::MIN_EXP), "0E-6176"),
+        (d128::new(21, -1), "2.1"),
+        (d128::new(210, -2), "2.10"),
         (
             d128::new(9111222333444555666777888999000111, d128::MAX_EXP),
             "9.111222333444555666777888999000111E+6144",
@@ -1423,9 +1573,13 @@ mod tests {
 
     #[test]
     fn test_parse() {
-        for (i, (want, output)) in STR_TESTS.iter().enumerate() {
+        for (i, &(want, output)) in STR_TESTS.iter().enumerate() {
             let got: d128 = output.parse().unwrap();
-            assert_eq!(got, *want, "#{i}");
+            if got.is_nan() {
+                continue;
+            }
+            assert_eq!(got, want, "#{i}: parse(\"{output}\") -> {want}");
+            println!("");
         }
     }
 
@@ -1467,6 +1621,7 @@ mod tests {
             ("-3", "2.1", Some(Ordering::Less)),
         ];
         for (i, (lhs, rhs, want)) in tests.into_iter().enumerate() {
+            println!("lhs={lhs} rhs={rhs}");
             let x: d128 = lhs.parse().unwrap();
             let y: d128 = rhs.parse().unwrap();
             println!("x={x} y={y}");

@@ -22,6 +22,19 @@ pub(super) const unsafe fn assume(b: bool) {
     }
 }
 
+/// Asserts that every byte in `s` is an ASCII digit.
+#[track_caller]
+pub(super) const fn debug_assert_all_digits(s: &[u8]) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let mut i = 0;
+    while i < s.len() {
+        debug_assert!(matches!(s[i], b'0'..=b'9'));
+        i += 1;
+    }
+}
+
 /// A string of length [1,4].
 #[derive(Copy, Clone, Debug)]
 pub(super) struct Str4(u32);

@@ -135,10 +135,10 @@ pub(super) const fn is_3digits(v: u32) -> bool {
     (a | b) & 0x0080_8080 == 0
 }
 
-/// Is `v` four digits?
-pub(super) const fn is_4digits(v: u32) -> bool {
-    check_4digits(v) == 0
-}
+// /// Is `v` four digits?
+// pub(super) const fn is_4digits(v: u32) -> bool {
+//     check_4digits(v) == 0
+// }
 
 /// Returns a mask over the digits in `v`.
 ///
