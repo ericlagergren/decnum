@@ -127,7 +127,6 @@ impl u96 {
     /// ```
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
-    #[no_mangle]
     pub const fn logical_shl(self, rhs: u32) -> Self {
         if rhs >= Self::BITS {
             Self::MIN
@@ -709,7 +708,6 @@ impl u96 {
     /// You probably want [`logical_shl`][Self::logical_shl].
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
-    #[no_mangle]
     pub const fn wrapping_shl(self, rhs: u32) -> Self {
         self.logical_shl(rhs & (Self::BITS - 1))
     }

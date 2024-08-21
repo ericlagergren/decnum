@@ -1,9 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use decnum::{
-    bcd::{self, Bcd10, Bcd5},
-    dpd,
-};
-use rand::{random, thread_rng, Rng};
+use decnum::{bcd, dpd};
+use rand::{thread_rng, Rng};
 
 fn bench_dpd(c: &mut Criterion) {
     let mut group = c.benchmark_group("dpd");
@@ -65,6 +62,51 @@ fn bench_bcd(c: &mut Criterion) {
     let bins: Vec<u16> = (0..1024).map(|_| thread_rng().gen_range(0..=999)).collect();
     let bcds: Vec<u16> = bins.iter().copied().map(bcd::from_bin).collect();
 
+    let idk: Vec<u128> = (0..1024)
+        .map(|_| {
+            let mut bcd = 0;
+            let mut rng = thread_rng();
+            for _ in 0..32 {
+                bcd <<= 4;
+                bcd |= rng.gen_range(0..=9);
+            }
+            bcd
+        })
+        .collect();
+
+    group.bench_function("carrying_add128_v1", |b| {
+        let mut i = 0;
+        let mut c = false;
+        let mut sum = 0;
+        b.iter(|| {
+            let x = idk[i % idk.len()];
+            (sum, c) = carrying_add128_v1(sum, x, c);
+            i += 1;
+        });
+    });
+
+    group.bench_function("carrying_add128_v2", |b| {
+        let mut i = 0;
+        let mut c = false;
+        let mut sum = 0;
+        b.iter(|| {
+            let x = idk[i % idk.len()];
+            (sum, c) = carrying_add128_v2(sum, x, c);
+            i += 1;
+        });
+    });
+
+    group.bench_function("carrying_add128_v3", |b| {
+        let mut i = 0;
+        let mut c = false;
+        let mut sum = 0;
+        b.iter(|| {
+            let x = idk[i % idk.len()];
+            (sum, c) = carrying_add128_v3(sum, x, c);
+            i += 1;
+        });
+    });
+
     group.bench_function("classify", |b| {
         let mut i = 0;
         b.iter(|| {
@@ -81,7 +123,15 @@ fn bench_bcd(c: &mut Criterion) {
             i += 1;
         })
     });
-    group.bench_function("from_bin", |b| {
+    group.bench_function("from_bin_v1", |b| {
+        let mut i = 0;
+        b.iter(|| {
+            let bin = bins[i % bins.len()];
+            black_box(from_bin_v1(black_box(bin)));
+            i += 1;
+        })
+    });
+    group.bench_function("from_bin_v2", |b| {
         let mut i = 0;
         b.iter(|| {
             let bin = bins[i % bins.len()];
@@ -90,42 +140,50 @@ fn bench_bcd(c: &mut Criterion) {
         })
     });
 
-    macro_rules! bench_to_from {
-        ($ty:ty) => {{
-            let bcds: Vec<$ty> = (0..8192).map(|_| <$ty>::from_bin(random())).collect();
-            let bins: Vec<_> = bcds.iter().copied().map(<$ty>::to_bin).collect();
-
-            group.bench_function(concat!(stringify!($ty), "/to_bin"), |b| {
-                let mut i = 0;
-                b.iter(|| {
-                    let bcd = bcds[i % bcds.len()];
-                    black_box(black_box(bcd).to_bin());
-                    i = i.wrapping_add(1);
-                })
-            });
-            group.bench_function(concat!(stringify!($ty), "/from_bin"), |b| {
-                let mut i = 0;
-                b.iter(|| {
-                    let bin = bins[i % bins.len()];
-                    black_box(<$ty>::from_bin(black_box(bin)));
-                    i = i.wrapping_add(1);
-                })
-            });
-            group.bench_function(concat!(stringify!($ty), "/pack"), |b| {
-                let mut i = 0;
-                b.iter(|| {
-                    let bcd = bcds[i % bcds.len()];
-                    clear();
-                    black_box(bcd.pack());
-                    i = i.wrapping_add(1);
-                })
-            });
-        }};
-    }
-    bench_to_from!(Bcd5);
-    bench_to_from!(Bcd10);
-
     group.finish();
+}
+
+const fn carrying_add128_v1(x: u128, mut y: u128, mut c: bool) -> (u128, bool) {
+    // h/t: https://stackoverflow.com/a/78270881/2967113
+    y += c as u128;
+    let sum = (x ^ y) >> 1;
+    let avg = (x & y) + sum + 0x33333333333333333333333333333333;
+    c = (avg >> 127) != 0;
+    let fixup = (sum ^ avg) & 0x88888888888888888888888888888888;
+    let z = x + y + (fixup - (fixup >> 2));
+    (z, c)
+}
+
+const fn carrying_add128_v2(x: u128, y: u128, mut c: bool) -> (u128, bool) {
+    // h/t: https://stackoverflow.com/a/78270881/2967113
+    let a = x + 0x66666666666666666666666666666666;
+    let b = y + c as u128;
+    let carries = (a | y) ^ ((a ^ y) & (a + b));
+    c = (carries >> 127) != 0;
+    let fixup = carries & 0x88888888888888888888888888888888;
+    let z = (x + b) + (fixup - (fixup >> 2));
+    (z, c)
+}
+
+const fn carrying_add128_v3(x: u128, y: u128, c: bool) -> (u128, bool) {
+    // h/t: https://stackoverflow.com/a/78270881/2967113
+    let sum = x + y + c as u128;
+    let mux = (sum & !(sum + 0x66666666666666666666666666666666)) | ((x | y) & !sum);
+    let c = (mux >> 127) != 0;
+    let fixup = mux & 0x88888888888888888888888888888888;
+    let z = sum + (fixup - (fixup >> 2));
+    (z, c)
+}
+
+const fn from_bin_v1(mut bin: u16) -> u16 {
+    let mut bcd = 0;
+    let mut s = 0;
+    while s < 16 {
+        bcd |= (bin % 10) << s;
+        s += 4;
+        bin /= 10;
+    }
+    bcd
 }
 
 macro_rules! bit {
@@ -208,17 +266,6 @@ const fn bcd2dpd(arg: u16) -> u16 {
         | ((r as u16) << 7)
         | ((q as u16) << 8)
         | ((p as u16) << 9)
-}
-
-fn clear() {
-    // let addr: *const () = core::ptr::null();
-    // unsafe {
-    //     core::arch::asm!(
-    //         "dc civac, {addr}",
-    //         addr = in(reg) addr,
-    //         options(nostack),
-    //     )
-    // }
 }
 
 /*

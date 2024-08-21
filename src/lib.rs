@@ -29,17 +29,13 @@
 // #[cfg(feature = "alloc")]
 // extern crate alloc;
 
-pub mod bcd;
+pub mod bid;
 mod conv;
 mod ctx;
-mod dec128;
-pub mod dpd;
-//mod macros;
-mod tables;
-//mod uint96;
+//pub mod dpd;
 mod util;
 
+pub use bid::d128;
 pub use conv::*;
 pub use ctx::*;
-pub use dec128::d128;
 //pub use uint96::*;

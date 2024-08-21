@@ -5,10 +5,12 @@ use core::{
     fmt,
     hash::Hash,
     hint,
+    ops::{Add, AddAssign},
     str::{self, FromStr},
 };
 
-use super::{conv, dpd, util::assume};
+use super::dpd;
+use crate::{conv, util::assume};
 
 /// A BCD's bit pattern.
 #[repr(u16)]
@@ -66,374 +68,74 @@ pub const fn classify(bcd: u16) -> Pattern {
     }
 }
 
-macro_rules! bcd_int_impl {
-    (
-        $name:ident,
-        $digits:literal,
-        $bcd:ty,
-        $dpd:ty,
-        $bin:ty $(,)?
-    ) => {
-        const _: () = {
-            assert!(<$name>::BITS < <$bcd>::BITS as $bcd);
-            assert!(<$name>::BITS % 4 == 0);
-        };
-
-        #[doc = concat!("A BCD with ", stringify!($digits), " digits.")]
-        #[derive(Copy, Clone, Default, Hash, Eq, PartialEq)]
-        pub struct $name {
-            // The least significant digit is the first nibble.
-            bcd: $bcd,
-        }
-
-        impl $name {
-            /// The maximum number of digits in the BCD.
-            pub const DIGITS: usize = $digits;
-
-            /// The number of bits in `bcd` to use.
-            const BITS: $bcd = $digits * 4;
-            /// A mask covering the bits that may be used.
-            const MASK: $bcd = ((1 as $bcd) << Self::BITS) - 1;
-            /// The number of 10-bit DPDs this BCD packs into.
-            const NUM_DPDS: usize = ((Self::BITS + 9) / 10) as usize;
-            /// A mask covering the unused bits in a DPD.
-            const INVALID_DPD: $dpd = !(((1 as $dpd) << (Self::NUM_DPDS * 10)) - 1);
-
-            /// The max value for `$bin`.
-            #[cfg(test)]
-            #[allow(dead_code)]
-            const BIN_MAX: $bin = <$bin>::MAX;
-
-            const fn new(bcd: $bcd) -> Self {
-                let bcd = Self { bcd };
-                bcd.debug_check();
-                bcd
-            }
-
-            const fn debug_check(self) {
-                debug_assert!(self.bcd & !<$name>::MASK == 0);
-
-                /// Reports whether the BCD is valid.
-                ///
-                /// For a BCD to be valid, each nibble may only
-                /// have one of the following bit patterns:
-                ///
-                /// 0. `0000`
-                /// 1. `0001`
-                /// 2. `0010`
-                /// 3. `0011`
-                /// 4. `0100`
-                /// 5. `0101`
-                /// 6. `0110`
-                /// 7. `0111`
-                /// 8. `1000`
-                /// 9. `1001`
-                const fn is_valid(bcd: $bcd) -> bool {
-                    /// Construct a bitmask where each nibble is
-                    /// the same.
-                    macro_rules! mask {
-                        ($nibble:literal) => {{
-                            const { assert!($nibble <= 0xf) }
-
-                            let mut v = 0;
-                            let mut s = 0;
-                            while s < <$bcd>::BITS {
-                                v |= ($nibble as $bcd) << s;
-                                s += 4;
-                            }
-                            v
-                        }};
-                    }
-                    const MASK1: $bcd = mask!(0b0111); // 0x777...
-                    const MASK2: $bcd = mask!(0b0011); // 0x333...
-                    const MASK3: $bcd = mask!(0b1000); // 0x888...
-                    let half = (bcd >> 1) & MASK1;
-                    ((half + MASK2) & MASK3) == 0
-                }
-                debug_assert!(is_valid(self.bcd));
-            }
-
-            /// Returns the all-zero BCD.
-            pub const fn zero() -> Self {
-                Self::new(0)
-            }
-
-            /// Creates a BCD from a binary number.
-            ///
-            /// # Example
-            ///
-            /// ```
-            /// use decnum::bcd::Bcd10;
-            ///
-            /// let x = Bcd10::from_bin(u32::MAX).to_bin();
-            /// assert_eq!(x, u32::MAX);
-            /// ```
-            pub const fn from_bin(bin: $bin) -> Self {
-                let mut bin = bin as $bcd;
-                let mut bcd = 0;
-                let mut s = 0;
-                while s < Self::BITS {
-                    bcd |= (bin % 10) << s;
-                    s += 4;
-                    bin /= 10;
-                }
-                Self::new(bcd)
-            }
-
-            /// Parses a BCD from a string.
-            ///
-            /// The string is allowed to contain insignificant
-            /// leading zeros.
-            ///
-            /// # Example
-            ///
-            /// ```
-            /// use decnum::bcd::Bcd10;
-            ///
-            /// let x = Bcd10::from_str("1234").unwrap();
-            /// let y = Bcd10::from_str("01234").unwrap();
-            /// assert_eq!(x, y);
-            ///
-            /// let x: Bcd10 = "1234".parse().unwrap();
-            /// let y: Bcd10 = "01234".parse().unwrap();
-            /// assert_eq!(x, y);
-            /// ```
-            pub const fn from_str(s: &str) -> Result<Self, ParseBcdError> {
-                let buf = s.as_bytes();
-                if buf.len() > Self::DIGITS {
-                    return Err(ParseBcdError(()));
-                }
-                if buf.is_empty() {
-                    return Ok(Self::zero());
-                }
-
-                let mut bcd = 0;
-                let mut i = 0;
-                let mut s = (buf.len() - 1) * 4;
-                while i < buf.len() {
-                    // The loop condition is `i < buf.len()`, so
-                    // this cannot panic.
-                    #[allow(clippy::indexing_slicing)]
-                    let c = buf[i];
-                    if c < b'0' || c > b'9' {
-                        return Err(ParseBcdError(()));
-                    }
-                    let d = (c - b'0') as $bcd;
-                    bcd |= d << s;
-                    i += 1;
-                    // Handle the case where `buf.len() == 1` and
-                    // `s` starts out at zero.
-                    s = s.saturating_sub(4);
-                }
-                Ok(Self::new(bcd))
-            }
-
-            /// Converts the BCD to a binary number.
-            pub const fn to_bin(self) -> $bin {
-                self.debug_check();
-
-                let mut bin = 0;
-                let mut s = 0;
-                let mut p = 1;
-                while s < Self::BITS {
-                    debug_assert!(p != <$bin>::MAX);
-
-                    bin += (((self.bcd >> s) & 0xf) as $bin) * p;
-                    s += 4;
-                    p = p.saturating_mul(10);
-                }
-                bin
-            }
-
-            /// Packs the BCD into a DPD.
-            pub const fn pack(self) -> $dpd {
-                self.debug_check();
-
-                let mut dpd = 0;
-                let mut shl = 0;
-                let mut shr = 0;
-                let mut i = 0;
-                while i < <$name>::NUM_DPDS {
-                    let bcd = (self.bcd >> shr) & 0xfff;
-                    // This check removes the bounds checks from
-                    // the call to `dpd::pack`.
-                    //
-                    // SAFETY: `self.bcd` never has any invalid
-                    // digits, so its maximum value is 0x999.
-                    unsafe { assume(bcd <= 0x999) }
-                    dpd |= (dpd::pack(bcd as u16) as $dpd) << shl;
-                    shl += 10;
-                    shr += 12;
-                    i += 1;
-                }
-                dpd
-            }
-
-            /// Unpacks the DPD into a BCD.
-            ///
-            /// If the DPD is too large, excess bits are
-            /// discarded.
-            pub const fn unpack(dpd: $dpd) -> Self {
-                let mut bcd = 0;
-                let mut shl = 0;
-                let mut shr = 0;
-                let mut i = 0;
-                while i < <$name>::NUM_DPDS {
-                    let dpd = (dpd >> shr) & 0x3ff;
-                    bcd |= (dpd::unpack(dpd as u16) as $bcd) << shl;
-                    shr += 10;
-                    shl += 12;
-                    i += 1;
-                }
-                Self::new(bcd)
-            }
-
-            /// Unpacks the DPD into a BCD.
-            ///
-            /// Returns `None` if the DPD is invalid.
-            pub const fn try_unpack(dpd: $dpd) -> Option<Self> {
-                if dpd & Self::INVALID_DPD != 0 {
-                    None
-                } else {
-                    Some(Self::unpack(dpd))
-                }
-            }
-
-            /// Reports whether the BCD is zero.
-            ///
-            /// # Example
-            ///
-            /// ```
-            /// use decnum::bcd::Bcd10;
-            ///
-            /// assert!(Bcd10::from_bin(0).is_zero());
-            /// assert!(!Bcd10::from_bin(1).is_zero());
-            /// ```
-            pub const fn is_zero(&self) -> bool {
-                self.debug_check();
-
-                self.bcd == 0
-            }
-
-            /// Encodes the BCD to a string.
-            ///
-            /// The returned string does not contain
-            /// insignificant leading zeros.
-            ///
-            /// # Example
-            ///
-            /// ```
-            /// use decnum::bcd::Bcd10;
-            ///
-            /// let bcd = Bcd10::from_bin(1234);
-            /// let mut buf = [0u8; Bcd10::DIGITS];
-            /// let s = bcd.encode(&mut buf);
-            /// assert_eq!(s, "1234");
-            /// ```
-            pub fn encode(self, buf: &mut [u8; $digits]) -> &str {
-                self.debug_check();
-
-                let s = self.encode_full(buf).trim_start_matches('0');
-                if s.is_empty() {
-                    "0"
-                } else {
-                    s
-                }
-            }
-
-            /// Encodes the BCD to a string.
-            ///
-            /// The string contains insignificant leading zeros.
-            ///
-            /// # Example
-            ///
-            /// ```
-            /// use decnum::bcd::Bcd10;
-            ///
-            /// let bcd = Bcd10::from_bin(1234);
-            /// let mut buf = [0u8; Bcd10::DIGITS];
-            /// let s = bcd.encode_full(&mut buf);
-            /// assert_eq!(s, "01234");
-            /// ```
-            pub fn encode_full(self, buf: &mut [u8; $digits]) -> &str {
-                self.debug_check();
-
-                let mut bcd = self.bcd;
-                for c in buf.iter_mut().rev() {
-                    let d = (bcd & 0xf) as u8;
-                    *c = d + b'0';
-                    bcd >>= 4;
-                }
-                debug_assert!(str::from_utf8(buf).is_ok());
-
-                // SAFETY: The buffer is guaranteed to be ASCII.
-                unsafe { str::from_utf8_unchecked(buf) }
-            }
-        }
-
-        impl Ord for $name {
-            fn cmp(&self, other: &Self) -> Ordering {
-                Ord::cmp(&self.to_bin(), &other.to_bin())
-            }
-        }
-        impl PartialOrd for $name {
-            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-                Some(Ord::cmp(self, other))
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                let mut buf = [0u8; Self::DIGITS];
-                let str = self.encode(&mut buf);
-                write!(f, "{str}")
-            }
-        }
-
-        impl fmt::Debug for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                let mut buf = [[0, 0]; (Self::DIGITS + 1) / 2];
-                let mut bcd = self.bcd;
-                for [lo, hi] in &mut buf {
-                    *lo = (bcd & 0xf) as u8;
-                    *hi = (bcd >> 4) as u8;
-                    bcd >>= 8;
-                }
-                f.debug_struct(stringify!($name))
-                    .field("bcd", &buf)
-                    .finish()
-            }
-        }
-
-        impl FromStr for $name {
-            type Err = ParseBcdError;
-
-            fn from_str(s: &str) -> Result<Self, Self::Err> {
-                <$name>::from_str(s)
-            }
-        }
-    };
+/// Converts the 16-bit BCD to a binary number.
+pub const fn to_bin(bcd: u16) -> u16 {
+    let mut bin = 0;
+    let mut s = 0;
+    while s < 16 {
+        bin += (bcd >> s) & 0xf;
+        bin *= 10;
+        s += 4;
+    }
+    bin
 }
-bcd_int_impl!(Bcd5, 5, u32, u32, u16);
-bcd_int_impl!(Bcd10, 10, u64, u64, u32);
+
+/// Creates a 16-bit BCD from a binary number.
+///
+/// # Example
+///
+/// ```
+/// use decnum::bcd;
+///
+/// let bcd = bcd::from_bin(1234);
+/// assert_eq!(bcd, 0x1234);
+/// ```
+pub const fn from_bin(bin: u16) -> u16 {
+    debug_assert!(bin <= 9999);
+
+    // h/t: https://stackoverflow.com/a/78270881/2967113
+    const MASK: u64 = 0x0FFFFE1FFFF87FFF;
+    let mut x = (bin as u64) * 0x000418A051EC0CCD;
+    let mut y = (x & MASK) * 10;
+    x &= !MASK;
+    y &= !MASK;
+    let mut bcd = 0;
+    bcd += y >> 15;
+    bcd += y >> 33;
+    bcd += y >> 52;
+    bcd += x >> 48;
+    bcd as u16
+}
 
 /// A 34 digit BCD.
-#[derive(Copy, Clone, Debug)]
-pub(super) struct Bcd34 {
-    pub lo: u128, // 32 digits = 128 bits
-    pub hi: u8,   // 2 digits = 8 bits
+#[derive(Copy, Clone, Debug, Hash)]
+pub struct Bcd34 {
+    pub(super) lo: u128, // 32 digits = 128 bits
+    pub(super) hi: u8,   // 2 digits = 8 bits
 }
 
 impl Bcd34 {
+    /// The number of digits in `lo`.
+    pub(super) const LO_DIGITS: usize = 32;
+    /// The number of digits in `hi`.
+    pub(super) const HI_DIGITS: usize = 2;
+
+    /// The number of digits in the BCD.
+    pub const DIGITS: u32 = 34;
+
+    /// The largest value that can be represented by this type.
+    pub const MAX: Self = Self {
+        lo: 0x99999999999999999999999999999999,
+        hi: 0x99,
+    };
+
+    /// The smallest value that can be represented by this type.
+    pub const MIN: Self = Self::zero();
+
     const fn debug_check(self) {
         debug_assert!(is_valid_u128(self.lo));
         debug_assert!(is_valid_u8(self.hi));
     }
-
-    /// The number of digits in `lo`.
-    pub const LO_DIGITS: usize = 32;
-    /// The number of digits in `hi`.
-    pub const HI_DIGITS: usize = 2;
 
     /// Returns the zero BCD.
     pub const fn zero() -> Self {
@@ -496,13 +198,141 @@ impl Bcd34 {
 
         dpd
     }
+}
 
+// Misc.
+impl Bcd34 {
+    /// Reports whether `self == other`.
+    pub const fn const_eq(self, other: Self) -> bool {
+        self.lo == other.lo && self.hi == other.hi
+    }
+
+    /// Compares `self` and `other`.
+    pub const fn const_cmp(self, other: Self) -> Ordering {
+        self.debug_check();
+        other.debug_check();
+
+        match self.hi.checked_sub(other.hi) {
+            Some(0) => {}
+            Some(_) => return Ordering::Greater,
+            None => return Ordering::Less,
+        }
+        match self.lo.checked_sub(other.lo) {
+            Some(0) => Ordering::Equal,
+            Some(_) => Ordering::Greater,
+            None => Ordering::Less,
+        }
+    }
+}
+
+/// Arithmetic.
+impl Bcd34 {
+    /// Returns `self + other`.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn const_add(self, other: Self) -> Self {
+        self.carrying_add(other, false).0
+    }
+
+    /// Returns `self + other + c`.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn carrying_add(self, other: Self, carry: bool) -> (Self, bool) {
+        self.debug_check();
+        other.debug_check();
+
+        let (lo, carry) = carrying_add128(self.lo, other.lo, carry);
+        let (hi, carry) = carrying_add8(self.hi, other.hi, carry);
+
+        let bcd = Self { lo, hi };
+        (bcd, carry)
+    }
+
+    /// Returns `self - other`.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub fn const_sub(self, other: Self) -> Self {
+        self.borrowing_sub(other, false).0
+    }
+
+    /// Returns `self - other - c`.
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub fn borrowing_sub(self, other: Self, borrow: bool) -> (Self, bool) {
+        self.debug_check();
+        other.debug_check();
+
+        let (lo, borrow) = borrowing_sub128(self.lo, other.lo, borrow);
+        let (hi, borrow) = borrowing_sub8(self.hi, other.hi, borrow);
+
+        let bcd = Self { lo, hi };
+        (bcd, borrow)
+    }
+
+    /// Shifts the BCD to the left by `n` digits.
+    ///
+    /// In other words, it multiplies the BCD by `10^n`.
+    ///
+    /// `n` must be in [0, 34].
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn mul_pow10(self, n: u32) -> Self {
+        debug_assert!(n <= 34);
+        self.debug_check();
+
+        let shift = n * 4;
+        if shift > Self::DIGITS {
+            Self::MIN
+        } else if shift > 128 {
+            Self {
+                lo: 0,
+                hi: self.hi << (shift - 128),
+            }
+        } else {
+            // TODO(eric): 128-shift can overflow for shift=128
+            Self {
+                lo: self.lo << shift,
+                hi: (self.hi << shift) | ((self.lo >> (128 - shift)) as u8),
+            }
+        }
+    }
+
+    /// Shifts the BCD to the right by `n` digits.
+    ///
+    /// In other words, it divides the BCD by `10^n`.
+    ///
+    /// `n` must be in [0, 34].
+    #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+    pub const fn div_pow10(self, n: u32) -> Self {
+        debug_assert!(n <= 34);
+        self.debug_check();
+
+        let shift = n * 4;
+        if shift > Self::DIGITS {
+            Self::MIN
+        } else if shift > 128 {
+            Self {
+                lo: (self.hi as u128) >> (shift - 128),
+                hi: 0,
+            }
+        } else {
+            // TODO(eric): 128-shift can overflow for shift=128
+            Self {
+                lo: (self.lo >> shift) | ((self.hi as u128) << (128 - shift)),
+                hi: self.hi >> shift,
+            }
+        }
+    }
+}
+
+// String conversions.
+impl Bcd34 {
     /// Parses a BCD from a string.
-    #[no_mangle]
     pub fn parse(s: &str) -> Result<Self, ParseBcdError> {
         let mut s = s.as_bytes();
         if s.is_empty() {
-            return Err(ParseBcdError(()));
+            return Err(ParseBcdError::empty());
         }
 
         // Skip leading zeros.
@@ -510,7 +340,7 @@ impl Bcd34 {
             s = rest;
         }
         if s.len() > 34 {
-            return Err(ParseBcdError(()));
+            return Err(ParseBcdError::invalid("too many digits"));
         }
         // `s.len()` is in [0, 34]
 
@@ -530,7 +360,7 @@ impl Bcd34 {
         while let Some((&c, rest)) = hi.split_first() {
             let d = c.wrapping_sub(b'0');
             if d >= 10 {
-                return Err(ParseBcdError(()));
+                return Err(ParseBcdError::invalid("invalid digit"));
             }
             bcd.hi <<= 4;
             bcd.hi |= d;
@@ -541,7 +371,7 @@ impl Bcd34 {
         while let Some((chunk, rest)) = lo.split_first_chunk() {
             let Ok(s) = Str4::try_from_bytes(*chunk) else {
                 // Not four ASCII digits.
-                return Err(ParseBcdError(()));
+                return Err(ParseBcdError::invalid("invalid digit"));
             };
             bcd.lo <<= 16;
             bcd.lo |= s.to_bcd() as u128;
@@ -552,7 +382,7 @@ impl Bcd34 {
         while let Some((&c, rest)) = lo.split_first() {
             let d = c.wrapping_sub(b'0');
             if d >= 10 {
-                return Err(ParseBcdError(()));
+                return Err(ParseBcdError::invalid("invalid digit"));
             }
             bcd.lo <<= 4;
             bcd.lo |= d as u128;
@@ -564,53 +394,85 @@ impl Bcd34 {
         Ok(bcd)
     }
 
-    /// Shifts the BCD to the left by `shift` digits.
+    /// Encodes the BCD to a string.
     ///
-    /// In other words, it multiplies the BCD by `10^shift`.
+    /// The returned string does not contain
+    /// insignificant leading zeros.
     ///
-    /// `shift` must be in [0, 34].
-    pub const fn shift(self, shift: u16) -> Self {
-        debug_assert!(shift <= 34);
+    /// # Example
+    ///
+    /// ```
+    /// use decnum::bcd::Bcd34;
+    ///
+    /// let bcd = Bcd34::from_bin(1234);
+    /// let mut buf = [0u8; Bcd34::DIGITS as usize];
+    /// let s = bcd.encode(&mut buf);
+    /// assert_eq!(s, "1234");
+    /// ```
+    pub fn encode(self, buf: &mut [u8; 34]) -> &str {
         self.debug_check();
 
-        let shift = shift * 4; // bits
-        if shift > 128 {
-            Self {
-                hi: self.hi << (shift - 128),
-                lo: 0,
-            }
+        let s = self.encode_full(buf).trim_start_matches('0');
+        if s.is_empty() {
+            "0"
         } else {
-            // TODO(eric): 128-shift can overflow for shift=128
-            Self {
-                hi: (self.hi << shift) | ((self.lo >> (128 - shift)) as u8),
-                lo: self.lo << shift,
-            }
+            s
         }
     }
 
-    /// Compares `self` and `other`.
-    pub const fn const_cmp(self, other: Self) -> Ordering {
+    /// Encodes the BCD to a string.
+    ///
+    /// The string contains insignificant leading zeros.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use decnum::bcd::Bcd34;
+    ///
+    /// let bcd = Bcd34::from_bin(1234);
+    /// let mut buf = [0u8; Bcd34::DIGITS as usize];
+    /// let s = bcd.encode_full(&mut buf);
+    /// assert_eq!(s, "01234");
+    /// ```
+    pub fn encode_full(self, buf: &mut [u8; 34]) -> &str {
         self.debug_check();
 
-        match self.hi.checked_sub(other.hi) {
-            Some(0) => {}
-            Some(_) => return Ordering::Greater,
-            None => return Ordering::Less,
+        let mut lo = self.lo;
+        for c in buf.iter_mut().rev() {
+            let d = (lo & 0xf) as u8;
+            *c = d + b'0';
+            lo >>= 4;
         }
-        match self.lo.checked_sub(other.lo) {
-            Some(0) => Ordering::Equal,
-            Some(_) => Ordering::Greater,
-            None => Ordering::Less,
-        }
+        buf[1] = (self.hi & 0xf) + b'0';
+        buf[0] = (self.hi >> 4) + b'0';
+
+        debug_assert!(str::from_utf8(buf).is_ok());
+
+        // SAFETY: The buffer is guaranteed to be ASCII.
+        unsafe { str::from_utf8_unchecked(buf) }
+    }
+}
+
+impl Add for Bcd34 {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        self.const_add(rhs)
+    }
+}
+
+impl AddAssign for Bcd34 {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
     }
 }
 
 impl Eq for Bcd34 {}
 impl PartialEq for Bcd34 {
     fn eq(&self, other: &Self) -> bool {
-        self.lo == other.lo && self.hi == other.hi
+        self.const_eq(*other)
     }
 }
+
 impl Ord for Bcd34 {
     fn cmp(&self, other: &Self) -> Ordering {
         self.const_cmp(*other)
@@ -622,48 +484,60 @@ impl PartialOrd for Bcd34 {
     }
 }
 
+impl FromStr for Bcd34 {
+    type Err = ParseBcdError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
 impl fmt::Display for Bcd34 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { lo, hi } = *self;
-        if hi > 0 {
-            write!(f, "{:x}", hi)?;
-        }
-        write!(f, "{:x}", lo)?;
-        Ok(())
+        let mut buf = [0u8; Self::DIGITS as usize];
+        let str = self.encode(&mut buf);
+        write!(f, "{str}")
     }
 }
 
-/// Converts the 12-bit BCD to a binary number.
-pub const fn to_bin(bcd: u16) -> u16 {
-    let mut bin = 0;
-    let mut s = 0;
-    while s < 12 {
-        bin += (bcd >> s) & 0xf;
-        bin *= 10;
-        s += 4;
-    }
-    bin
+const fn carrying_add128(x: u128, y: u128, c: bool) -> (u128, bool) {
+    // h/t: https://stackoverflow.com/a/78270881/2967113
+    let a = x.wrapping_add(0x66666666666666666666666666666666);
+    let b = y.wrapping_add(c as u128);
+    let carries = (a | y) ^ ((a ^ y) & (a.wrapping_add(b)));
+    let c = (carries >> 127) != 0;
+    let fixup = carries & 0x88888888888888888888888888888888;
+    let z = x
+        .wrapping_add(b)
+        .wrapping_add(fixup.wrapping_sub(fixup >> 2));
+    (z, c)
 }
 
-/// Creates a 12-bit BCD from a binary number.
-///
-/// # Example
-///
-/// ```
-/// use decnum::bcd;
-///
-/// let bcd = bcd::from_bin(1234);
-/// assert_eq!(bcd, 0x1234);
-/// ```
-pub const fn from_bin(mut bin: u16) -> u16 {
-    let mut bcd = 0;
-    let mut s = 0;
-    while s < 12 {
-        bcd |= (bin % 10) << s;
-        s += 4;
-        bin /= 10;
-    }
-    bcd
+const fn carrying_add8(x: u8, y: u8, c: bool) -> (u8, bool) {
+    // h/t: https://stackoverflow.com/a/78270881/2967113
+    let a = x.wrapping_add(0x66);
+    let b = y.wrapping_add(c as u8);
+    let carries = (a | y) ^ ((a ^ y) & (a.wrapping_add(b)));
+    let c = (carries >> 7) != 0;
+    let fixup = carries & 0x88;
+    let z = x
+        .wrapping_add(b)
+        .wrapping_add(fixup.wrapping_sub(fixup >> 2));
+    (z, c)
+}
+
+fn borrowing_sub128(x: u128, y: u128, c: bool) -> (u128, bool) {
+    println!("  y = {y:0128b}");
+    let neg = (!y)
+        .wrapping_add(1)
+        .wrapping_add(0x99999999999999999999999999999999);
+    println!("neg = {neg:0128b}");
+    carrying_add128(x, neg, c)
+}
+
+fn borrowing_sub8(x: u8, y: u8, c: bool) -> (u8, bool) {
+    let neg = (!y).wrapping_add(1).wrapping_add(0x99);
+    carrying_add8(x, neg, c)
 }
 
 /// A 12-bit BCD converted to a three-byte ASCII string.
@@ -933,7 +807,27 @@ impl_is_valid!(is_valid_u128, u128);
 
 /// Returned when a BCD cannot be parsed from a string.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ParseBcdError(());
+pub struct ParseBcdError {
+    #[cfg(test)]
+    reason: &'static str,
+}
+
+impl ParseBcdError {
+    const fn new(_reason: &'static str) -> Self {
+        Self {
+            #[cfg(test)]
+            reason: _reason,
+        }
+    }
+
+    const fn empty() -> Self {
+        Self::new("")
+    }
+
+    const fn invalid(reason: &'static str) -> Self {
+        Self::new(reason)
+    }
+}
 
 impl fmt::Display for ParseBcdError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -985,101 +879,13 @@ mod tests {
         is_valid_u32,
     );
 
-    macro_rules! test_to_from_bin {
-        (
-            $(#[$meta:meta])*
-            $name:ident, $bcd:ty $(,)?
-        ) => {
-            $(#[$meta])*
-            #[test]
-            fn $name() {
-                let mut prev = <$bcd>::zero();
-                for want in 0..=<$bcd>::BIN_MAX {
-                    let bcd = <$bcd>::from_bin(want);
-                    let got = bcd.to_bin();
-                    assert_eq!(got, want);
-                    if want == 0 {
-                        assert_eq!(prev.cmp(&bcd), Ordering::Equal,
-                            "{prev} cmp {bcd}");
-                        assert_eq!(bcd.cmp(&prev), Ordering::Equal,
-                            "{bcd} cmp {prev}");
-                    } else {
-                        assert_eq!(prev.cmp(&bcd), Ordering::Less,
-                            "{prev} cmp {bcd}");
-                        assert_eq!(bcd.cmp(&prev), Ordering::Greater,
-                            "{bcd} cmp {prev}");
-                    }
-                    prev = bcd;
-                }
-            }
-        };
-    }
-    test_to_from_bin!(test_bcd5_to_from_bin, Bcd5);
-    test_to_from_bin!(
-        #[cfg(not(debug_assertions))]
-        test_bcd10_to_from_bin,
-        Bcd10,
-    );
-
-    macro_rules! test_encode {
-        (
-            $(#[$meta:meta])*
-            $name:ident, $bcd:ty $(,)?
-        ) => {
-            $(#[$meta])*
-            #[test]
-            fn $name() {
-                let mut want_buf = itoa::Buffer::new();
-                let mut got_buf = [0u8; <$bcd>::DIGITS];
-                for i in 0..=<$bcd>::BIN_MAX {
-                    let want = want_buf.format(i);
-                    let bcd = <$bcd>::from_bin(i);
-                    let got = bcd.encode(&mut got_buf);
-                    assert_eq!(got, want, "#{i}");
-
-                    // Also check the `FromStr` impl.
-                    assert_eq!(got.parse(), Ok(bcd), "#{i}: `FromStr` failed");
-                }
-            }
-        };
-    }
-    test_encode!(test_bcd5_encode, Bcd5);
-    test_encode!(
-        #[cfg(not(debug_assertions))]
-        test_bcd10_encode,
-        Bcd10,
-    );
-
     #[test]
-    fn test_bcd10() {
-        let want = u32::MAX;
-        let got = Bcd10::from_bin(want);
-        assert_eq!(got.to_string(), want.to_string());
+    fn test_to_from_bin() {
+        for bin in 0..=999 {
+            let got = to_bin(from_bin(bin));
+            assert_eq!(got, bin);
+        }
     }
-
-    macro_rules! test_pack_unpack {
-        (
-            $(#[$meta:meta])*
-            $name:ident, $bcd:ty $(,)?
-        ) => {
-            $(#[$meta])*
-            #[test]
-            fn $name() {
-                for bin in 0..=<$bcd>::BIN_MAX {
-                    let bcd = <$bcd>::from_bin(bin);
-                    let dpd = bcd.pack();
-                    let got = <$bcd>::try_unpack(dpd);
-                    assert_eq!(got, Some(bcd), "#{bin}");
-                }
-            }
-        };
-    }
-    test_pack_unpack!(test_bcd5_pack_unpack, Bcd5);
-    test_pack_unpack!(
-        #[cfg(not(debug_assertions))]
-        test_bcd10_pack_unpack,
-        Bcd10,
-    );
 
     /// Test [`Str3`].
     #[test]
@@ -1111,17 +917,6 @@ mod tests {
     /// Test [`Str4`].
     #[test]
     fn test_str4() {
-        const fn from_bin(mut bin: u16) -> u16 {
-            let mut bcd = 0;
-            let mut s = 0;
-            while s < 16 {
-                bcd |= (bin % 10) << s;
-                s += 4;
-                bin /= 10;
-            }
-            bcd
-        }
-
         for bin in 0..=9999 {
             let bcd = from_bin(bin);
             let got = Str4::from_bcd(bcd);
@@ -1149,7 +944,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bcd34() {
+    fn test_bcd34_cmp() {
         static TESTS: &[(u128, u128, Ordering)] = &[
             (0, 0, Ordering::Equal),
             (1, 0, Ordering::Greater),
@@ -1193,8 +988,46 @@ mod tests {
             assert_eq!(lhs.pack(), lhs_dpd, "#{i}");
             assert_eq!(rhs.pack(), rhs_dpd, "#{i}");
 
+            println!("lhs = {lhs}");
+            println!("rhs = {rhs}");
+
             assert_eq!(Bcd34::parse(&lhs.to_string()).unwrap(), lhs, "#{i}");
             assert_eq!(Bcd34::parse(&rhs.to_string()).unwrap(), rhs, "#{i}");
+        }
+    }
+
+    #[test]
+    fn test_bcd34_add() {
+        static TESTS: &[(&'static str, &'static str, &'static str)] = &[
+            ("0", "0", "0"),
+            ("1", "2", "3"),
+            ("2", "1", "3"),
+            ("11", "22", "33"),
+            (
+                "9999999999999999999999999999999999",
+                "0",
+                "9999999999999999999999999999999999",
+            ),
+            (
+                "9999999999999999999999999999999998",
+                "1",
+                "9999999999999999999999999999999999",
+            ),
+            ("9999999999999999999999999999999999", "1", "0"),
+        ];
+        for (i, &(lhs, rhs, want)) in TESTS.iter().enumerate() {
+            let lhs = Bcd34::parse(lhs).unwrap();
+            let rhs = Bcd34::parse(rhs).unwrap();
+            let want = Bcd34::parse(want).unwrap();
+
+            let got = lhs.const_add(rhs);
+            assert_eq!(got, want, "#{i}: {lhs} + {rhs}");
+
+            let got = want.const_sub(rhs);
+            assert_eq!(got, lhs, "#{i}: {want} - {rhs}");
+
+            let got = want.const_sub(lhs);
+            assert_eq!(got, rhs, "#{i}: {want} - {lhs}");
         }
     }
 }

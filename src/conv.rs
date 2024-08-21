@@ -1,10 +1,10 @@
 use core::{fmt, mem::MaybeUninit};
 
-use super::dec128::d128;
+use super::bid::d128;
 
 mod private {
     use super::{Buffer, Fmt};
-    use crate::dec128::d128;
+    use crate::bid::d128;
 
     pub trait Sealed {
         fn write(self, buf: &mut Buffer, fmt: Fmt) -> &str;

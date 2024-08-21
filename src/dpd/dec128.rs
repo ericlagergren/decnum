@@ -506,9 +506,9 @@ impl d128 {
         println!("lhs = {lhs} ({self})");
         println!("rhs = {rhs} ({other})");
         if shift > 0 {
-            lhs = lhs.shift(shift.unsigned_abs());
+            lhs = lhs.mul_pow10(shift.unsigned_abs() as u32);
         } else if shift < 0 {
-            rhs = rhs.shift(shift.unsigned_abs());
+            rhs = rhs.mul_pow10(shift.unsigned_abs() as u32);
         }
         println!("lhs = {lhs} ({self})");
         println!("rhs = {rhs} ({other})");
@@ -1074,58 +1074,20 @@ impl d128 {
         // Partition (pre, post) into (pre, post, extra)
         // where `pre || post` is at most 34 digits.
 
+        let nd = pre.len() + post.len();
         let mut extra: &[u8] = &[];
-        if pre.len() > 34 {
-            (pre, extra) = pre.split_at(34);
-            post = &[];
-        } else if pre.len() + post.len() > 34 {
-            (post, extra) = post.split_at(34 - pre.len());
-        };
-        let _ = extra;
-
-        const fn parse_bcd(mut bcd: Bcd34, mut s: &[u8]) -> Bcd34 {
-            /*
-            // If `bcd.hi` < 9 then we've written either zero or
-            // one digits to `bcd.hi`.
-            if bcd.hi < 9 && num_hi > 0 {
-                // Max 2 iters = 2 digits
-                let mut i = 0;
-                while i < num_hi {
-                    if let Some((&c, rest)) = s.split_first() {
-                        bcd.hi <<= 4;
-                        bcd.hi |= c - b'0';
-                        s = rest;
-                    }
-                    i += 1;
-                }
-            }*/
-
-            // Max floor(34/4) = 8 iters = 32 digits
-            while let Some((chunk, rest)) = s.split_first_chunk() {
-                // SAFETY: We've already checked that each byte
-                // in `s` is a valid digit.
-                let str = unsafe { Str4::from_bytes_unchecked(*chunk) };
-                bcd.lo <<= 16;
-                bcd.lo |= str.to_bcd() as u128;
-                s = rest;
+        if nd > 34 {
+            if pre.len() > 34 {
+                (pre, extra) = pre.split_at(34);
+                post = &[];
+            } else {
+                (post, extra) = post.split_at(34 - pre.len())
             }
-
-            while let Some((&c, rest)) = s.split_first() {
-                bcd.lo <<= 4;
-                bcd.lo |= (c - b'0') as u128;
-                s = rest;
-            }
-
-            bcd
         }
 
         let mut bcd = Bcd34::zero();
-
-        let num_hi = if pre.len() + post.len() >= 34 { 2 } else { 1 };
-
-        // Pick off the high digits.
         let mut i = 0;
-        while i < num_hi {
+        while i < 2 {
             if let Some((&c, rest)) = pre.split_first() {
                 bcd.hi <<= 4;
                 bcd.hi |= c - b'0';
@@ -1133,15 +1095,50 @@ impl d128 {
             } else if let Some((&c, rest)) = post.split_first() {
                 bcd.hi <<= 4;
                 bcd.hi |= c - b'0';
-                pre = rest;
+                post = rest;
+            } else {
+                // NB: This branch is unreachable given how
+                // we call this method. But it's not really
+                // worth using `unreachable_unchecked` ehre.
+                debug_assert!(false);
             }
             i += 1;
         }
 
-        bcd = parse_bcd(bcd, pre);
-        bcd = parse_bcd(bcd, post);
+        let mut parts: &[&[u8]] = &[pre, post];
+        while let Some((&(mut s), rest)) = parts.split_first() {
+            // Max floor(34/4) = 8 iters = 32 digits
+            while let Some((chunk, rest)) = s.split_first_chunk() {
+                // SAFETY: We've already checked that each
+                // byte in `s` is a valid digit.
+                let str = unsafe { Str4::from_bytes_unchecked(*chunk) };
+                bcd.lo <<= 16;
+                bcd.lo |= str.to_bcd() as u128;
+                s = rest;
+            }
+            while let Some((&c, rest)) = s.split_first() {
+                bcd.lo <<= 4;
+                bcd.lo |= (c - b'0') as u128;
+                s = rest;
+            }
+            parts = rest;
+        }
 
-        // TODO(eric): round via `extra`.
+        if nd == 33 {
+            bcd = bcd.div_pow10(1);
+        }
+
+        // Ignore '0'.
+        if let Some(&c @ (b'1'..=b'9')) = extra.first() {
+            let bump = if c > b'5' {
+                1
+            } else if c == b'5' {
+                bcd.lo & 0x1
+            } else {
+                0
+            };
+            let _ = bump; // TODO
+        }
 
         bcd.pack()
     }

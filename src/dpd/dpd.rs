@@ -5,8 +5,8 @@ use core::hint;
 use super::{
     bcd::{self, Pattern, Str3},
     tables::{BCD_TO_DPD, BIN_TO_DPD, DPD_TO_BCD, DPD_TO_STR},
-    util::assume,
 };
+use crate::util::assume;
 
 /// Reports whether the 10-bit DPD is valid.
 pub const fn is_valid(dpd: u16) -> bool {
