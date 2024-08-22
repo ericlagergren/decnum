@@ -359,7 +359,7 @@ pub const fn pack_bin_u32(mut bin: u32) -> u64 {
 /// `9`.
 ///
 /// `bin` must be in the range `[0, (10^34)-1]`
-pub const fn pack_bin_u113(mut bin: u128) -> u128 {
+pub(crate) const fn pack_bin_u113(mut bin: u128) -> u128 {
     const MASK: u128 = !(((1 << 15) - 1) << 113);
     bin &= MASK;
 
@@ -464,6 +464,11 @@ const fn bin_to_dpd(bin: u16) -> u16 {
     }
 }
 
+/// Unpacks a 120-bit DPD into a 113-bit binary number.
+pub(crate) const fn unpack_bin_u113(mut _dpd: u128) -> u128 {
+    todo!()
+}
+
 /// Returns the number of significant digits in the 10-bit DPD.
 pub(super) const fn sig_digits(dpd: u16) -> u32 {
     let bcd = unpack(dpd);
@@ -478,7 +483,6 @@ mod tests {
     use core::{fmt, iter};
 
     use super::*;
-    use crate::bcd;
 
     macro_rules! bit {
         ($x:ident, $idx:literal) => {{

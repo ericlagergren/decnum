@@ -34,6 +34,9 @@ std = ["alloc"]
 # TODO
 slow-128 = []
 
+# Enable slow tests.
+slow-tests = []
+
 [dependencies]
 bitflags = { version = "2.6.0", default-features = false }
 cfg-if = { version = "1.0.0", default-features = false }

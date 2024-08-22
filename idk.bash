@@ -10,7 +10,7 @@ $(<"src/${mod}.rs")
 }
 EOF
 }
-gather bcd
+gather bid
 gather dpd
 gather dec128
 gather tables

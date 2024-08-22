@@ -5,7 +5,7 @@ use bitflags::bitflags;
 /// TODO
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Ctx<D> {
-    traps: Condition,
+    //traps: Condition,
     round: RoundingMode,
     _dec: PhantomData<D>,
 }
@@ -13,7 +13,7 @@ pub struct Ctx<D> {
 impl<D> Default for Ctx<D> {
     fn default() -> Self {
         Self {
-            traps: Condition::default(),
+            //traps: Condition::default(),
             round: RoundingMode::default(),
             _dec: PhantomData,
         }

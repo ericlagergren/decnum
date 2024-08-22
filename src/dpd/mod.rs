@@ -2,8 +2,8 @@
 //! packed decimal significands.
 
 mod bcd;
-mod dec128;
 mod dpd;
+mod dpd128;
 mod tables;
 
-pub use dec128::d128;
+pub use dpd128::Dpd128;

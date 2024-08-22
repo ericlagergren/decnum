@@ -1,16 +1,30 @@
 use core::{fmt, mem::MaybeUninit};
 
-use super::bid::d128;
+use super::{bid::Bid128, dpd::Dpd128};
 
 mod private {
     use super::{Buffer, Fmt};
-    use crate::bid::d128;
+    use crate::{bid::Bid128, dpd::Dpd128};
 
     pub trait Sealed {
         fn write(self, buf: &mut Buffer, fmt: Fmt) -> &str;
     }
 
-    impl Sealed for d128 {
+    impl Sealed for Bid128 {
+        fn write(self, buf: &mut Buffer, fmt: Fmt) -> &str {
+            match fmt {
+                Fmt::UpperExp => {
+                    todo!()
+                }
+                Fmt::LowerExp => {
+                    todo!()
+                }
+                Fmt::Default => self.format(buf),
+            }
+        }
+    }
+
+    impl Sealed for Dpd128 {
         fn write(self, buf: &mut Buffer, fmt: Fmt) -> &str {
             match fmt {
                 Fmt::UpperExp => {
@@ -29,7 +43,8 @@ use private::Sealed;
 /// A floating point decimal number.
 pub trait Decimal: Sealed {}
 
-impl Decimal for d128 {}
+impl Decimal for Bid128 {}
+impl Decimal for Dpd128 {}
 
 /// A buffer for converting floating point decimals to text.
 #[derive(Copy, Clone, Debug)]
@@ -162,6 +177,28 @@ pub(super) const fn equal_fold(a: &[u8], b: &[u8]) -> bool {
         i += 1;
     }
     true
+}
+
+/// Parses digits from `s` and adds them to `x`, stopping at the
+/// first non-digit.
+///
+/// It returns the parsed digits, the unparsed digits, and the
+/// updated `x` in that order.
+pub(super) const fn parse_digits_u128(s: &[u8], mut x: u128) -> (&[u8], &[u8], u128) {
+    let mut lhs: &[u8] = &[];
+    let mut rhs: &[u8] = s;
+    let mut tmp = s;
+    let mut i = 0;
+    while let Some((c @ (b'0'..=b'9'), rest)) = tmp.split_first() {
+        // It's okay if `x` overflows. The caller is responsible
+        // for checking.
+        let d = (*c - b'0') as u128;
+        x = x * 10 + d;
+        (lhs, rhs) = s.split_at(i + 1);
+        i += 1;
+        tmp = rest;
+    }
+    (lhs, rhs, x)
 }
 
 #[cfg(test)]

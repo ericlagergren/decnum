@@ -1,5 +1,6 @@
 //! TODO
 
+#![allow(dead_code)] // TODO
 #![allow(clippy::unusual_byte_groupings)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(not(any(feature = "std", test)), deny(clippy::std_instead_of_core))]
@@ -32,10 +33,11 @@
 pub mod bid;
 mod conv;
 mod ctx;
-//pub mod dpd;
+mod decnumber;
+pub mod dpd;
 mod util;
 
-pub use bid::d128;
+pub use bid::{Bid128, Bid128 as d128};
 pub use conv::*;
 pub use ctx::*;
-//pub use uint96::*;
+pub use dpd::Dpd128;
