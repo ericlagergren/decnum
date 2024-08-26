@@ -1,16 +1,36 @@
 use core::{fmt, mem::MaybeUninit};
 
-use super::{bid::Bid128, dpd::Dpd128};
+use super::{
+    bid::{Bid128, Bid64},
+    dpd::Dpd128,
+};
 
 mod private {
     use super::{Buffer, Fmt};
-    use crate::{bid::Bid128, dpd::Dpd128};
+    use crate::{
+        bid::{Bid128, Bid64},
+        dpd::Dpd128,
+    };
 
     pub trait Sealed {
         fn write(self, buf: &mut Buffer, fmt: Fmt) -> &str;
     }
 
     impl Sealed for Bid128 {
+        fn write(self, buf: &mut Buffer, fmt: Fmt) -> &str {
+            match fmt {
+                Fmt::UpperExp => {
+                    todo!()
+                }
+                Fmt::LowerExp => {
+                    todo!()
+                }
+                Fmt::Default => self.format(buf),
+            }
+        }
+    }
+
+    impl Sealed for Bid64 {
         fn write(self, buf: &mut Buffer, fmt: Fmt) -> &str {
             match fmt {
                 Fmt::UpperExp => {
@@ -41,10 +61,11 @@ mod private {
 use private::Sealed;
 
 /// A floating point decimal number.
-pub trait Decimal: Sealed {}
+pub trait Number: Sealed {}
 
-impl Decimal for Bid128 {}
-impl Decimal for Dpd128 {}
+impl Number for Bid128 {}
+impl Number for Bid64 {}
+impl Number for Dpd128 {}
 
 /// A buffer for converting floating point decimals to text.
 #[derive(Copy, Clone, Debug)]
@@ -70,7 +91,7 @@ impl Buffer {
     /// Prints the decimal to the buffer.
     ///
     /// The decimal is printed in scientific notation.
-    pub fn format<D: Decimal>(&mut self, d: D, fmt: Fmt) -> &str {
+    pub fn format<D: Number>(&mut self, d: D, fmt: Fmt) -> &str {
         d.write(self, fmt)
     }
 }
@@ -193,6 +214,28 @@ pub(super) const fn parse_digits_u128(s: &[u8], mut x: u128) -> (&[u8], &[u8], u
         // It's okay if `x` overflows. The caller is responsible
         // for checking.
         let d = (*c - b'0') as u128;
+        x = x * 10 + d;
+        (lhs, rhs) = s.split_at(i + 1);
+        i += 1;
+        tmp = rest;
+    }
+    (lhs, rhs, x)
+}
+
+/// Parses digits from `s` and adds them to `x`, stopping at the
+/// first non-digit.
+///
+/// It returns the parsed digits, the unparsed digits, and the
+/// updated `x` in that order.
+pub(super) const fn parse_digits_u64(s: &[u8], mut x: u64) -> (&[u8], &[u8], u64) {
+    let mut lhs: &[u8] = &[];
+    let mut rhs: &[u8] = s;
+    let mut tmp = s;
+    let mut i = 0;
+    while let Some((c @ (b'0'..=b'9'), rest)) = tmp.split_first() {
+        // It's okay if `x` overflows. The caller is responsible
+        // for checking.
+        let d = (*c - b'0') as u64;
         x = x * 10 + d;
         (lhs, rhs) = s.split_at(i + 1);
         i += 1;

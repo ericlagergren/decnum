@@ -34,14 +34,21 @@ pub(super) const fn const_cmp(lhs: u128, rhs: u128) -> Ordering {
 }
 
 /// Returns the number of decimal digits in `x`.
+///
+/// The result will be in [0, 39].
 pub(super) const fn digits(mut x: u128) -> u32 {
-    x &= (1 << 113) - 1;
-    if x < 10 {
-        return 1;
-    }
-    let r = (bitlen(x) * 1233) >> 12;
-    // NB: `r` is [0, 35], so the compiler elides the bounds
-    // check.
+    // Ensure that `x` is non-zero so that `digits(0) == 1`.
+    //
+    // This cannot cause an incorrect result because:
+    //
+    // - `x|1` sets the lowest bit, so it cannot increase the bit
+    // length for a non-zero `x`.
+    // - `x >= p` remains correct because the largest integer
+    // less than `p` is 999...999, which is odd, meaning `x|1` is
+    // a no-op.
+    x |= 1;
+
+    let r = ((bitlen(x) + 1) * 1233) / 4096;
     let p = POW10[r as usize];
     r + (x >= p) as u32
 }
@@ -50,17 +57,14 @@ pub(super) const fn digits(mut x: u128) -> u32 {
 ///
 /// It returns 0 for `x == 0`.
 pub(super) const fn bitlen(x: u128) -> u32 {
-    128 - x.leading_zeros()
+    u128::BITS - x.leading_zeros()
 }
 
-/// All 113-bit powers of 10.
-///
-/// NB: This includes one extra power to help the compiler elide
-/// the bounds check in [`digits113`].
-const POW10: [u128; 35] = {
-    let mut tab = [0u128; 35];
+/// All 128-bit powers of 10.
+const POW10: [u128; 39] = {
+    let mut tab = [0u128; 39];
     let mut i = 0;
-    while i < 35 {
+    while i < tab.len() {
         tab[i] = 10u128.pow(i as u32);
         i += 1;
     }
@@ -162,6 +166,17 @@ mod tests {
             let got = shr(x, n);
             let want = x / 10u128.pow(n);
             assert_eq!(got, want, "{n}");
+        }
+    }
+
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn test_digits() {
+        let mut buf = itoa::Buffer::new();
+        for x in 0..u32::MAX {
+            let got = digits(x as u128);
+            let want = buf.format(x).len() as u32;
+            assert_eq!(got, want, "{x}");
         }
     }
 }

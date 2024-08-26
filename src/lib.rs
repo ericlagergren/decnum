@@ -30,11 +30,13 @@
 // #[cfg(feature = "alloc")]
 // extern crate alloc;
 
+mod base;
 pub mod bid;
 mod conv;
 mod ctx;
 mod decnumber;
 pub mod dpd;
+mod inteldfp;
 mod util;
 
 pub use bid::{Bid128, Bid128 as d128};

@@ -1,4 +1,4 @@
-use core::hint;
+use core::{hint, mem::MaybeUninit};
 
 macro_rules! const_assert {
     ($($tt:tt)*) => {
@@ -82,6 +82,42 @@ pub(super) const fn itoa4(n: u16) -> Str4 {
     v |= MASK;
     v >>= s;
     Str4(v)
+}
+
+/// See [`MaybeUninit::copy_from_slice`].
+pub(super) fn copy_from_slice(dst: &mut [MaybeUninit<u8>], src: &[u8]) {
+    // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout
+    let uninit_src: &[MaybeUninit<u8>] =
+        unsafe { &*(src as *const [u8] as *const [MaybeUninit<u8>]) };
+    dst.copy_from_slice(uninit_src);
+}
+
+/// See [`MaybeUninit::slice_assume_init_ref`].
+pub(super) const unsafe fn slice_assume_init_ref(slice: &[MaybeUninit<u8>]) -> &[u8] {
+    // SAFETY: casting `slice` to a `*const [T]` is safe since
+    // the caller guarantees that `slice` is initialized, and
+    // `MaybeUninit` is guaranteed to have the same layout as
+    // `T`. The pointer obtained is valid since it refers to
+    // memory owned by `slice` which is a reference and thus
+    // guaranteed to be valid for reads.
+    unsafe { &*(slice as *const [MaybeUninit<u8>] as *const [u8]) }
+}
+
+#[inline(always)]
+pub(super) fn copy(dst: &mut [MaybeUninit<u8>], src: &[u8]) -> usize {
+    let n = src.len();
+    // The caller must verify the length of `dst`
+    #[allow(clippy::indexing_slicing)]
+    copy_from_slice(&mut dst[..n], src);
+    n
+}
+
+pub(super) const fn maxi16(x: i16, y: i16) -> i16 {
+    if x < y {
+        y
+    } else {
+        x
+    }
 }
 
 #[cfg(test)]

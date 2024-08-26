@@ -1,6 +1,6 @@
 use core::{cmp::Ordering, fmt, mem::size_of, num::FpCategory, str};
 
-use super::arith128;
+use super::arith64;
 use crate::{
     base::impl_dec,
     conv::{self, Buffer, ParseError},
@@ -16,44 +16,34 @@ use crate::{
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone)]
 #[repr(transparent)]
-pub struct Bid128(
-    /// # Layout
-    ///
-    /// ## Bits
-    ///
-    /// 127: S
-    /// 126-110: G
-    /// 109-0: T
-    ///
-    /// ## Forms
-    ///
-    /// ### Form 1
+pub struct Bid64(
+    /// ## Form 1
     ///
     /// s 00eeeeee   (0)ttt tttttttttt tttttttttt
     /// s 01eeeeee   (0)ttt tttttttttt tttttttttt
     /// s 10eeeeee   (0)ttt tttttttttt tttttttttt
     ///
-    /// ### Form 2
+    /// ## Form 2
     ///
     /// s 1100eeeeee (100)t tttttttttt tttttttttt
     /// s 1101eeeeee (100)t tttttttttt tttttttttt
     /// s 1110eeeeee (100)t tttttttttt tttttttttt
-    u128,
+    u64,
 );
-const_assert!(size_of::<Bid128>() == 128 / 8);
+const_assert!(size_of::<Bid64>() == 64 / 8);
 
 impl_dec! {
-    name = Bid128,
-    ucoeff = u128,
-    scoeff = i128,
+    name = Bid64,
+    ucoeff = u64,
+    scoeff = i64,
     biased_exp = u16,
     unbiased_exp = i16,
-    comb = u32,
-    arith = arith128,
+    comb = u16,
+    arith = arith64,
 }
 
 // Public stuff.
-impl Bid128 {
+impl Bid64 {
     /// The largest value that can be represented by this type.
     pub const MAX: Self = Self::new(Self::MAX_COEFF, Self::MAX_EXP);
 
@@ -65,10 +55,10 @@ impl Bid128 {
     pub const MIN_POSITIVE: Self = Self::new(Self::MAX_COEFF, Self::MIN_EXP);
 
     /// The largest allowed coefficient.
-    pub const MAX_COEFF: i128 = 10i128.pow(Self::DIGITS) - 1;
+    pub const MAX_COEFF: i64 = 10i64.pow(Self::DIGITS) - 1;
 
     /// The smallestallowed coefficient.
-    pub const MIN_COEFF: i128 = -Self::MAX_COEFF;
+    pub const MIN_COEFF: i64 = -Self::MAX_COEFF;
 
     /// The maximum allowed exponent.
     pub const MAX_EXP: i16 = Self::EMAX;
@@ -181,9 +171,9 @@ impl Bid128 {
     /// Reports whether the number is `-0.0` or `+0.0`.
     pub const fn is_zero(self) -> bool {
         // Covers the coefficient and form one.
-        const MASK1: u128 = (0x7 << Bid128::COMB_SHIFT) | Bid128::COEFF_MASK;
+        const MASK1: u64 = (0x7 << Bid64::COMB_SHIFT) | Bid64::COEFF_MASK;
         // Covers form two and specials.
-        const MASK2: u128 = 0x18 << Bid128::COMB_SHIFT;
+        const MASK2: u64 = 0x18 << Bid64::COMB_SHIFT;
         (self.0 & MASK1) == 0 && (self.0 & MASK2) != MASK2
     }
 
@@ -216,7 +206,7 @@ impl Bid128 {
         if self.is_infinite() {
             1
         } else {
-            arith128::digits(self.coeff())
+            arith64::digits(self.coeff())
         }
     }
 
@@ -263,10 +253,10 @@ impl Bid128 {
         // Signs are the same.
         debug_assert!(self.signbit() == other.signbit());
 
-        if self.is_infinite() || other.is_infinite() {
-            // +inf == +inf
-            // -inf == -inf
-            return self.is_finite() == other.is_finite();
+        if self.is_infinite() && other.is_infinite() {
+            // +inf == -inf
+            // -inf == +inf
+            return true;
         }
         // Both are finite.
         debug_assert!(self.is_finite() && other.is_finite());
@@ -314,9 +304,9 @@ impl Bid128 {
         let mut lhs = self.coeff();
         let mut rhs = other.coeff();
         if self.biased_exp() > other.biased_exp() {
-            lhs = arith128::shl(lhs, shift);
+            lhs = arith64::shl(lhs, shift);
         } else if self.biased_exp() < other.biased_exp() {
-            rhs = arith128::shl(rhs, shift);
+            rhs = arith64::shl(rhs, shift);
         }
         lhs == rhs
     }
@@ -399,15 +389,15 @@ impl Bid128 {
             println!("rhs = {rhs} ({other})");
         }
         if shift > 0 {
-            lhs = arith128::shl(lhs, shift.unsigned_abs() as u32);
+            lhs = arith64::shl(lhs, shift.unsigned_abs() as u32);
         } else if shift < 0 {
-            rhs = arith128::shl(rhs, shift.unsigned_abs() as u32);
+            rhs = arith64::shl(rhs, shift.unsigned_abs() as u32);
         }
         if cfg!(debug_assertions) {
             println!("lhs = {lhs} ({self})");
             println!("rhs = {rhs} ({other})");
         }
-        Some(arith128::const_cmp(lhs, rhs))
+        Some(arith64::const_cmp(lhs, rhs))
     }
 
     /// Returns the total ordering between `self` and `other`.
@@ -432,11 +422,11 @@ impl Bid128 {
     /// example, they consider negative and positive zero equal,
     /// while `const_total_cmp` doesn't.
     pub const fn const_total_cmp(self, other: Self) -> Ordering {
-        let mut lhs = self.to_bits() as i128;
-        let mut rhs = other.to_bits() as i128;
+        let mut lhs = self.to_bits() as i64;
+        let mut rhs = other.to_bits() as i64;
 
-        lhs ^= (((lhs >> 127) as u128) >> 1) as i128;
-        rhs ^= (((rhs >> 127) as u128) >> 1) as i128;
+        lhs ^= (((lhs >> 63) as u64) >> 1) as i64;
+        rhs ^= (((rhs >> 63) as u64) >> 1) as i64;
 
         if lhs < rhs {
             Ordering::Less
@@ -449,73 +439,53 @@ impl Bid128 {
 }
 
 // To/from reprs.
-impl Bid128 {
+impl Bid64 {
     /// Creates a `d128` from its coefficient and exponent.
-    pub const fn new(coeff: i128, exp: i16) -> Self {
+    pub const fn new(coeff: i64, mut exp: i16) -> Self {
         let sign = coeff < 0;
-        // We explicitly check `coeff < 0`, so the sign loss is
-        // okay.
-        let coeff = coeff as u128;
-        if coeff < Self::MAX_COEFF as u128 && exp >= Self::ADJ_EMIN && exp <= Self::ADJ_EMAX {
-            // Fast path: `coeff` and `exp` are obviously valid.
-            Self::from_parts(sign, exp, coeff)
-        } else {
-            // Slow path: we have to round.
-            Self::rounded(sign, exp, coeff)
+        // We explicitly check `coeff < 0`, so the sign loss
+        // is okay.
+        let mut coeff = coeff as u64;
+
+        // Fast path: `coeff` and `exp` are obviously valid.
+        if coeff < Self::MAX_COEFF as u64 && exp >= Self::ADJ_EMIN && exp <= Self::ADJ_EMAX {
+            return Self::from_parts(sign, exp, coeff);
         }
-    }
 
-    const fn rounded(sign: bool, mut exp: i16, mut coeff: u128) -> Self {
-        let mut digits = arith128::digits(coeff) as i16;
-
-        let mut drop = util::maxi16(digits - Self::DIGITS as i16, Self::ETINY - exp);
-        if drop > 0 {
-            exp += drop;
-
+        // Slow path: we have to round.
+        let mut digits = arith64::digits(coeff);
+        if coeff > Self::MAX_COEFF as u64 {
             let mut d = 0; // rounding
-            while drop > 0 {
+            while coeff > Self::MAX_COEFF as u64 {
                 d = coeff % 10;
                 coeff /= 10;
+                exp += 1;
                 digits -= 1;
-                drop -= 1;
             }
-
             // Round half even: up if d > 5 or the new LSD is
             // odd.
             if d > 5 || (d == 5 && (coeff % 10) != 0) {
-                // NB: This is where we'd mark inexact.
                 coeff += 1;
-                if coeff > Self::MAX_COEFF as u128 {
+                if coeff > Self::MAX_COEFF as u64 {
                     coeff /= 10;
                     exp += 1;
                 }
             }
         }
 
-        let adj = exp + (digits - 1);
-        if exp < Self::EMIN && adj < Self::EMIN {
-            // NB: This is where we'd mark underflow.
-            if adj < Self::ETINY {
-                // Subnormal < ETINY, so exp = ETINY and the coeff is
-                // rounded.
-                //
-                // TODO(eric): Round to 0, don't hard code 0.
-                return Self::from_parts(sign, Self::ETINY, 0);
-            }
-            debug_assert!(adj >= Self::ETINY);
+        let adj = exp - ((digits as i16) - 1);
+        if adj < Self::ETINY {
+            // Subnormal < ETINY, so exp = ETINY and the coeff is
+            // rounded.
+            //
+            // TODO(eric): Round to 0, don't hard code 0.
+            return Self::from_parts(sign, Self::ETINY, 0);
         }
-        debug_assert!(adj >= Self::EMIN);
+        debug_assert!(adj >= Self::ETINY);
 
-        if exp > Self::ADJ_EMAX {
-            if coeff == 0 {
-                exp = Self::ADJ_EMAX; // clamped
-            } else if adj > Self::EMAX {
-                // NB: This is where we'd mark overflow.
-                return Self::inf(sign);
-            } else {
-                let _shift = exp + (Self::EMAX - (Self::MAX_PREC - 1) as i16);
-                // TODO
-            }
+        if adj > Self::EMAX {
+            // Overflow.
+            return Self::inf(sign);
         }
         debug_assert!(adj <= Self::EMAX);
 
@@ -524,143 +494,50 @@ impl Bid128 {
         Self::from_parts(sign, exp, coeff)
     }
 
-    /// Creates a `d128` from its coefficient and exponent.
-    pub fn new2(coeff: i128, exp: i16) -> Self {
-        let sign = coeff < 0;
-        let coeff = coeff as u128;
-        if coeff < Self::MAX_COEFF as u128 && exp >= Self::ADJ_EMIN && exp <= Self::ADJ_EMAX {
-            Self::from_parts(sign, exp, coeff)
-        } else {
-            Self::rounded2(sign, exp, coeff)
-        }
-    }
-
-    fn rounded2(sign: bool, mut exp: i16, mut coeff: u128) -> Self {
-        println!("rounded2: sign={sign} exp={exp} coeff={coeff}");
-        // Fast path: `coeff` and `exp` are obviously valid.
-        if coeff < Self::MAX_COEFF as u128 && exp >= Self::ADJ_EMIN && exp <= Self::ADJ_EMAX {
-            return Self::from_parts(sign, exp, coeff);
-        }
-
-        // Slow path: we have to round.
-        let mut digits = arith128::digits(coeff) as i16;
-        println!("digits={digits}");
-
-        let drop = util::maxi16(digits - Self::DIGITS as i16, Self::ETINY - exp);
-        println!("drop={drop}");
-        if drop > 0 {
-            exp += drop;
-
-            let mut d = 0; // rounding
-            while drop > 0 {
-                d = coeff % 10;
-                coeff /= 10;
-                digits -= 1;
-            }
-
-            // Round half even: up if d > 5 or the new LSD is
-            // odd.
-            if d > 5 || (d == 5 && (coeff % 10) != 0) {
-                // NB: This is where we'd mark inexact.
-                coeff += 1;
-                if coeff > Self::MAX_COEFF as u128 {
-                    coeff /= 10;
-                    exp += 1;
-                }
-            }
-        }
-
-        println!("digits={digits}");
-        let adj = exp + (digits - 1);
-        if exp < Self::EMIN && adj < Self::EMIN {
-            // NB: This is where we'd mark underflow.
-            if adj < Self::ETINY {
-                // Subnormal < ETINY, so exp = ETINY and the coeff is
-                // rounded.
-                //
-                // TODO(eric): Round to 0, don't hard code 0.
-                return Self::from_parts(sign, Self::ETINY, 0);
-            }
-            debug_assert!(adj >= Self::ETINY);
-        }
-        debug_assert!(exp >= Self::EMIN);
-        debug_assert!(adj >= Self::EMIN);
-
-        println!("exp = {exp}");
-        println!("adj = {adj}");
-        if exp > Self::ADJ_EMAX {
-            if coeff == 0 {
-                println!("zero");
-                exp = Self::ADJ_EMAX; // clamped
-            } else if adj > Self::EMAX {
-                println!("inf");
-                // NB: This is where we'd mark overflow.
-                return Self::inf(sign);
-            } else {
-                let shift = exp + (Self::EMAX - (Self::MAX_PREC - 1) as i16);
-                println!("shift = {shift}");
-            }
-        }
-        debug_assert!(exp <= Self::EMAX);
-
-        println!("exp={exp}");
-
-        // adj is in [ETINY, EMAX].
-
-        Self::from_parts(sign, exp, coeff)
-    }
-
     /// Creates an infinity.
     const fn inf(sign: bool) -> Self {
-        let bits = signbit(sign) | comb(0x1e000);
+        let bits = signbit(sign) | comb(0x1e00);
         Self::from_bits(bits)
     }
 
     /// Creates a quiet NaN.
     const fn nan(sign: bool) -> Self {
-        let bits = signbit(sign) | comb(0x1f000);
+        let bits = signbit(sign) | comb(0x1f00);
         Self::from_bits(bits)
     }
 
     /// Creates a signaling NaN.
     const fn snan(sign: bool) -> Self {
-        let bits = signbit(sign) | comb(0x1f800);
+        let bits = signbit(sign) | comb(0x1f80);
         Self::from_bits(bits)
     }
 
     /// Creates a `d128` from its raw bits.
     ///
     /// ```rust
-    /// use decnum::Bid128;
+    /// use decnum::Bid64;
     ///
-    /// let got = Bid128::from_bits(0x2207c0000000000000000000000000a5);
+    /// let got = Bid64::from_bits(0x2207c0000000000000000000000000a5);
     /// let want = "12.5".parse::<d128>().unwrap();
     /// assert_eq!(v, "12.5");
     /// ```
-    pub const fn from_bits(bits: u128) -> Self {
+    pub const fn from_bits(bits: u64) -> Self {
         Self(bits)
     }
 
     /// Creates a `d128` from a little-endian byte array.
-    pub const fn from_le_bytes(bytes: [u8; 16]) -> Self {
-        Self::from_bits(u128::from_le_bytes(bytes))
+    pub const fn from_le_bytes(bytes: [u8; 8]) -> Self {
+        Self::from_bits(u64::from_le_bytes(bytes))
     }
 
     /// Creates a `d128` from a big-endian byte array.
-    pub const fn from_be_bytes(bytes: [u8; 16]) -> Self {
-        Self::from_bits(u128::from_be_bytes(bytes))
+    pub const fn from_be_bytes(bytes: [u8; 8]) -> Self {
+        Self::from_bits(u64::from_be_bytes(bytes))
     }
 
     /// Creates a `d128` from a native-endian byte array.
-    pub const fn from_ne_bytes(bytes: [u8; 16]) -> Self {
-        Self::from_bits(u128::from_ne_bytes(bytes))
-    }
-
-    /// Creates a `d128` from `coeff` and an exponent of zero.
-    ///
-    /// The result is always exact.
-    pub const fn from_i32(coeff: i32) -> Self {
-        Self::from_i64(coeff as i64)
+    pub const fn from_ne_bytes(bytes: [u8; 8]) -> Self {
+        Self::from_bits(u64::from_ne_bytes(bytes))
     }
 
     /// Creates a `d128` from `coeff` and an exponent of zero.
@@ -673,50 +550,24 @@ impl Bid128 {
     /// Creates a `d128` from `coeff` and an exponent of zero.
     ///
     /// The result is always exact.
-    pub const fn from_i64(coeff: i64) -> Self {
-        Self::from_parts(coeff < 0, 0, coeff as u128)
-    }
-
-    /// Creates a `d128` from `coeff` and an exponent of zero.
-    ///
-    /// The result is always exact.
     pub const fn from_u64(coeff: u64) -> Self {
-        Self::from_parts(false, 0, coeff as u128)
+        Self::from_parts(false, 0, coeff as u64)
     }
 
-    /// Creates a `d128` from `coeff` and an exponent of zero.
-    ///
-    /// The result is always exact.
-    pub const fn from_i128(coeff: i128) -> Self {
-        Self::new(coeff, 0)
-    }
-
-    /// Creates a `d128` from `coeff` and an exponent of zero.
-    ///
-    /// The result is always exact.
-    pub const fn from_u128(coeff: u128) -> Self {
-        if coeff < Self::MAX_COEFF as u128 {
-            // Fast path: `coeff` is valid.
-            Self::from_parts(false, 0, coeff)
-        } else {
-            // Slow path: we have to round.
-            Self::rounded(false, 0, coeff)
-        }
-    }
-
-    /// Raw transmutation to `u128`.
-    pub const fn to_bits(self) -> u128 {
+    /// Raw transmutation to `u64`.
+    pub const fn to_bits(self) -> u64 {
         self.0
     }
 
-    /// Converts the `Bid128` to a `Dpd128`.
+    /// Converts the `Bid64` to a `Dpd128`.
+    // TODO(eric): Change this to `to_dpd64`.
     pub const fn to_dpd128(self) -> Dpd128 {
-        Dpd128::from_parts_bin(self.signbit(), self.unbiased_exp(), self.coeff())
+        Dpd128::from_parts_bin(self.signbit(), self.unbiased_exp(), self.coeff() as u128)
     }
 }
 
 // Const arithmetic.
-impl Bid128 {
+impl Bid64 {
     /// Returns `self + other`.
     ///
     /// This is the same as [`Add`], but can be used in a const
@@ -759,41 +610,8 @@ impl Bid128 {
     }
 }
 
-// Misc.
-impl Bid128 {
-    /// TODO
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn scaleb(self, n: u32) -> Self {
-        if self.is_nan() {
-            return self;
-        }
-        if n > Self::MAX_SCALEB_N {
-            return Self::NAN;
-        }
-        if self.is_infinite() {
-            return self;
-        }
-        let mut exp = self.biased_exp() + n as u16;
-        if exp <= Self::LIMIT {
-            return self.with_biased_exp(exp);
-        }
-        while exp >= Self::LIMIT {
-            exp -= 1;
-        }
-        todo!()
-    }
-
-    /// TODO
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn set_exponent(self, _n: i16) -> Self {
-        todo!()
-    }
-}
-
 // String conversions.
-impl Bid128 {
+impl Bid64 {
     /// Converts the decimal to a string.
     #[allow(clippy::indexing_slicing)]
     pub fn format(self, dst: &mut Buffer) -> &str {
@@ -891,7 +709,7 @@ impl Bid128 {
                 // `e` is either 0 or `pre-1`. Since `pre` is in
                 // [1, DIGITS+MAX_EXP] and DIGITS+MAX_EXP <=
                 // u16::MAX, the cast cannot wrap.
-                const_assert!((Bid128::DIGITS + Bid128::MAX_EXP as u32) < u16::MAX as u32);
+                const_assert!((Bid64::DIGITS + Bid64::MAX_EXP as u32) < u16::MAX as u32);
                 let s = util::itoa4(e.unsigned_abs() as u16);
                 util::copy_from_slice(&mut dst[i..i + 4], &s.to_bytes());
                 i += s.digits();
@@ -924,7 +742,7 @@ impl Bid128 {
             assume(pre >= 2);
             assume(pre <= 7);
         }
-        const_assert!(1 + 7 + Bid128::DIGITS as usize <= Buffer::len());
+        const_assert!(1 + 7 + Bid64::DIGITS as usize <= Buffer::len());
 
         util::copy(dst, b"-0.00000");
         let mut i = 1 + pre;
@@ -993,17 +811,17 @@ impl Bid128 {
     ///
     /// It returns the coefficient, number of digits after the
     /// decimal point, and unused remainder of the input.
-    fn parse_coeff(s: &[u8]) -> Result<(u128, usize, &[u8]), ParseError> {
+    fn parse_coeff(s: &[u8]) -> Result<(u64, usize, &[u8]), ParseError> {
         debug_assert!(!s.is_empty());
 
         if cfg!(debug_assertions) {
             println!("parse_coeff = {}", str::from_utf8(s).unwrap());
         }
 
-        let (pre, rest, coeff) = conv::parse_digits_u128(s, 0);
-        let (post, rest, coeff): (&[u8], &[u8], u128) =
+        let (pre, rest, coeff) = conv::parse_digits_u64(s, 0);
+        let (post, rest, coeff): (&[u8], &[u8], u64) =
             if let Some((&b'.', rest)) = rest.split_first() {
-                conv::parse_digits_u128(rest, coeff)
+                conv::parse_digits_u64(rest, coeff)
             } else {
                 (&[], rest, coeff)
             };
@@ -1058,7 +876,7 @@ impl Bid128 {
     ///
     /// The coefficient does not have any leading zeros.
     #[cold]
-    fn parse_large_coeff<'a>(mut pre: &'a [u8], mut post: &'a [u8]) -> (u128, usize) {
+    fn parse_large_coeff<'a>(mut pre: &'a [u8], mut post: &'a [u8]) -> (u64, usize) {
         debug_assert!(pre.len() + post.len() > Self::DIGITS as usize);
         util::debug_assert_all_digits(pre);
         util::debug_assert_all_digits(post);
@@ -1073,7 +891,7 @@ impl Bid128 {
             if nd >= Self::DIGITS {
                 break;
             }
-            let d = (c - b'0') as u128;
+            let d = (c - b'0') as u64;
             lsd = d;
             coeff = coeff * 10 + d;
             pre = rest;
@@ -1083,7 +901,7 @@ impl Bid128 {
             if nd >= Self::DIGITS {
                 break;
             }
-            let d = (c - b'0') as u128;
+            let d = (c - b'0') as u64;
             lsd = d;
             coeff = coeff * 10 + d;
             post = rest;
@@ -1105,7 +923,7 @@ impl Bid128 {
         }
 
         let mut exp = 0;
-        while coeff > Self::MAX_COEFF as u128 {
+        while coeff > Self::MAX_COEFF as u64 {
             coeff /= 10;
             exp += 1;
         }
@@ -1175,38 +993,21 @@ impl Bid128 {
     }
 }
 
-impl fmt::Debug for Bid128 {
+impl fmt::Debug for Bid64 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let sign = if self.signbit() { "-" } else { "+" };
-        if self.is_nan() {
-            if self.is_snan() {
-                write!(f, "{sign}NaN")
-            } else {
-                write!(f, "{sign}sNaN")
-            }
-        } else if self.is_infinite() {
-            write!(f, "{sign}inf")
-        } else {
-            write!(
-                f,
-                "[{},{},{},form={}]",
-                self.signbit() as u8,
-                self.coeff(),
-                self.unbiased_exp(),
-                (self.is_form2() as u8) + 1,
-            )
-        }
+        // TODO(eric): split by field
+        write!(f, "{}", self.to_bits())
     }
 }
 
-const fn signbit(sign: bool) -> u128 {
-    (sign as u128) << Bid128::SIGN_SHIFT
+const fn signbit(sign: bool) -> u64 {
+    (sign as u64) << Bid64::SIGN_SHIFT
 }
 
-const fn comb(bits: u32) -> u128 {
-    debug_assert!(bits & !((1 << Bid128::COMB_BITS) - 1) == 0);
+const fn comb(bits: u16) -> u64 {
+    debug_assert!(bits & !((1 << Bid64::COMB_BITS) - 1) == 0);
 
-    (bits as u128) << Bid128::COMB_SHIFT
+    (bits as u64) << Bid64::COMB_SHIFT
 }
 
 #[cfg(test)]
@@ -1214,119 +1015,85 @@ mod tests {
     use super::*;
     use crate::decnumber::Quad;
 
-    impl Bid128 {
+    impl Bid64 {
         const SNAN: Self = Self::snan(false);
         const NEG_NAN: Self = Self::nan(true);
         const NEG_SNAN: Self = Self::snan(true);
     }
 
     #[test]
-    fn test_idk() {
-        let i = 0;
-        let output = "9.111222333444555666777888999000111E+6144";
-        let want = Bid128::new2(9111222333444555666777888999000111, 6111);
-        let q = Quad::parse(output);
-        assert_eq!(output, q.to_string(), "#{i}");
-        println!("q = {q}");
-        let got: Bid128 = output.parse().unwrap();
-        if want.is_nan() {
-            assert!(got.is_nan(), "#{i}: parse(\"{output}\") -> {want}");
-        } else {
-            assert_eq!(got, want, "#{i}: parse(\"{output}\") -> {want}");
-        }
-        println!("");
-    }
-
-    #[test]
     fn test_exp() {
-        for mut want in Bid128::MIN_EXP..=Bid128::MAX_EXP {
-            if want > Bid128::ADJ_EMAX {
-                want = Bid128::ADJ_EMAX;
-            }
-
-            let d = Bid128::new2(0, want);
+        for exp in 0..=Bid64::MAX_EXP {
+            let d = Bid64::new(0, exp);
             let got = d.unbiased_exp();
-            assert_eq!(got, want, "(1) d={:024b}", d.to_bits() >> (128 - 24));
-            assert_eq!(d.coeff(), 0, "#{want}");
+            assert_eq!(got, exp, "(1) d={:024b}", d.to_bits() >> (64 - 24));
+            assert_eq!(d.coeff(), 0, "#{exp}");
 
-            let d = Bid128::new2(Bid128::MAX_COEFF, want);
+            let d = Bid64::new(Bid64::MAX_COEFF, exp);
             let got = d.unbiased_exp();
-            assert_eq!(got, want, "(2) d={:024b}", d.to_bits() >> (128 - 24));
-            assert_eq!(d.coeff(), Bid128::MAX_COEFF as u128, "#{want}");
+            assert_eq!(got, exp, "(2) d={:024b}", d.to_bits() >> (64 - 24));
+            assert_eq!(d.coeff(), Bid64::MAX_COEFF as u64, "#{exp}");
         }
     }
 
-    static STR_TESTS: &[(&'static str, Bid128)] = &[
-        ("NaN", Bid128::NAN),
-        ("-NaN", Bid128::NEG_NAN),
-        ("sNaN", Bid128::SNAN),
-        ("-sNaN", Bid128::NEG_SNAN),
-        ("Infinity", Bid128::INFINITY),
-        ("-Infinity", Bid128::NEG_INFINITY),
-        ("0", Bid128::new(0, 0)),
-        ("0.0", Bid128::new(0, -1)),
-        ("0E+6111", Bid128::new(0, Bid128::MAX_EXP)),
-        ("0E-6143", Bid128::new(0, Bid128::MIN_EXP)),
-        ("0E-6176", Bid128::new(0, Bid128::ETINY)),
-        ("2.1", Bid128::new(21, -1)),
-        ("2.10", Bid128::new(210, -2)),
-        ("4.2E+2", Bid128::new(42, 1)),
-        ("42", Bid128::new(42, 0)),
-        ("4.2", Bid128::new(42, -1)),
-        ("0.42", Bid128::new(42, -2)),
-        ("0.042", Bid128::new(42, -3)),
-        ("0.0042", Bid128::new(42, -4)),
-        ("0.00042", Bid128::new(42, -5)),
-        ("0.000042", Bid128::new(42, -6)),
-        ("0.0000042", Bid128::new(42, -7)),
-        ("4.2E-7", Bid128::new(42, -8)),
-        (
-            "9.111222333444555666777888999000111E+6144",
-            Bid128::new(9111222333444555666777888999000111, 6111),
-        ),
-        (
-            "9.111222333444555666777888999000111E-6143",
-            Bid128::new(9111222333444555666777888999000111, Bid128::MIN_EXP),
-        ),
-        (
-            "9111222333444555666777888999000111",
-            Bid128::new(9111222333444555666777888999000111, 0),
-        ),
-        (
-            "91112223334445556667778889990001.11",
-            Bid128::new(9111222333444555666777888999000111, -2),
-        ),
-        (
-            "9.111222333444555666777888999000111E+35",
-            Bid128::new(9111222333444555666777888999000111, 2),
-        ),
-        (
-            "0.000009999999999999999999999999999999999",
-            Bid128::new(Bid128::MAX_COEFF, -39),
-        ),
-        ("1E-12287", Bid128::new(9999, Bid128::MIN_EXP)),
-        ("1E+6145", Bid128::new(0, Bid128::MAX_EXP)),
-        (
-            "99999999999999999999999999999999999E+6144",
-            Bid128::new(10i128.pow(35) - 1, Bid128::MAX_EXP),
-        ),
-        (
-            "99999999999999999999999999999999999",
-            Bid128::new(10i128.pow(35) - 1, 0),
-        ),
-        (
-            "1.000000000000000000000000000000000E+37",
-            Bid128::new(9999999999999999999999999999999999, 36),
-        ),
+    static STR_TESTS: &[(Bid64, &'static str)] = &[
+        // (Bid64::NAN, "NaN"),
+        // (Bid64::NEG_NAN, "-NaN"),
+        // (Bid64::SNAN, "sNaN"),
+        // (Bid64::NEG_SNAN, "-sNaN"),
+        // (Bid64::INFINITY, "Infinity"),
+        // (Bid64::NEG_INFINITY, "-Infinity"),
+        // (Bid64::new(0, 0), "0"),
+        // (Bid64::new(0, -1), "0.0"),
+        // (Bid64::new(0, Bid64::MAX_EXP), "0E+6111"),
+        // (Bid64::new(0, Bid64::MIN_EXP), "0E-6176"),
+        // (Bid64::new(21, -1), "2.1"),
+        // (Bid64::new(210, -2), "2.10"),
+        // (Bid64::new(42, 1), "4.2E+2"),
+        // (Bid64::new(42, 0), "42"),
+        // (Bid64::new(42, -1), "4.2"),
+        // (Bid64::new(42, -2), "0.42"),
+        // (Bid64::new(42, -3), "0.042"),
+        // (Bid64::new(42, -4), "0.0042"),
+        // (Bid64::new(42, -5), "0.00042"),
+        // (Bid64::new(42, -6), "0.000042"),
+        // (Bid64::new(42, -7), "0.0000042"),
+        // (Bid64::new(42, -8), "4.2E-7"),
+        // (
+        //     Bid64::new(Bid64::MAX_COEFF, -39),
+        //     "0.000009999999999999999999999999999999999",
+        // ),
+        // (Bid64::new(9999, Bid64::MIN_EXP), "1E-12287"),
+        // (Bid64::new(0, Bid64::MAX_EXP), "1E+6145"),
+        // (
+        //     Bid64::new(10i64.pow(Bid64::DIGITS + 1) - 1, Bid64::MAX_EXP),
+        //     "99999999999999999999999999999999999E+6144",
+        // ),
+        // (
+        //     Bid64::new(10i64.pow(Bid64::DIGITS + 1) - 1, 0),
+        //     "99999999999999999999999999999999999",
+        // ),
+        // (
+        //     Bid64::new(10i64.pow(Bid64::DIGITS + 1) - 1, 36),
+        //     "1.000000000000000000000000000000000E+37",
+        // ),
     ];
 
     #[test]
+    fn test_format() {
+        for (i, (input, want)) in STR_TESTS.iter().enumerate() {
+            let got = input.to_string();
+            assert_eq!(got, *want, "#{i}");
+        }
+    }
+
+    #[test]
     fn test_parse() {
-        for (i, &(output, want)) in STR_TESTS.iter().enumerate() {
+        for (i, &(want, output)) in STR_TESTS.iter().enumerate() {
             let q = Quad::parse(output);
-            assert_eq!(output, q.to_string(), "#{i}");
             println!("q = {q}");
-            let got: Bid128 = output.parse().unwrap();
+            let got: Bid64 = output.parse().unwrap();
+            println!("got = {got}");
             if want.is_nan() {
                 assert!(got.is_nan(), "#{i}: parse(\"{output}\") -> {want}");
             } else {
@@ -1336,23 +1103,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_format() {
-        for (i, &(want, input)) in STR_TESTS.iter().enumerate() {
-            let q = Quad::parse(want);
-            assert_eq!(want, q.to_string(), "#{i}");
-            println!("q = {q}");
-            let got = input.to_string();
-            assert_eq!(got, want, "#{i}");
-        }
-    }
-
     // NB: This takes ~3.5 minutes on an Apple M1.
     #[test]
     #[cfg(feature = "slow-tests")]
     fn test_from_u32() {
         for x in 0..=u32::MAX {
-            let got = Bid128::from_u32(x);
+            let got = Bid64::from_u32(x);
             let want = Quad::from_u32(x);
             assert_eq!(got, want, "#{x}");
         }
@@ -1360,9 +1116,9 @@ mod tests {
 
     #[test]
     fn test_digits() {
-        for i in 1..Bid128::DIGITS {
-            let v = 10i128.pow(i);
-            let got = Bid128::new(v - 1, 0).digits();
+        for i in 1..Bid64::DIGITS {
+            let v = 10i64.pow(i);
+            let got = Bid64::new(v - 1, 0).digits();
             let want = v.ilog10();
             assert_eq!(got, want, "#{}", v - 1);
         }
@@ -1382,8 +1138,8 @@ mod tests {
         ];
         for (i, (lhs, rhs, want)) in tests.into_iter().enumerate() {
             println!("lhs={lhs} rhs={rhs}");
-            let x: Bid128 = lhs.parse().unwrap();
-            let y: Bid128 = rhs.parse().unwrap();
+            let x: Bid64 = lhs.parse().unwrap();
+            let y: Bid64 = rhs.parse().unwrap();
             println!("x={x} y={y}");
             let got = PartialOrd::partial_cmp(&x, &y);
             assert_eq!(got, want, "#{i}: partial_cmp({lhs}, {rhs})");
@@ -1398,8 +1154,8 @@ mod tests {
 
     #[test]
     fn test_shift() {
-        let lhs = Bid128::new(1230, -1);
-        let rhs = Bid128::new(12300, -2);
+        let lhs = Bid64::new(1230, -1);
+        let rhs = Bid64::new(12300, -2);
         println!("lhs = {lhs} {}", lhs.unbiased_exp());
         println!("rhs = {rhs} {}", rhs.unbiased_exp());
     }

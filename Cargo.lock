@@ -398,6 +398,7 @@ dependencies = [
  "dec",
  "decnum",
  "decnumber-sys",
+ "dfp-number-sys",
  "itoa",
  "rand",
  "ruint",
@@ -406,8 +407,6 @@ dependencies = [
 [[package]]
 name = "decnumber-sys"
 version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b4bc33814bd5bcd46dd13f9471a29ab1a22c4701ae0c4a182e45e8336d1a5b"
 dependencies = [
  "cc",
  "libc",
@@ -422,6 +421,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "dfp-number-sys"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d38f75bdc540fb9ce5ed05bb455932b7489d76a5981825a5cbfbe2787239089a"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]
