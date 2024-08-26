@@ -4,7 +4,7 @@ use core::hint;
 
 use super::{
     bcd::{self, Pattern, Str3},
-    tables::{BCD_TO_DPD, BIN_TO_DPD, DPD_TO_BCD, DPD_TO_STR},
+    tables::{BCD_TO_DPD, BIN_TO_DPD, DPD_TO_BCD, DPD_TO_BIN, DPD_TO_STR},
 };
 use crate::util::assume;
 
@@ -465,8 +465,24 @@ const fn bin_to_dpd(bin: u16) -> u16 {
 }
 
 /// Unpacks a 120-bit DPD into a 113-bit binary number.
-pub(crate) const fn unpack_bin_u113(mut _dpd: u128) -> u128 {
-    todo!()
+pub(crate) const fn unpack_bin_u113(mut dpd: u128) -> u128 {
+    let mut bin = 0;
+    while dpd > 0 {
+        let declet = (dpd & 0x3ff) as u16;
+        bin *= 1000;
+        bin += dpd_to_bin(declet) as u128;
+        dpd >>= 10;
+    }
+    bin
+}
+
+const fn dpd_to_bin(dpd: u16) -> u16 {
+    if cfg!(feature = "dpd-tables") {
+        #[allow(clippy::indexing_slicing)]
+        DPD_TO_BIN[dpd as usize]
+    } else {
+        bcd::to_bin(unpack(dpd))
+    }
 }
 
 /// Returns the number of significant digits in the 10-bit DPD.
@@ -675,12 +691,17 @@ mod tests {
     }
 
     #[test]
-    fn test_pack_bin_u113() {
+    fn test_pack_unpack_bin_u113() {
+        println!("xxx = {}", dpd_to_bin(bin_to_dpd(1)));
+
         // TODO(eric): test (some of) the rest of the digits.
         for bin in 0..=999 {
             let got = pack_bin_u113(bin);
             let want = bin2dpd(bin as u16) as u128;
             assert_eq!(got, want, "#{bin}");
+
+            let got = unpack_bin_u113(got);
+            assert_eq!(got, bin);
         }
 
         let want = {
@@ -693,6 +714,8 @@ mod tests {
         };
         let got = pack_bin_u113(10u128.pow(34) - 1);
         assert_eq!(got, want);
+        let got = unpack_bin_u113(got);
+        assert_eq!(got, 10u128.pow(34) - 1);
     }
 
     #[test]

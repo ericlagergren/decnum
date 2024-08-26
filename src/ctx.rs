@@ -40,6 +40,21 @@ pub enum RoundingMode {
     ToNearestTowardZero,
 }
 
+impl RoundingMode {
+    pub(super) fn try_from_str(s: &str) -> Option<Self> {
+        let mode = match s {
+            "half_even" => Self::ToNearestEven,
+            "half_up" => Self::ToNearestAway,
+            "down" => Self::ToZero,
+            "floor" => Self::ToNegativeInf,
+            "ceiling" => Self::ToPositiveInf,
+            "half_down" => Self::ToNearestTowardZero,
+            _ => return None,
+        };
+        Some(mode)
+    }
+}
+
 /// An exceptional condition raised during or after an operation.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Condition(u32);

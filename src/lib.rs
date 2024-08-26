@@ -34,6 +34,7 @@ pub mod bid;
 mod conv;
 mod ctx;
 mod decnumber;
+mod dectest;
 pub mod dpd;
 mod inteldfp;
 mod macros;

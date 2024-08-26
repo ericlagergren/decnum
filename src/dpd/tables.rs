@@ -47,7 +47,6 @@ pub(super) const BIN_TO_DPD: [u16; 1000] = {
 
 /// Converts a 10-bit DPD to a binary number in [0,999].
 #[allow(clippy::indexing_slicing)]
-#[allow(dead_code)] // TODO
 pub(super) const DPD_TO_BIN: [u16; 1 << 10] = {
     let mut t = [0u16; 1 << 10];
     let mut bin = 0;

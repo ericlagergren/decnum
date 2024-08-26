@@ -352,7 +352,7 @@ const fn comb(bits: u32) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decnumber::Quad;
+    use crate::{decnumber::Quad, dectest};
 
     impl Bid128 {
         const SNAN: Self = Self::snan(false);
@@ -396,90 +396,12 @@ mod tests {
         }
     }
 
-    static STR_TESTS: &[(&'static str, Bid128)] = &[
-        ("NaN", Bid128::NAN),
-        ("-NaN", Bid128::NEG_NAN),
-        ("sNaN", Bid128::SNAN),
-        ("-sNaN", Bid128::NEG_SNAN),
-        ("Infinity", Bid128::INFINITY),
-        ("-Infinity", Bid128::NEG_INFINITY),
-        ("0", Bid128::new(0, 0)),
-        ("0.0", Bid128::new(0, -1)),
-        ("0E+6111", Bid128::new(0, Bid128::MAX_EXP)),
-        ("0E-6143", Bid128::new(0, Bid128::MIN_EXP)),
-        ("0E-6176", Bid128::new(0, Bid128::ETINY)),
-        ("2.1", Bid128::new(21, -1)),
-        ("2.10", Bid128::new(210, -2)),
-        ("4.2E+2", Bid128::new(42, 1)),
-        ("42", Bid128::new(42, 0)),
-        ("4.2", Bid128::new(42, -1)),
-        ("0.42", Bid128::new(42, -2)),
-        ("0.042", Bid128::new(42, -3)),
-        ("0.0042", Bid128::new(42, -4)),
-        ("0.00042", Bid128::new(42, -5)),
-        ("0.000042", Bid128::new(42, -6)),
-        ("0.0000042", Bid128::new(42, -7)),
-        ("4.2E-7", Bid128::new(42, -8)),
-        (
-            "9.111222333444555666777888999000111E+6144",
-            Bid128::new(9111222333444555666777888999000111, 6111),
-        ),
-        (
-            "9.111222333444555666777888999000111E-6143",
-            Bid128::new(9111222333444555666777888999000111, -6176),
-        ),
-        (
-            "9111222333444555666777888999000111",
-            Bid128::new(9111222333444555666777888999000111, 0),
-        ),
-        (
-            "91112223334445556667778889990001.11",
-            Bid128::new(9111222333444555666777888999000111, -2),
-        ),
-        (
-            "9.111222333444555666777888999000111E+35",
-            Bid128::new(9111222333444555666777888999000111, 2),
-        ),
-        (
-            "0.000009999999999999999999999999999999999",
-            Bid128::new(Bid128::MAX_COEFF, -39),
-        ),
-        ("9.999E-6140", Bid128::new(9999, Bid128::MIN_EXP)),
-        ("1E+6145", Bid128::INFINITY),
-        (
-            "99999999999999999999999999999999999E+6144",
-            Bid128::new(10i128.pow(35) - 1, Bid128::MAX_EXP),
-        ),
-        (
-            "99999999999999999999999999999999999",
-            Bid128::new(10i128.pow(35) - 1, 0),
-        ),
-        (
-            "1.000000000000000000000000000000000E+37",
-            Bid128::new(1000000000000000000000000000000000, 4),
-        ),
-    ];
-
     #[test]
-    fn test_parse() {
-        for (i, &(input, want)) in STR_TESTS.iter().enumerate() {
-            let got: Bid128 = input.parse().unwrap();
-            if want.is_nan() {
-                assert!(got.is_nan(), "#{i}: parse(\"{input}\") -> {want}");
-            } else {
-                assert_eq!(got, want, "#{i}: parse(\"{input}\") -> {want}");
-            }
-        }
-    }
-
-    #[test]
-    fn test_format() {
-        for (i, &(want, input)) in STR_TESTS.iter().enumerate() {
-            // let q = Quad::parse(want);
-            // assert_eq!(want, q.to_string(), "#{i}");
-            // println!("q = {q}");
-            let got = input.to_string();
-            assert_eq!(got, want, "#{i}: format(\"{input:?}\") -> {want}");
+    fn test_encode() {
+        const CASES: &'static str = include_str!("../../testdata/dqEncode.decTest");
+        for case in dectest::parse(CASES).unwrap() {
+            println!("case = {case}");
+            case.run::<Bid128>().unwrap();
         }
     }
 
