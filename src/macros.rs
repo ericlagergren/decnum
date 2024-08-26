@@ -1,4 +1,4 @@
-use super::uint96::u96;
+use super::bid::{Bid128, Bid64};
 
 // implements the unary operator "op &T"
 // based on "op T" where T is expected to be `Copy`able
@@ -81,7 +81,7 @@ macro_rules! add_impl {
     )*)
 }
 
-add_impl! { u96}
+add_impl! { Bid64 Bid128 }
 
 macro_rules! sub_impl {
     ($($t:ty)*) => ($(
@@ -99,7 +99,7 @@ macro_rules! sub_impl {
     )*)
 }
 
-sub_impl! { u96}
+sub_impl! { Bid64 Bid128 }
 
 macro_rules! mul_impl {
     ($($t:ty)*) => ($(
@@ -117,8 +117,9 @@ macro_rules! mul_impl {
     )*)
 }
 
-mul_impl! { u96}
+mul_impl! { Bid64 Bid128 }
 
+#[allow(unused_macros)] // TODO
 macro_rules! div_impl_integer {
     ($(($($t:ty)*) => $panic:expr),*) => ($($(
         /// This operation rounds towards zero, truncating any
@@ -141,8 +142,26 @@ macro_rules! div_impl_integer {
     )*)*)
 }
 
-div_impl_integer!((u96) => "This operation will panic if `other == 0`.");
+// div_impl_integer!((u96) => "This operation will panic if `other == 0`.");
 
+macro_rules! div_impl_float {
+    ($($t:ty)*) => ($(
+        impl ::core::ops::Div for $t {
+            type Output = $t;
+
+            #[inline]
+            fn div(self, other: $t) -> $t {
+                self.const_div(other)
+            }
+        }
+
+        forward_ref_binop! { impl Div, div for $t, $t }
+    )*)
+}
+
+div_impl_float! { Bid64 Bid128 }
+
+#[allow(unused_macros)] // TODO
 macro_rules! rem_impl_integer {
     ($(($($t:ty)*) => $panic:expr),*) => ($($(
         /// This operation satisfies `n % d == n - (n / d) * d`. The
@@ -165,7 +184,39 @@ macro_rules! rem_impl_integer {
     )*)*)
 }
 
-rem_impl_integer!((u96) => "This operation will panic if `other == 0`.");
+//rem_impl_integer!((Bid128) => "This operation will panic if `other == 0`.");
+
+macro_rules! rem_impl_float {
+    ($($t:ty)*) => ($(
+
+        /// The remainder from the division of two floats.
+        ///
+        /// The remainder has the same sign as the dividend and is computed as:
+        /// `x - (x / y).trunc() * y`.
+        ///
+        /// # Examples
+        /// ```
+        /// let x: f32 = 50.50;
+        /// let y: f32 = 8.125;
+        /// let remainder = x - (x / y).trunc() * y;
+        ///
+        /// // The answer to both operations is 1.75
+        /// assert_eq!(x % y, remainder);
+        /// ```
+        impl ::core::ops::Rem for $t {
+            type Output = $t;
+
+            #[inline]
+            fn rem(self, other: $t) -> $t {
+                self.const_rem(other)
+            }
+        }
+
+        forward_ref_binop! { impl Rem, rem for $t, $t }
+    )*)
+}
+
+rem_impl_float! { Bid64 Bid128 }
 
 macro_rules! neg_impl {
     ($($t:ty)*) => ($(
@@ -182,7 +233,7 @@ macro_rules! neg_impl {
     )*)
 }
 
-neg_impl! { u96}
+neg_impl! { Bid64 Bid128 }
 
 macro_rules! add_assign_impl {
     ($($t:ty)+) => ($(
@@ -198,7 +249,7 @@ macro_rules! add_assign_impl {
     )+)
 }
 
-add_assign_impl! { u96 }
+add_assign_impl! { Bid64 Bid128 }
 
 macro_rules! sub_assign_impl {
     ($($t:ty)+) => ($(
@@ -214,7 +265,7 @@ macro_rules! sub_assign_impl {
     )+)
 }
 
-sub_assign_impl! { u96 }
+sub_assign_impl! { Bid64 Bid128 }
 
 macro_rules! mul_assign_impl {
     ($($t:ty)+) => ($(
@@ -230,7 +281,7 @@ macro_rules! mul_assign_impl {
     )+)
 }
 
-mul_assign_impl! { u96 }
+mul_assign_impl! { Bid64 Bid128 }
 
 macro_rules! div_assign_impl {
     ($($t:ty)+) => ($(
@@ -246,7 +297,7 @@ macro_rules! div_assign_impl {
     )+)
 }
 
-div_assign_impl! { u96 }
+div_assign_impl! { Bid64 Bid128 }
 
 macro_rules! rem_assign_impl {
     ($($t:ty)+) => ($(
@@ -262,4 +313,4 @@ macro_rules! rem_assign_impl {
     )+)
 }
 
-rem_assign_impl! { u96 }
+rem_assign_impl! { Bid64 Bid128 }

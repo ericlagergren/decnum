@@ -1,10 +1,10 @@
 use core::cmp::Ordering;
 
 /// Shift `x` to the left by `n` digits.
-pub(super) const fn shl(x: u64, n: u32) -> u64 {
+pub(super) const fn shl(x: u64, n: u32) -> u128 {
     debug_assert!(n <= 16);
 
-    x * 10u64.pow(n)
+    x as u128 * 10u64.pow(n) as u128
 }
 
 /// Shift `x` to the right by `n` digits.
@@ -29,6 +29,20 @@ pub(super) const fn const_cmp(lhs: u64, rhs: u64) -> Ordering {
         Some(_) => Ordering::Greater,
         None => Ordering::Less,
     }
+}
+
+/// Reports whether `(lhs * 10^shift) == rhs`.
+pub(super) const fn const_cmp_shifted(lhs: u64, rhs: u64, shift: u32) -> Ordering {
+    match shl(lhs, shift).checked_sub(rhs as u128) {
+        Some(0) => Ordering::Equal,
+        Some(_) => Ordering::Greater,
+        None => Ordering::Less,
+    }
+}
+
+/// Reports whether `(lhs * 10^shift) == rhs`.
+pub(super) const fn const_eq_shifted(lhs: u64, rhs: u64, shift: u32) -> bool {
+    shl(lhs, shift) == rhs as u128
 }
 
 /// Returns the number of decimal digits in `x`.
@@ -78,7 +92,7 @@ mod tests {
         for n in 0..=34u32 {
             let x = 1;
             let got = shl(x, n);
-            let want = x * 10u64.pow(n);
+            let want = (x as u128) * 10u128.pow(n);
             assert_eq!(got, want, "{n}");
         }
     }

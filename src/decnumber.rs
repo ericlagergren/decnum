@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_foo() {
-        let d1 = Quad::parse("9111222333444555666777888999000111").set_exponent(6144);
+        let d1 = Quad::parse("9999999999999999999999999999999999").set_exponent(36);
         println!("d1 = {d1}");
         assert!(false);
     }

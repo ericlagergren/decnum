@@ -112,14 +112,6 @@ pub(super) fn copy(dst: &mut [MaybeUninit<u8>], src: &[u8]) -> usize {
     n
 }
 
-pub(super) const fn maxi16(x: i16, y: i16) -> i16 {
-    if x < y {
-        y
-    } else {
-        x
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use core::str;

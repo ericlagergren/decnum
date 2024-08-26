@@ -1,12 +1,13 @@
 use core::cmp::Ordering;
 
+use super::uint256::u256;
 use crate::util::assume;
 
 /// Shift `x` to the left by `n` digits.
-pub(super) const fn shl(x: u128, n: u32) -> u128 {
+pub(super) const fn shl(x: u128, n: u32) -> u256 {
     debug_assert!(n <= 34);
 
-    x * 10u128.pow(n)
+    widening_mul(x, 10u128.pow(n))
 }
 
 /// Shift `x` to the right by `n` digits.
@@ -31,6 +32,16 @@ pub(super) const fn const_cmp(lhs: u128, rhs: u128) -> Ordering {
         Some(_) => Ordering::Greater,
         None => Ordering::Less,
     }
+}
+
+/// Reports whether `(lhs * 10^shift) == rhs`.
+pub(super) const fn const_cmp_shifted(lhs: u128, rhs: u128, shift: u32) -> Ordering {
+    shl(lhs, shift).const_cmp128(rhs as u128)
+}
+
+/// Reports whether `(lhs * 10^shift) == rhs`.
+pub(super) const fn const_eq_shifted(lhs: u128, rhs: u128, shift: u32) -> bool {
+    shl(lhs, shift).const_eq128(rhs)
 }
 
 /// Returns the number of decimal digits in `x`.
@@ -145,9 +156,35 @@ const fn muluh(x: u128, y: u128) -> u128 {
     x1 * y1 + w2 + (w1 >> 64)
 }
 
+const fn widening_mul(x: u128, y: u128) -> u256 {
+    const MASK: u128 = (1 << 64) - 1;
+    let x0 = x & MASK;
+    let x1 = x >> 64;
+    let y0 = y & MASK;
+    let y1 = y >> 64;
+    let w0 = x0 * y0;
+    let t = x1 * y0 + (w0 >> 64);
+    let w1 = (t & MASK) + x0 * y1;
+    let w2 = t >> 64;
+    let hi = x1 * y1 + w2 + (w1 >> 64);
+    let lo = x.wrapping_mul(y);
+    u256::from_parts(hi, lo)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl PartialEq<u128> for u256 {
+        fn eq(&self, other: &u128) -> bool {
+            self.const_eq128(*other)
+        }
+    }
+    impl PartialEq<u256> for u128 {
+        fn eq(&self, other: &u256) -> bool {
+            other.const_eq128(*self)
+        }
+    }
 
     #[test]
     fn test_shl() {

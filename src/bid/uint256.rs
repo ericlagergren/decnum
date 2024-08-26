@@ -10,6 +10,16 @@ pub(super) struct u256 {
 }
 
 impl u256 {
+    /// Creates a `u256`.
+    pub const fn new(lo: u128) -> Self {
+        Self { lo, hi: 0 }
+    }
+
+    /// Creates a `u256`.
+    pub const fn from_parts(hi: u128, lo: u128) -> Self {
+        Self { hi, lo }
+    }
+
     /// Reports whether `self == other`.
     pub const fn const_cmp(self, other: Self) -> Ordering {
         match arith128::const_cmp(self.hi, other.hi) {
@@ -19,11 +29,21 @@ impl u256 {
     }
 
     /// Reports whether `self == other`.
+    pub const fn const_cmp128(self, other: u128) -> Ordering {
+        if self.hi != 0 {
+            Ordering::Greater
+        } else {
+            arith128::const_cmp(self.lo, other)
+        }
+    }
+
+    /// Reports whether `self == other`.
     pub const fn const_eq(self, other: Self) -> bool {
         self.hi == other.hi && self.lo == other.lo
     }
 
-    pub const fn mulu128(self, other: u128) -> Self {
-        self.lo.carrying_mul(other);
+    /// Reports whether `self == other`.
+    pub const fn const_eq128(self, other: u128) -> bool {
+        self.hi == 0 && self.lo == other
     }
 }
