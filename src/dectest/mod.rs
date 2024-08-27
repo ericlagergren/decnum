@@ -7,8 +7,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use super::{conv::ParseError, ctx::RoundingMode};
 use crate::{bid::Bid128, dpd::Dpd128};
 
-pub fn parse(s: &str) -> Result<Vec<Case<'_>>> {
-    let mut extended = 0;
+pub fn parse(s: &str) -> Result<Vec<Test<'_>>> {
+    let mut extended = 1;
     let mut precision: u32 = 0;
     let mut max_exp: i16 = 0;
     let mut min_exp: i16 = 0;
@@ -86,16 +86,18 @@ pub fn parse(s: &str) -> Result<Vec<Case<'_>>> {
         let (name, rest) = line
             .split_once(" ")
             .with_context(|| format!("#{i}: test case missing name: `{line}`"))?;
-        let case = Case {
+        let (op, rest) = Op::parse(rest.trim())
+            .with_context(|| format!("#{i}: unable to parse op: `{rest}`"))?;
+        let _ = rest; // TODO: conds
+        let case = Test {
             extended: extended == 1,
             clamp: clamp == 1,
             precision,
             max_exp,
             min_exp,
             rounding,
-            name,
-            op: Op::parse(rest.trim())
-                .with_context(|| format!("#{i}: unable to parse op: `{rest}`"))?,
+            id: name,
+            op,
         };
         cases.push(case);
     }
@@ -104,55 +106,86 @@ pub fn parse(s: &str) -> Result<Vec<Case<'_>>> {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct Case<'a> {
+pub struct Test<'a> {
     pub extended: bool,
     pub clamp: bool,
     pub precision: u32,
     pub max_exp: i16,
     pub min_exp: i16,
     pub rounding: RoundingMode,
-    pub name: &'a str,
+    pub id: &'a str,
     pub op: Op<'a>,
 }
 
-impl Case<'_> {
-    pub fn run<B: Backend>(&self) -> Result<(), Failure<'_>> {
-        self.try_run::<B>()
+impl Test<'_> {
+    /// Runs a test.
+    pub fn run<B: Backend>(&self, backend: &B) -> Result<(), Failure<'_>> {
+        self.try_run(backend)
             .map_err(|err| Failure { case: self, err })
     }
 
-    fn try_run<B: Backend>(&self) -> Result<()> {
+    fn try_run<B: Backend>(&self, backend: &B) -> Result<(), Error> {
         match &self.op {
-            Op::Apply { input, output } => {
-                let got = parse_input::<B>(input)?;
-                self.check(got, output)
+            Op::Apply {
+                input,
+                result: output,
+            } => {
+                let got = parse_input(backend, input)?;
+                println!("name = {}", self.id);
+                println!("got = {got}");
+                println!("input = {input}");
+                println!("output = {output}");
+                self.check(backend, got, output)?;
+                println!("");
             }
-            Op::Multiply { lhs, rhs, output } => {
-                let lhs = parse_input::<B>(lhs).unwrap();
-                let rhs = parse_input::<B>(rhs).unwrap();
-                let got = B::mul(lhs, rhs);
-                self.check(got, output)
+            Op::Multiply {
+                lhs,
+                rhs,
+                result: output,
+            } => {
+                let lhs = parse_input(backend, lhs).unwrap();
+                let rhs = parse_input(backend, rhs).unwrap();
+                let got = backend.mul(lhs, rhs);
+                self.check(backend, got, output)?;
             }
-            _ => Ok(()),
-        }
+            _ => return Err(Error::Unimplemented),
+        };
+        Ok(())
     }
 
-    fn check<G>(&self, got: G, want: &str) -> Result<()>
-    where
-        G: fmt::Display,
-    {
-        let got = got.to_string();
-        if got != want {
-            Err(anyhow!("got {got}, expected {want}"))
+    fn check<B: Backend>(&self, backend: &B, got: B::Dec, want: &str) -> Result<()> {
+        if let Some(s) = want.strip_prefix('#') {
+            let bytes = hex::decode(s.as_bytes())?;
+            let want = backend.from_bytes(&bytes).to_bits();
+            let got = got.to_bits();
+            if got != want {
+                Err(anyhow!("got {got:x}, expected {want:x}"))
+            } else {
+                Ok(())
+            }
         } else {
-            Ok(())
+            let got = got.to_string();
+            if got != want {
+                Err(anyhow!("got `{got}`, expected `{want}`"))
+            } else {
+                Ok(())
+            }
         }
     }
 }
 
-impl fmt::Display for Case<'_> {
+impl fmt::Display for Test<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {}", self.name, self.op,)
+        write!(f, "{} {}", self.id, self.op,)
+    }
+}
+
+fn parse_input<B: Backend>(backend: &B, s: &str) -> Result<B::Dec> {
+    if let Some(s) = s.strip_prefix('#') {
+        let bytes = hex::decode(s.as_bytes())?;
+        Ok(backend.from_bytes(&bytes))
+    } else {
+        backend.parse(s).map_err(Into::into)
     }
 }
 
@@ -160,13 +193,13 @@ impl fmt::Display for Case<'_> {
 pub enum Op<'a> {
     Abs {
         input: &'a str,
-        output: &'a str,
+        result: &'a str,
     },
     Add,
     And,
     Apply {
         input: &'a str,
-        output: &'a str,
+        result: &'a str,
     },
     Canonical,
     Class,
@@ -194,7 +227,7 @@ pub enum Op<'a> {
     Multiply {
         lhs: &'a str,
         rhs: &'a str,
-        output: &'a str,
+        result: &'a str,
     },
     NextMinus,
     NextPlus,
@@ -222,53 +255,49 @@ pub enum Op<'a> {
 }
 
 impl<'a> Op<'a> {
-    fn parse(s: &'a str) -> Result<Self> {
-        println!("parse op `{s}`");
-        let (name, s) = s
-            .split_once(" ")
-            .with_context(|| "unable to split op name")?;
+    fn parse(s: &'a str) -> Result<(Self, &'a str)> {
+        let (name, rest) = s
+            .split_once(' ')
+            .with_context(|| "unable to parse op name")?;
+        let (operands, rest) = rest
+            .split_once("->")
+            .with_context(|| "unable to split on `->`")?;
+        let (result, rest) = match rest.trim().split_once(' ') {
+            Some((result, rest)) => (result, rest),
+            None => (rest, ""),
+        };
         let op = match name {
-            "abs" => {
-                let (input, output) = s
-                    .split_once("->")
-                    .with_context(|| "unable to parse `abs`")?;
-                Self::Abs {
-                    input: input.trim(),
-                    output: output.trim(),
-                }
-            }
-            "apply" => {
-                let (input, output) = s
-                    .split_once("->")
-                    .with_context(|| "unable to parse `apply`")?;
-                Self::Apply {
-                    input: input.trim(),
-                    output: output.trim(),
-                }
-            }
+            "abs" => Self::Abs {
+                input: operands.trim(),
+                result: result.trim(),
+            },
+            "apply" => Self::Apply {
+                input: operands.trim(),
+                result: result.trim(),
+            },
             "multiply" => {
-                let (lhs, rest) = s
+                let (lhs, rhs) = operands
                     .split_once(" ")
-                    .with_context(|| "unable to parse `multiply`")?;
-                let (rhs, output) = rest
-                    .split_once("->")
-                    .with_context(|| "unable to parse `abs`")?;
+                    .with_context(|| "unable to parse `multiply` operands")?;
                 Self::Multiply {
                     lhs: lhs.trim(),
                     rhs: rhs.trim(),
-                    output: output.trim(),
+                    result: result.trim(),
                 }
             }
             _ => bail!("unknown op: `{name}`"),
         };
-        Ok(op)
+        Ok((op, rest))
     }
 }
 
 impl fmt::Display for Op<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Apply { input, output } => {
+            Self::Apply {
+                input,
+                result: output,
+            } => {
                 write!(f, "apply {input} -> {output}")
             }
             _ => write!(f, "other op"),
@@ -276,45 +305,11 @@ impl fmt::Display for Op<'_> {
     }
 }
 
-fn parse_input<B: Backend>(s: &str) -> Result<B::Dec> {
-    if let Some(s) = s.strip_prefix('#') {
-        let bytes = hex::decode(s.as_bytes())?;
-        let bits = Bits::from_bytes(&bytes)?;
-        Ok(B::from_bits(bits))
-    } else {
-        B::parse(s).map_err(Into::into)
-    }
-}
-
+/// A test error.
 #[derive(Debug)]
-pub enum Error<'a> {
-    Unimplemented,
-    Skipped,
-    Failure(Failure<'a>),
-}
-
-impl error::Error for Error<'_> {}
-
-impl fmt::Display for Error<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Skipped => write!(f, "skipped"),
-            Self::Unimplemented => write!(f, "unimplemented"),
-            Self::Failure(err) => write!(f, "{err}"),
-        }
-    }
-}
-
-impl<'a> From<Failure<'a>> for Error<'a> {
-    fn from(err: Failure<'a>) -> Self {
-        Self::Failure(err)
-    }
-}
-
-/// A test case failure.
 pub struct Failure<'a> {
-    case: &'a Case<'a>,
-    err: anyhow::Error,
+    case: &'a Test<'a>,
+    err: Error,
 }
 
 impl error::Error for Failure<'_> {}
@@ -325,42 +320,91 @@ impl fmt::Display for Failure<'_> {
     }
 }
 
-impl fmt::Debug for Failure<'_> {
+#[derive(Debug)]
+enum Error {
+    /// The test is unimplemented.
+    Unimplemented,
+    /// The test was skipped.
+    Skipped,
+    /// The test failed.
+    Failure(anyhow::Error),
+}
+
+impl error::Error for Error {}
+
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
+        match &self {
+            Self::Skipped => write!(f, "skipped"),
+            Self::Unimplemented => write!(f, "unimplemented"),
+            Self::Failure(err) => write!(f, "{err}"),
+        }
     }
 }
 
+impl From<anyhow::Error> for Error {
+    fn from(err: anyhow::Error) -> Self {
+        Self::Failure(err)
+    }
+}
+
+/// A testing backend.
 pub trait Backend {
-    type Dec: Copy + fmt::Display + Sized;
+    /// The underlying decimal.
+    type Dec: Dec;
+
+    /// Creates a decimal from bytes.
+    fn from_bytes(&self, bytes: &[u8]) -> Self::Dec;
+    /// Parses a decimal from a string.
+    fn parse(&self, s: &str) -> Result<Self::Dec, ParseError>;
+    /// Multiplies two decimals.
+    fn mul(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+}
+
+/// A backend for [`Bits128`].
+pub struct Dec128;
+
+impl Dec128 {
+    /// Creates a [`Dec128`].
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Backend for Dec128 {
+    type Dec = Bid128;
+
+    fn from_bytes(&self, bytes: &[u8]) -> Self::Dec {
+        Dpd128::from_be_bytes(bytes.try_into().unwrap()).to_bid128()
+    }
+
+    fn parse(&self, s: &str) -> Result<Self::Dec, ParseError> {
+        Bid128::parse(s)
+    }
+
+    fn mul(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+        lhs * rhs
+    }
+}
+
+impl Dec for Bid128 {
+    type Bits = u128;
+    fn to_bits(self) -> Self::Bits {
+        self.to_bits()
+    }
+}
+
+/// A decimal.
+pub trait Dec: Copy + fmt::Display + Sized {
+    /// Its bit representation.
     type Bits: Bits;
-
-    fn from_bits(bits: Self::Bits) -> Self::Dec;
-    fn parse(s: &str) -> Result<Self::Dec, ParseError>;
-    fn mul(lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+    /// Converts itself to its bit representation.
+    fn to_bits(self) -> Self::Bits;
 }
 
-macro_rules! impl_dectest {
-    ($name:ident, $ucoeff:ty, $dpd:ty) => {
-        #[cfg(test)]
-        impl Backend for $name {
-            type Dec = $name;
-            type Bits = $ucoeff;
-            fn from_bits(bits: Self::Bits) -> $name {
-                <$dpd>::from_bits(bits).to_bid128()
-            }
-            fn parse(s: &str) -> Result<$name, ParseError> {
-                Self::parse(s)
-            }
-            fn mul(lhs: $name, rhs: $name) -> $name {
-                lhs * rhs
-            }
-        }
-    };
-}
-impl_dectest!(Bid128, u128, Dpd128);
-
-pub trait Bits: Sized {
+/// An integer like `u32`, `u128`, etc.
+pub trait Bits: Copy + Eq + PartialEq + fmt::Debug + fmt::LowerHex + Sized {
+    /// Parses itself from bytes.
     fn from_bytes(bytes: &[u8]) -> Result<Self>;
 }
 impl Bits for u32 {

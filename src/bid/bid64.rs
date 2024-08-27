@@ -106,6 +106,11 @@ impl Bid64 {
     pub const fn to_dpd128(self) -> Dpd128 {
         Dpd128::from_parts_bin(self.signbit(), self.unbiased_exp(), self.coeff() as u128)
     }
+
+    /// TODO
+    const fn rounded2(sign: bool, exp: i16, coeff: u64) -> Self {
+        Self::rounded(sign, exp, coeff)
+    }
 }
 
 // Const arithmetic.

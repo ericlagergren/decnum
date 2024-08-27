@@ -65,25 +65,26 @@ impl Bid128 {
 
     fn rounded2(sign: bool, mut exp: i16, mut coeff: u128) -> Self {
         println!("rounded2: sign={sign} exp={exp} coeff={coeff}");
-        // Fast path: `coeff` and `exp` are obviously valid.
-        if !Self::need_round(coeff, exp) {
-            return Self::from_parts(sign, exp, coeff);
-        }
 
-        // Slow path: we have to round.
+        // This method also works if we don't need to
+        // round, but for performance reasons we always
+        // check first.
+        debug_assert!(Self::need_round(coeff, exp));
+
         let mut digits = arith128::digits(coeff) as i16;
         println!("digits={digits}");
 
-        let drop = core::cmp::max(digits - Self::DIGITS as i16, Self::ETINY - exp);
+        let mut drop = core::cmp::max(digits - Self::DIGITS as i16, Self::ETINY - exp);
         println!("drop={drop}");
         if drop > 0 {
             exp += drop;
 
-            let mut d = 0; // rounding
+            let mut d = 0;
             while drop > 0 {
                 d = coeff % 10;
                 coeff /= 10;
                 digits -= 1;
+                drop -= 1;
             }
 
             // Round half even: up if d > 5 or the new LSD is
@@ -92,6 +93,8 @@ impl Bid128 {
                 // NB: This is where we'd mark inexact.
                 coeff += 1;
                 if coeff > Self::MAX_COEFF as u128 {
+                    // We went from 999... to 100..., so chop off
+                    // a trailing digit.
                     coeff /= 10;
                     digits -= 1;
                     exp += 1;
@@ -101,6 +104,8 @@ impl Bid128 {
 
         println!("digits={digits}");
         let adj = exp + (digits - 1);
+        println!("exp = {exp}");
+        println!("adj = {adj}");
         if exp < Self::EMIN && adj < Self::EMIN {
             // NB: This is where we'd mark underflow.
             if adj < Self::ETINY {
@@ -115,19 +120,21 @@ impl Bid128 {
         debug_assert!(exp >= Self::EMIN);
         debug_assert!(adj >= Self::EMIN);
 
-        println!("exp = {exp}");
-        println!("adj = {adj}");
         if exp > Self::ADJ_EMAX {
             if coeff == 0 {
-                println!("zero");
+                println!("clamped to zero");
                 exp = Self::ADJ_EMAX; // clamped
             } else if adj > Self::EMAX {
                 println!("inf");
                 // NB: This is where we'd mark overflow.
                 return Self::inf(sign);
             } else {
-                let shift = exp + (Self::EMAX - (Self::MAX_PREC - 1) as i16);
+                let shift = exp - (Self::EMAX - (Self::MAX_PREC - 1) as i16);
                 println!("shift = {shift}");
+                if shift > 0 {
+                    coeff *= 10u128.pow(shift as u32);
+                    exp -= shift;
+                }
             }
         }
         debug_assert!(exp <= Self::EMAX);
@@ -140,19 +147,19 @@ impl Bid128 {
     }
 
     /// Creates an infinity.
-    const fn inf(sign: bool) -> Self {
+    pub(crate) const fn inf(sign: bool) -> Self {
         let bits = signbit(sign) | comb(0x1e000);
         Self::from_bits(bits)
     }
 
     /// Creates a quiet NaN.
-    const fn nan(sign: bool) -> Self {
+    pub(crate) const fn nan(sign: bool) -> Self {
         let bits = signbit(sign) | comb(0x1f000);
         Self::from_bits(bits)
     }
 
     /// Creates a signaling NaN.
-    const fn snan(sign: bool) -> Self {
+    pub(crate) const fn snan(sign: bool) -> Self {
         let bits = signbit(sign) | comb(0x1f800);
         Self::from_bits(bits)
     }
@@ -214,6 +221,7 @@ impl Bid128 {
 
     /// Converts the `Bid128` to a `Dpd128`.
     pub const fn to_dpd128(self) -> Dpd128 {
+        // TODO: inf/nan
         Dpd128::from_parts_bin(self.signbit(), self.unbiased_exp(), self.coeff())
     }
 }
@@ -352,7 +360,7 @@ const fn comb(bits: u32) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{decnumber::Quad, dectest};
+    use crate::dectest::{self, Dec128};
 
     impl Bid128 {
         const SNAN: Self = Self::snan(false);
@@ -362,19 +370,10 @@ mod tests {
 
     #[test]
     fn test_idk() {
-        let i = 0;
-        let output = "9.111222333444555666777888999000111E+6144";
-        let want = Bid128::new2(9111222333444555666777888999000111, 6111);
-        let q = Quad::parse(output);
-        assert_eq!(output, q.to_string(), "#{i}");
-        println!("q = {q}");
-        let got: Bid128 = output.parse().unwrap();
-        if want.is_nan() {
-            assert!(got.is_nan(), "#{i}: parse(\"{output}\") -> {want}");
-        } else {
-            assert_eq!(got, want, "#{i}: parse(\"{output}\") -> {want}");
-        }
-        println!("");
+        let d = crate::decnumber::Quad::parse("1.23E+6144");
+        println!("{d}");
+        let d = Bid128::parse("1.23E+6144").unwrap();
+        println!("{d}");
     }
 
     #[test]
@@ -401,7 +400,7 @@ mod tests {
         const CASES: &'static str = include_str!("../../testdata/dqEncode.decTest");
         for case in dectest::parse(CASES).unwrap() {
             println!("case = {case}");
-            case.run::<Bid128>().unwrap();
+            case.run(&Dec128::new()).unwrap();
         }
     }
 

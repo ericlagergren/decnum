@@ -519,8 +519,18 @@ impl Dpd128 {
 
     /// Converts the `Dpd128` to a `Bid128`.
     pub const fn to_bid128(self) -> Bid128 {
-        let coeff = dpd::unpack_bin_u113(self.full_coeff());
-        Bid128::from_parts(self.signbit(), self.unbiased_exp(), coeff)
+        if self.is_nan() {
+            if self.is_snan() {
+                Bid128::snan(self.signbit())
+            } else {
+                Bid128::nan(self.signbit())
+            }
+        } else if self.is_infinite() {
+            Bid128::inf(self.signbit())
+        } else {
+            let coeff = dpd::unpack_bin_u113(self.full_coeff());
+            Bid128::from_parts(self.signbit(), self.unbiased_exp(), coeff)
+        }
     }
 }
 

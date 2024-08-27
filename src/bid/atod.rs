@@ -50,7 +50,7 @@ macro_rules! impl_atod {
                 if !Self::need_round(coeff, exp) {
                     Ok(Self::from_parts(sign, exp, coeff))
                 } else {
-                    Ok(Self::rounded(sign, exp, coeff))
+                    Ok(Self::rounded2(sign, exp, coeff))
                 }
             }
 

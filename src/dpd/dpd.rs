@@ -465,13 +465,15 @@ const fn bin_to_dpd(bin: u16) -> u16 {
 }
 
 /// Unpacks a 120-bit DPD into a 113-bit binary number.
-pub(crate) const fn unpack_bin_u113(mut dpd: u128) -> u128 {
+pub(crate) const fn unpack_bin_u113(dpd: u128) -> u128 {
     let mut bin = 0;
-    while dpd > 0 {
-        let declet = (dpd & 0x3ff) as u16;
+    let mut i = 0;
+    while i < 12 {
+        let shift = 110 - (i * 10);
+        let declet = ((dpd >> shift) & 0x3ff) as u16;
         bin *= 1000;
         bin += dpd_to_bin(declet) as u128;
-        dpd >>= 10;
+        i += 1;
     }
     bin
 }
@@ -692,8 +694,6 @@ mod tests {
 
     #[test]
     fn test_pack_unpack_bin_u113() {
-        println!("xxx = {}", dpd_to_bin(bin_to_dpd(1)));
-
         // TODO(eric): test (some of) the rest of the digits.
         for bin in 0..=999 {
             let got = pack_bin_u113(bin);

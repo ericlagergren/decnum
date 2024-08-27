@@ -285,6 +285,7 @@ macro_rules! impl_dec_internal {
                     }
                     debug_assert!(adj >= Self::ETINY);
                 }
+                debug_assert!(exp >= Self::EMIN);
                 debug_assert!(adj >= Self::EMIN);
 
                 if exp > Self::ADJ_EMAX {
@@ -294,8 +295,11 @@ macro_rules! impl_dec_internal {
                         // NB: This is where we'd mark overflow.
                         return Self::inf(sign);
                     } else {
-                        let _shift = exp + (Self::EMAX - (Self::MAX_PREC - 1) as i16);
-                        // TODO
+                        let shift = exp - (Self::EMAX - (Self::MAX_PREC - 1) as i16);
+                        if shift > 0 {
+                            coeff *= (10 as $ucoeff).pow(shift as u32);
+                            exp -= shift;
+                        }
                     }
                 }
                 debug_assert!(adj <= Self::EMAX);
@@ -313,10 +317,10 @@ macro_rules! impl_dec_internal {
             /// Creates a finite number from the sign, unbiased
             /// exponent, an coefficient.
             pub(crate) const fn from_parts(sign: bool, exp: $unbiased, coeff: $ucoeff) -> Self {
-                debug_assert!(!Self::need_round(coeff, exp));
                 debug_assert!(coeff <= Self::MAX_COEFF as $ucoeff);
                 debug_assert!(exp >= Self::ADJ_EMIN);
                 debug_assert!(exp <= Self::ADJ_EMAX);
+                debug_assert!(!Self::need_round(coeff, exp));
 
                 // TODO(eric): If `exp` is valid then this cannot
                 // overflow. Maybe make sure of it?
