@@ -13,7 +13,7 @@ pub(crate) use const_assert;
 ///
 /// `b` must never be false.
 #[track_caller]
-pub(super) const unsafe fn assume(b: bool) {
+pub(crate) const unsafe fn assume(b: bool) {
     debug_assert!(b);
 
     if !b {
@@ -24,7 +24,7 @@ pub(super) const unsafe fn assume(b: bool) {
 
 /// Asserts that every byte in `s` is an ASCII digit.
 #[track_caller]
-pub(super) const fn debug_assert_all_digits(s: &[u8]) {
+pub(crate) const fn debug_assert_all_digits(s: &[u8]) {
     if !cfg!(debug_assertions) {
         return;
     }
@@ -35,65 +35,19 @@ pub(super) const fn debug_assert_all_digits(s: &[u8]) {
     }
 }
 
-/// A string of length [1,4].
-#[derive(Copy, Clone, Debug)]
-pub(super) struct Str4(u32);
-
-impl Str4 {
-    /// Returns the number of significant digits.
-    pub const fn digits(self) -> usize {
-        (((32 - self.0.leading_zeros()) + 7) / 8) as usize
-    }
-
-    /// Converts the string to bytes.
-    ///
-    /// Only [`len`][Self::len] bytes are valid.
-    pub const fn to_bytes(self) -> [u8; 4] {
-        self.0.to_le_bytes()
-    }
-}
-
-/// Converts the binary number `n` to a base-10 string.
-///
-/// `n` must be in [1,9999].
-pub(super) const fn itoa4(n: u16) -> Str4 {
-    debug_assert!(n > 0 && n < 10_000);
-
-    const MASK: u32 = 0x30303030;
-
-    let mut n = n as u32;
-    let mut v = 0;
-    let mut i = 0;
-    while i < 4 {
-        v |= (n % 10) << (24 - (i * 8));
-        n /= 10;
-        i += 1;
-    }
-
-    // Figure out how much we have to shift to get rid of
-    // insignificant zeros. In other words, if v==0 then we shift
-    // by 24, not 32.
-    let ntz = (v.trailing_zeros() / 8) * 8;
-    let mut s = ntz;
-    s |= (ntz & 32) >> 1;
-    s |= (ntz & 32) >> 2;
-    s &= 31;
-
-    v |= MASK;
-    v >>= s;
-    Str4(v)
-}
-
 /// See [`MaybeUninit::copy_from_slice`].
-pub(super) fn copy_from_slice(dst: &mut [MaybeUninit<u8>], src: &[u8]) {
+pub(crate) fn copy_from_slice<'a>(dst: &'a mut [MaybeUninit<u8>], src: &'a [u8]) -> &'a mut [u8] {
     // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout
     let uninit_src: &[MaybeUninit<u8>] =
         unsafe { &*(src as *const [u8] as *const [MaybeUninit<u8>]) };
     dst.copy_from_slice(uninit_src);
+    // SAFETY: Valid elements have just been copied into `dst`,
+    // so it is initialized
+    unsafe { slice_assume_init_mut(dst) }
 }
 
 /// See [`MaybeUninit::slice_assume_init_ref`].
-pub(super) const unsafe fn slice_assume_init_ref(slice: &[MaybeUninit<u8>]) -> &[u8] {
+pub(crate) const unsafe fn slice_assume_init_ref(slice: &[MaybeUninit<u8>]) -> &[u8] {
     // SAFETY: casting `slice` to a `*const [T]` is safe since
     // the caller guarantees that `slice` is initialized, and
     // `MaybeUninit` is guaranteed to have the same layout as
@@ -103,31 +57,62 @@ pub(super) const unsafe fn slice_assume_init_ref(slice: &[MaybeUninit<u8>]) -> &
     unsafe { &*(slice as *const [MaybeUninit<u8>] as *const [u8]) }
 }
 
+/// See [`MaybeUninit::slice_assume_init_mut`].
+pub(crate) unsafe fn slice_assume_init_mut(slice: &mut [MaybeUninit<u8>]) -> &mut [u8] {
+    // SAFETY: similar to safety notes for `slice_get_ref`, but
+    // we have a mutable reference which is also guaranteed to be
+    // valid for writes.
+    unsafe { &mut *(slice as *mut [MaybeUninit<u8>] as *mut [u8]) }
+}
+
 #[inline(always)]
-pub(super) fn copy(dst: &mut [MaybeUninit<u8>], src: &[u8]) -> usize {
+pub(crate) fn copy(dst: &mut [MaybeUninit<u8>], src: &[u8]) -> usize {
     let n = src.len();
-    // The caller must verify the length of `dst`
+    // The caller must verify the length of `dst`.
     #[allow(clippy::indexing_slicing)]
     copy_from_slice(&mut dst[..n], src);
     n
 }
 
-#[cfg(test)]
-mod tests {
-    use core::str;
+/// Transmutes `&mut [T; N]` to `&mut [T; M]`.
+///
+/// NB: This function is safe because `M <= N`.
+pub(crate) fn sub_array<T, const N: usize, const M: usize>(src: &mut [T; N]) -> &mut [T; M] {
+    const { assert!(M <= N) }
+    // SAFETY: See the `const` block above, the references do not
+    // outlive `src`, and the result is also an exclusive
+    // reference.
+    unsafe { &mut *(src.as_mut_ptr().cast::<[T; M]>()) }
+}
 
-    use super::*;
-
-    #[test]
-    fn test_itoa4() {
-        let mut buf = itoa::Buffer::new();
-        for n in 0..=9999 {
-            let w = itoa4(n);
-            let i = ((32 - w.0.leading_zeros()) + 7) / 8;
-            let got = w.to_bytes();
-            let got = str::from_utf8(&got[..i as usize]).unwrap();
-            let want = buf.format(n);
-            assert_eq!(got, want, "#{n}");
-        }
+/// Transmutes `&mut [T; N]` to `&mut [T; M]`.
+///
+/// NB: This function is safe because `M <= N`.
+pub(crate) fn sub_array_at<T, const N: usize, const M: usize, const I: usize>(
+    src: &mut [T; N],
+) -> &mut [T; M] {
+    const {
+        assert!(M <= N);
+        assert!(I <= M);
+        assert!(N <= M - I);
     }
+    // SAFETY: See the `const` block above, the references do not
+    // outlive `src`, and the result is also an exclusive
+    // reference.
+    unsafe { &mut *(src.as_mut_ptr().add(I).cast::<[T; M]>()) }
+}
+
+pub(crate) fn split_array_mut<T, const N: usize, const L: usize, const R: usize>(
+    src: &mut [T; N],
+) -> (&mut [T; L], &mut [T; R]) {
+    const {
+        assert!(L <= N);
+        assert!(R <= N);
+        assert!(L + R <= N);
+        assert!(usize::MAX - L >= N);
+        assert!(usize::MAX - R >= N);
+    }
+    let lhs = unsafe { &mut *(src.as_mut_ptr().cast::<[T; L]>()) };
+    let rhs = unsafe { &mut *(src.as_mut_ptr().add(L).cast::<[T; R]>()) };
+    (lhs, rhs)
 }

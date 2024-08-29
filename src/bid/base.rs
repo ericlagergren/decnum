@@ -109,6 +109,8 @@ macro_rules! impl_dec_internal {
             const COEFF_BITS: u32 = Self::T;
             const COEFF_MASK: $ucoeff = (1 << Self::COEFF_BITS) - 1;
 
+            const PAYLOAD_MASK: $ucoeff = Self::COEFF_MASK;
+
             const MAX_SCALEB_N: u32 = 2 * (Self::EMAX as u32 + Self::MAX_PREC);
 
             const fn signbit(self) -> bool {
@@ -215,6 +217,14 @@ macro_rules! impl_dec_internal {
                 } else {
                     coeff
                 }
+            }
+
+            /// Returns a NaN's diagnostic information.
+            const fn diagnostic(self) -> $ucoeff {
+                // The coefficient only has meaning for NaNs.
+                debug_assert!(self.is_nan());
+
+                self.0 & Self::PAYLOAD_MASK
             }
 
             const fn with_biased_exp(mut self, exp: $biased) -> Self {

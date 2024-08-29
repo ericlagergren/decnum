@@ -74,7 +74,7 @@ pub struct Buffer {
 }
 
 impl Buffer {
-    const MAX_STR_LEN: usize = "-9.999999999999999999999999999999999E+6144".len();
+    const MAX_STR_LEN: usize = 48;
 
     /// Creates a `Buffer`.
     pub const fn new() -> Self {

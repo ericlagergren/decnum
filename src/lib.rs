@@ -37,6 +37,7 @@ mod decnumber;
 mod dectest;
 pub mod dpd;
 mod inteldfp;
+mod itoa;
 mod macros;
 mod util;
 

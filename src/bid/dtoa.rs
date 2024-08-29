@@ -2,29 +2,67 @@ macro_rules! impl_dtoa {
     ($name:ident) => {
         impl $name {
             /// Converts the decimal to a string.
-            #[allow(clippy::indexing_slicing)]
             pub fn format(self, dst: &mut $crate::conv::Buffer) -> &str {
+                if self.is_finite() {
+                    self.format_finite(dst)
+                } else {
+                    self.format_special(dst)
+                }
+            }
+
+            #[allow(clippy::indexing_slicing)]
+            #[inline(never)]
+            fn format_special(self, dst: &mut $crate::conv::Buffer) -> &str {
+                debug_assert!(self.is_special());
+
                 let dst = &mut dst.buf;
 
-                if self.is_special() {
-                    let start = usize::from(self.is_sign_positive());
-                    return if self.is_infinite() {
-                        &"-Infinity"[start..]
-                    } else if self.is_qnan() {
-                        &"-NaN"[start..]
-                    } else {
+                let mut start = usize::from(self.is_sign_positive());
+                if self.is_infinite() {
+                    return &"-Infinity"[start..];
+                }
+                if self.diagnostic() == 0 {
+                    return if self.is_snan() {
                         &"-sNaN"[start..]
+                    } else {
+                        &"-NaN"[start..]
                     };
                 }
+
+                let mut n = 0;
+                let (text, payload): (&mut [_; 5], _) = $crate::util::split_array_mut(dst);
+                if self.is_snan() {
+                    n += $crate::util::copy_from_slice(text, b"-sNaN").len();
+                } else {
+                    start += 1;
+                    n += $crate::util::copy_from_slice(&mut text[1..], b"-NaN").len();
+                }
+                n += $crate::itoa::Integer::format(self.diagnostic(), payload);
+                unsafe {
+                    str::from_utf8_unchecked(
+                        // x
+                        $crate::util::slice_assume_init_ref(
+                            // x
+                            &dst[start..n],
+                        ),
+                    )
+                }
+            }
+
+            #[allow(clippy::indexing_slicing)]
+            fn format_finite(self, dst: &mut $crate::conv::Buffer) -> &str {
                 debug_assert!(self.is_finite());
+
+                let dst = &mut dst.buf;
 
                 let exp = i32::from(self.unbiased_exp());
 
                 let mut tmp = itoa::Buffer::new();
                 let coeff = tmp.format(self.coeff()).as_bytes();
-                // SAFETY: `coeff_to_str` writes [1, DIGITS] to
-                // `tmp` returns a subslice of `tmp`, so the
-                // length of `coeff` must be in [1, DIGITS].
+                // SAFETY: `self.coeff()` is in [0, MAX_COEFF],
+                // so `tmp.format` writes [1, DIGITS] to `tmp`.
+                // `tmp.format` returns a subslice of `tmp`, so
+                // the length of `coeff` must be in [1, DIGITS].
                 unsafe {
                     assume(!coeff.is_empty());
                     assume(coeff.len() <= Self::DIGITS as usize);
@@ -102,7 +140,7 @@ macro_rules! impl_dtoa {
                         // DIGITS+MAX_EXP <= u16::MAX, the cast
                         // cannot wrap.
                         const_assert!(($name::DIGITS + $name::MAX_EXP as u32) < u16::MAX as u32);
-                        let s = $crate::util::itoa4(e.unsigned_abs() as u16);
+                        let s = $crate::itoa::itoa4(e.unsigned_abs() as u16);
                         $crate::util::copy_from_slice(&mut dst[i..i + 4], &s.to_bytes());
                         i += s.digits();
                     }
@@ -150,9 +188,9 @@ macro_rules! impl_dtoa {
 
                 let start = usize::from(self.is_sign_positive());
                 // SAFETY: `buf` only ever contains UTF-8.
-                return unsafe {
+                unsafe {
                     str::from_utf8_unchecked($crate::util::slice_assume_init_ref(&dst[start..i]))
-                };
+                }
             }
         }
 
