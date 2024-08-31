@@ -1,8 +1,9 @@
-use core::{fmt, mem::MaybeUninit};
+use core::{fmt, mem::MaybeUninit, str};
 
 use super::{
     bid::{Bid128, Bid64},
     dpd::Dpd128,
+    util,
 };
 
 mod private {
@@ -74,7 +75,7 @@ pub struct Buffer {
 }
 
 impl Buffer {
-    const MAX_STR_LEN: usize = 48;
+    pub(super) const MAX_STR_LEN: usize = 48;
 
     /// Creates a `Buffer`.
     pub const fn new() -> Self {
@@ -93,6 +94,19 @@ impl Buffer {
     /// The decimal is printed in scientific notation.
     pub fn format<D: Number>(&mut self, d: D, fmt: Fmt) -> &str {
         d.write(self, fmt)
+    }
+
+    /// Returns a subslice of the buffer as a string.
+    ///
+    /// # Safety
+    ///
+    /// - `start..end` must have been written to.
+    /// - `start..end` must contain valid UTF-8.
+    pub(crate) unsafe fn to_str(&self, start: usize, end: usize) -> &str {
+        // SAFETY: We wrote to `dst[..i+coeff.len()]`
+        let buf = unsafe { util::slice_assume_init_ref(&self.buf[start..end]) };
+        // SAFETY: We only write UTF-8 to `dst`.
+        unsafe { str::from_utf8_unchecked(buf) }
     }
 }
 

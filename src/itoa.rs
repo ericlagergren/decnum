@@ -1,6 +1,6 @@
-use core::{mem::MaybeUninit, ptr, slice, str};
+use core::{mem::MaybeUninit, str};
 
-use super::util::{self, assume};
+use super::util;
 
 /// A string of length [1,4].
 #[derive(Copy, Clone, Debug)]
@@ -51,169 +51,60 @@ pub(crate) const fn itoa4(n: u16) -> Str4 {
     Str4(v)
 }
 
-const U128_MAX_LEN: usize = 39;
-const U64_MAX_LEN: usize = 20;
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct Buffer {
+    buf: [MaybeUninit<u8>; 39],
+}
 
-const DEC_DIGITS_LUT: &[u8] = b"\
-      0001020304050607080910111213141516171819\
-      2021222324252627282930313233343536373839\
-      4041424344454647484950515253545556575859\
-      6061626364656667686970717273747576777879\
-      8081828384858687888990919293949596979899";
+impl Buffer {
+    pub const fn new() -> Self {
+        Self {
+            buf: [MaybeUninit::<u8>::uninit(); 39],
+        }
+    }
+
+    pub fn format<I: Integer>(&mut self, x: I) -> &str {
+        x.write(unsafe {
+            &mut *(&mut self.buf as *mut [MaybeUninit<u8>; 39] as *mut <I as Integer>::Buffer)
+        })
+    }
+}
 
 pub(crate) trait Integer {
     type Buffer: 'static;
 
-    fn write(self, dst: &mut Self::Buffer) -> usize;
+    fn write(self, dst: &mut Self::Buffer) -> &str;
 }
 
 impl Integer for u128 {
     type Buffer = [MaybeUninit<u8>; 39];
 
-    fn write(self, buf: &mut Self::Buffer) -> usize {
-        let is_nonnegative = self >= 0;
-        let n = if is_nonnegative {
-            self as u128
-        } else {
-            // Convert negative number to positive by summing 1 to its two's complement.
-            (!(self as u128)).wrapping_add(1)
-        };
-        let mut curr = buf.len() as isize;
-        let buf_ptr = buf.as_mut_ptr() as *mut u8;
-
-        // Divide by 10^19 which is the highest power less than 2^64.
-        let (n, rem) = quorem1e19(n);
-        let buf1 = unsafe {
-            buf_ptr.offset(curr - U64_MAX_LEN as isize) as *mut [MaybeUninit<u8>; U64_MAX_LEN]
-        };
-        curr -= rem.write(unsafe { &mut *buf1 }) as isize;
-
-        if n != 0 {
-            // Memset the base10 leading zeros of rem.
-            let target = buf.len() as isize - 19;
-            unsafe {
-                ptr::write_bytes(buf_ptr.offset(target), b'0', (curr - target) as usize);
-            }
-            curr = target;
-
-            // Divide by 10^19 again.
-            let (n, rem) = quorem1e19(n);
-            let buf2 = unsafe {
-                buf_ptr.offset(curr - U64_MAX_LEN as isize) as *mut [MaybeUninit<u8>; U64_MAX_LEN]
-            };
-            curr -= rem.write(unsafe { &mut *buf2 }) as isize;
-
-            if n != 0 {
-                // Memset the leading zeros.
-                let target = buf.len() as isize - 38;
-                unsafe {
-                    ptr::write_bytes(buf_ptr.offset(target), b'0', (curr - target) as usize);
-                }
-                curr = target;
-
-                // There is at most one digit left
-                // because u128::MAX / 10^19 / 10^19 is 3.
-                curr -= 1;
-                unsafe {
-                    *buf_ptr.offset(curr) = (n as u8) + b'0';
-                }
-            }
-        }
-
-        if !is_nonnegative {
-            curr -= 1;
-            unsafe {
-                *buf_ptr.offset(curr) = b'-';
-            }
-        }
-
-        buf.len() - curr as usize
+    fn write(self, dst: &mut Self::Buffer) -> &str {
+        let mut tmp = ::itoa::Buffer::new();
+        let s = tmp.format(self).as_bytes();
+        util::copy_from_slice(&mut dst[..s.len()], s);
+        todo!()
     }
 }
 
 impl Integer for u64 {
     type Buffer = [MaybeUninit<u8>; 20];
 
-    fn write(self, dst: &mut Self::Buffer) -> usize {
-        const fn pow(x: u32) -> u64 {
-            10u64.pow(x)
-        }
-
-        let x = self;
-
-        if x < pow(2) {
-            return itoa_hundreds(util::sub_array(dst), x as u32);
-        }
-
-        if x < pow(4) {
-            return itoa_ten_thousands(util::sub_array(dst), x as u32);
-        }
-
-        if x < pow(8) {
-            let mut buf = encode_ten_thousands(x / pow(4), x % pow(4));
-            let zeros = buf.trailing_zeros() & !0x7;
-            buf += 0x3030303030303030; // BCD to ASCII.
-            buf >>= zeros; // Drop unused zeros.
-            util::copy_from_slice(&mut dst[..8], &buf.to_le_bytes());
-            return (8 - zeros / 8) as usize;
-        }
-
-        if x < pow(10) {
-            let out = itoa_hundreds(util::sub_array(dst), (x / pow(8)) as u32);
-            util::copy_from_slice(&mut dst[..8], &out.to_le_bytes());
-            return 8;
-        }
-
-        let buf = encode_ten_thousands(
-            // TODO
-            (x / pow(4)) - ((x / pow(8)) * pow(4)),
-            x % pow(4),
-        ) + 0x3030303030303030;
-
-        if x < pow(16) {
-            let hi_hi = (x / pow(8)) / pow(4);
-            let hi_lo = (x / pow(8)) - hi_hi * 10u64.pow(4);
-            let mut buf_hi = encode_ten_thousands(hi_hi, hi_lo);
-            let zeros = buf_hi.trailing_zeros() & (!8u32 + 1);
-            buf_hi |= 0x3030303030303030;
-            buf_hi >>= zeros;
-            let idx = (8 - zeros / 8) as usize;
-            util::copy_from_slice(&mut dst[..8], &buf_hi.to_le_bytes());
-            util::copy_from_slice(&mut dst[8 + idx..8 + idx + 8], &buf_hi.to_le_bytes());
-            (idx + 8) as usize
-        } else {
-            let hi = x / pow(16);
-            let mid = (x / pow(8)) - hi * pow(8);
-            let mid_hi = mid / 10u64.pow(4);
-            let mid_lo = mid - mid_hi * pow(4);
-            let buf_mid = encode_ten_thousands(mid_hi, mid_lo) | 0x3030303030303030;
-            itoa_ten_thousands(util::sub_array(dst), hi as u32);
-            util::copy_from_slice(&mut dst[..8], &buf_mid.to_le_bytes());
-            util::copy_from_slice(&mut dst[8..], &buf.to_le_bytes());
-            16
-        }
+    fn write(self, dst: &mut Self::Buffer) -> &str {
+        let n = itoa64(dst, self);
+        // SAFETY: TODO
+        unsafe { str::from_utf8_unchecked(util::slice_assume_init_ref(&dst[..n])) }
     }
 }
 
-fn itoa_hundreds(dst: &mut [MaybeUninit<u8>; 4], x: u32) -> usize {
-    let small = ((x - 10) as i64) >> 8;
-    let mut base = (b'0' as u32) | ((b'0' as u32) << 8);
-    let hi = (x * 103) >> 10;
-    let lo = x - 10 * hi;
-    base += hi + (lo << 8);
-    base >>= small & 8;
-    util::copy_from_slice(dst, &base.to_le_bytes());
-    (2 + small) as usize
-}
-
-fn itoa_ten_thousands(dst: &mut [MaybeUninit<u8>; 4], x: u32) -> usize {
-    const POW: u32 = 10u32.pow(2);
-    let mut buf = encode_hundreds(x / POW, x % POW);
-    let zeros = buf.trailing_zeros() & !0x7;
-    buf |= 0x30303030; // BCD -> ASCII
-    buf >>= zeros;
-    util::copy_from_slice(dst, &buf.to_le_bytes());
-    (4 - zeros / 8) as usize
+fn itoa64(dst: &mut [MaybeUninit<u8>; 20], x: u64) -> usize {
+    let top = x / 100000000;
+    let bottom = x % 100000000;
+    let first = 0x3030303030303030 | encode_ten_thousands(top / 10000, top % 10000);
+    let second = 0x3030303030303030 | encode_ten_thousands(bottom / 10000, bottom % 10000);
+    util::copy_from_slice(&mut dst[..8], &first.to_le_bytes());
+    util::copy_from_slice(&mut dst[8..16], &second.to_le_bytes());
+    16
 }
 
 const fn encode_hundreds(hi: u32, lo: u32) -> u32 {
@@ -248,96 +139,70 @@ const fn encode_ten_thousands(hi: u64, lo: u64) -> u64 {
     tens
 }
 
-/// Returns (q, r) such that
-///
-/// ```text
-/// q = n / 1e19
-/// r = n % 1e19
-/// ```
-const fn quorem1e19(n: u128) -> (u128, u64) {
-    #![allow(non_upper_case_globals)]
+fn terje(buf: &mut [u8; 10], x: u32) -> &str {
+    const F1_10000: u32 = (1 << 28) / 10000;
 
-    const d: u128 = 10u128.pow(19);
+    let lo = x % 100000;
+    let hi = x / 100000;
 
-    let q = {
-        // Implement division via recpirocal via "Division by
-        // Invariant Integers using Multiplication" by T.
-        // Granlund and P. Montgomery.
-        //
-        // https://gmplib.org/~tege/divcnst-pldi94.pdf
+    let mut tmplo = lo * (F1_10000 + 1) - (lo / 4);
+    let mut tmphi = hi * (F1_10000 + 1) - (hi / 4);
 
-        // l = ceil( log2(d) )
-        //   = ceil( 63.116... )
-        //   = 64
-        // m' = floor( 2^N * (2^l - d)/d ) + 1
-        //    = floor( (2^128) * (2^64  - 1e19)/1e19 ) + 1
-        //    = floor( (2^128) * 0.84467... ) + 1
-        const REC: u128 = 287427806617729612920204334888998430155;
-
-        // t1 = muluh(m', n)
-        let t1 = muluh(REC, n);
-
-        // sh1 = min(l, 1)
-        // sh2 = max(l-1, 0)
-        //
-        // Since d > 1, l >= 1, therefore sh1 = 1 and sh2 = l-1.
-        //
-        // q = SRL(t1 + SRL(n−t1, 1), l−1)
-        // q = SRL(t1 + SRL(n−t1, 1), 10-1)
-        //   = SRL(t1 + SRL(n−t1, 1), 9)
-        (t1 + ((n - t1) >> 1)) >> 9
-    };
-    // Assert some invariants to help the compiler.
-    // SAFETY: `q = n/1e19`.
-    unsafe {
-        assume(q <= n);
-        assume(q == n / d);
-        assume(q * d <= n);
+    let mut mask = 0x0fffffff;
+    let mut shift = 28;
+    let mut i = 0;
+    while i < 5 {
+        buf[i + 0] = b'0' + (tmphi >> shift) as u8;
+        buf[i + 5] = b'0' + (tmplo >> shift) as u8;
+        tmphi = (tmphi & mask) * 5;
+        tmplo = (tmplo & mask) * 5;
+        mask >>= 1;
+        shift -= 1;
+        i += 1;
     }
+    println!("{buf:?}");
 
-    let r = n - q * d;
-
-    // Assert some invariants to help the compiler.
-    // SAFETY: `r = n%1e19`.
-    unsafe {
-        // NB: `r < d` must come first, otherwise the compiler
-        // doesn't use it.
-        assume(r < d);
-        assume(r == (n % d));
+    let mut p: &[u8] = &*buf;
+    if let Some((chunk, rest)) = p.split_first_chunk() {
+        if u64::from_le_bytes(*chunk) == 0x3030303030303030 {
+            p = rest;
+        }
     }
-
-    (q, r as u64)
-}
-
-const fn muluh(x: u128, y: u128) -> u128 {
-    const MASK: u128 = (1 << 64) - 1;
-    let x0 = x & MASK;
-    let x1 = x >> 64;
-    let y0 = y & MASK;
-    let y1 = y >> 64;
-    let w0 = x0 * y0;
-    let t = x1 * y0 + (w0 >> 64);
-    let w1 = (t & MASK) + x0 * y1;
-    let w2 = t >> 64;
-    x1 * y1 + w2 + (w1 >> 64)
+    if let Some((chunk, rest)) = p.split_first_chunk() {
+        if u32::from_le_bytes(*chunk) == 0x30303030 {
+            p = rest;
+        }
+    }
+    if let Some((chunk, rest)) = p.split_first_chunk() {
+        if u16::from_le_bytes(*chunk) == 0x3030 {
+            p = rest;
+        }
+    }
+    if let Some((chunk, rest)) = p.split_first_chunk() {
+        if u8::from_le_bytes(*chunk) == 0x30 {
+            p = rest;
+        }
+    }
+    if p.is_empty() {
+        p = &buf[0..1]
+    }
+    unsafe { str::from_utf8_unchecked(p) }
 }
 
 #[cfg(test)]
 mod tests {
-    use core::str;
-
     use super::*;
 
     #[test]
-    fn test_itoa4() {
-        let mut buf = ::itoa::Buffer::new();
-        for n in 0..=9999 {
-            let w = itoa4(n);
-            let i = ((32 - w.0.leading_zeros()) + 7) / 8;
-            let got = w.to_bytes();
-            let got = str::from_utf8(&got[..i as usize]).unwrap();
-            let want = buf.format(n);
-            assert_eq!(got, want, "#{n}");
+    fn test_integer() {
+        let mut buf1 = [MaybeUninit::<u8>::uninit(); 20];
+        let mut buf2 = itoa::Buffer::new();
+        let mut buf3 = [0u8; 10];
+        for x in 0..=u32::MAX {
+            println!("terje = {}", terje(&mut buf3, x));
+            let got = (x as u64).write(&mut buf1);
+            let want = buf2.format(x);
+            assert_eq!(got, want, "#{x}");
         }
     }
 }

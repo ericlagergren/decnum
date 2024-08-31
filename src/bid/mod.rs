@@ -1,6 +1,7 @@
 //! TODO
 
 mod arith128;
+mod arith32;
 mod arith64;
 mod atod;
 mod base;

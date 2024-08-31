@@ -36,6 +36,7 @@ pub(crate) const fn debug_assert_all_digits(s: &[u8]) {
 }
 
 /// See [`MaybeUninit::copy_from_slice`].
+#[inline(always)]
 pub(crate) fn copy_from_slice<'a>(dst: &'a mut [MaybeUninit<u8>], src: &'a [u8]) -> &'a mut [u8] {
     // SAFETY: &[T] and &[MaybeUninit<T>] have the same layout
     let uninit_src: &[MaybeUninit<u8>] =
@@ -47,6 +48,7 @@ pub(crate) fn copy_from_slice<'a>(dst: &'a mut [MaybeUninit<u8>], src: &'a [u8])
 }
 
 /// See [`MaybeUninit::slice_assume_init_ref`].
+#[inline(always)]
 pub(crate) const unsafe fn slice_assume_init_ref(slice: &[MaybeUninit<u8>]) -> &[u8] {
     // SAFETY: casting `slice` to a `*const [T]` is safe since
     // the caller guarantees that `slice` is initialized, and
@@ -58,6 +60,7 @@ pub(crate) const unsafe fn slice_assume_init_ref(slice: &[MaybeUninit<u8>]) -> &
 }
 
 /// See [`MaybeUninit::slice_assume_init_mut`].
+#[inline(always)]
 pub(crate) unsafe fn slice_assume_init_mut(slice: &mut [MaybeUninit<u8>]) -> &mut [u8] {
     // SAFETY: similar to safety notes for `slice_get_ref`, but
     // we have a mutable reference which is also guaranteed to be
@@ -77,6 +80,7 @@ pub(crate) fn copy(dst: &mut [MaybeUninit<u8>], src: &[u8]) -> usize {
 /// Transmutes `&mut [T; N]` to `&mut [T; M]`.
 ///
 /// NB: This function is safe because `M <= N`.
+#[inline(always)]
 pub(crate) fn sub_array<T, const N: usize, const M: usize>(src: &mut [T; N]) -> &mut [T; M] {
     const { assert!(M <= N) }
     // SAFETY: See the `const` block above, the references do not
@@ -88,6 +92,7 @@ pub(crate) fn sub_array<T, const N: usize, const M: usize>(src: &mut [T; N]) -> 
 /// Transmutes `&mut [T; N]` to `&mut [T; M]`.
 ///
 /// NB: This function is safe because `M <= N`.
+#[inline(always)]
 pub(crate) fn sub_array_at<T, const N: usize, const M: usize, const I: usize>(
     src: &mut [T; N],
 ) -> &mut [T; M] {
@@ -102,6 +107,7 @@ pub(crate) fn sub_array_at<T, const N: usize, const M: usize, const I: usize>(
     unsafe { &mut *(src.as_mut_ptr().add(I).cast::<[T; M]>()) }
 }
 
+#[inline(always)]
 pub(crate) fn split_array_mut<T, const N: usize, const L: usize, const R: usize>(
     src: &mut [T; N],
 ) -> (&mut [T; L], &mut [T; R]) {

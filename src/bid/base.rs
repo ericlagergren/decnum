@@ -15,7 +15,7 @@ macro_rules! impl_dec {
             $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
         );
         $crate::bid::base::impl_dec_impls!($name);
-        $crate::bid::dtoa::impl_dtoa!($name);
+        $crate::bid::dtoa::impl_dtoa!($name, $arith);
         $crate::bid::atod::impl_atod!($name, $ucoeff, $unbiased, $arith);
     };
 }
@@ -151,7 +151,7 @@ macro_rules! impl_dec_internal {
             /// Returns the unbiased exponent.
             ///
             /// If the number is finite, the result is in
-            /// [[`ETIN`][Self::ETIN], [`MAX_EXP`][Self::MAX_EXP]].
+            /// [[`ETINY`][Self::ETINY], [`EMAX`][Self::EMAX]].
             const fn unbiased_exp(self) -> $unbiased {
                 const_assert!($name::LIMIT < <$unbiased>::MAX as $biased);
                 const_assert!(<$unbiased>::MAX - ($name::LIMIT as $unbiased) > $name::BIAS);
@@ -159,8 +159,9 @@ macro_rules! impl_dec_internal {
                 // The exponent only has meaning for finite numbers.
                 debug_assert!(self.is_finite());
 
-                // `self.exp()` is in [0, LIMIT] and LIMIT
-                // < <$unbiased>::MAX, so the cast cannot wrap.
+                // `self.biased_exp()` is in [0, LIMIT] and
+                // `LIMIT < <$unbiased>::MAX`, so the cast cannot
+                // wrap.
                 //
                 // The subtraction cannot wrap since
                 //    LIMIT + BIAS < <$unbiased>::MAX
@@ -174,7 +175,7 @@ macro_rules! impl_dec_internal {
                     // TODO
                     unsafe {
                         assume(exp >= Self::ETINY);
-                        assume(exp <= Self::MAX_EXP);
+                        assume(exp <= Self::EMAX);
                     }
                 }
                 exp

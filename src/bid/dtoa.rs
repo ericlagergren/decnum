@@ -1,104 +1,116 @@
 macro_rules! impl_dtoa {
-    ($name:ident) => {
+    ($name:ident, $arith:ident) => {
         impl $name {
             /// Converts the decimal to a string.
-            pub fn format(self, dst: &mut $crate::conv::Buffer) -> &str {
-                if self.is_finite() {
-                    self.format_finite(dst)
-                } else {
-                    self.format_special(dst)
-                }
-            }
-
             #[allow(clippy::indexing_slicing)]
-            #[inline(never)]
-            fn format_special(self, dst: &mut $crate::conv::Buffer) -> &str {
-                debug_assert!(self.is_special());
-
+            pub fn format(self, dst: &mut $crate::conv::Buffer) -> &str {
                 let dst = &mut dst.buf;
 
-                let mut start = usize::from(self.is_sign_positive());
-                if self.is_infinite() {
-                    return &"-Infinity"[start..];
+                let start = usize::from(self.is_sign_positive());
+                if self.is_special() {
+                    if self.is_infinite() {
+                        return &"-Infinity"[start..];
+                    }
+                    if self.diagnostic() == 0 {
+                        return if self.is_snan() {
+                            &"-sNaN"[start..]
+                        } else {
+                            &"-NaN"[start..]
+                        };
+                    }
                 }
-                if self.diagnostic() == 0 {
-                    return if self.is_snan() {
-                        &"-sNaN"[start..]
+                debug_assert!(self.is_finite() || (self.is_nan() && self.diagnostic() != 0));
+
+                let mut tmp = ::itoa::Buffer::new();
+                let coeff = {
+                    let x = if self.is_finite() {
+                        self.coeff()
                     } else {
-                        &"-NaN"[start..]
+                        self.diagnostic()
                     };
-                }
+                    debug_assert!($arith::digits(x) <= Self::DIGITS);
 
-                let mut n = 0;
-                let (text, payload): (&mut [_; 5], _) = $crate::util::split_array_mut(dst);
-                if self.is_snan() {
-                    n += $crate::util::copy_from_slice(text, b"-sNaN").len();
-                } else {
-                    start += 1;
-                    n += $crate::util::copy_from_slice(&mut text[1..], b"-NaN").len();
-                }
-                n += $crate::itoa::Integer::format(self.diagnostic(), payload);
-                unsafe {
-                    str::from_utf8_unchecked(
-                        // x
-                        $crate::util::slice_assume_init_ref(
-                            // x
-                            &dst[start..n],
-                        ),
-                    )
-                }
-            }
+                    let coeff = tmp.format(x).as_bytes();
+                    // Teach the compiler about the length of
+                    // `coeff` to elimite bounds checks.
+                    match coeff.split_at_checked(Self::DIGITS as usize) {
+                        Some((s, rest)) => {
+                            // `self.coeff()` is at most `DIGITS`
+                            // long and `self.diagnostic()` is
+                            // smaller, so `rest` should always
+                            // be empty.
+                            debug_assert!(rest.is_empty());
+                            s
+                        }
+                        None => coeff,
+                    }
+                };
+                debug_assert!(!coeff.is_empty());
+                debug_assert!(coeff.len() <= Self::DIGITS as usize);
 
-            #[allow(clippy::indexing_slicing)]
-            fn format_finite(self, dst: &mut $crate::conv::Buffer) -> &str {
+                if self.is_nan() {
+                    let i = if self.is_snan() {
+                        $crate::util::copy(dst, b"-sNaN")
+                    } else {
+                        $crate::util::copy(dst, b"-NaN")
+                    };
+                    $crate::util::copy(&mut dst[i..], coeff);
+
+                    // SAFETY: We wrote to `dst[..i+coeff.len()]`
+                    let buf = unsafe { $crate::util::slice_assume_init_ref(&dst[start..i]) };
+                    // SAFETY: We only write UTF-8 to `dst`.
+                    return unsafe { str::from_utf8_unchecked(buf) };
+                }
                 debug_assert!(self.is_finite());
 
-                let dst = &mut dst.buf;
-
+                // exp is in [ETINY, EMAX].
                 let exp = i32::from(self.unbiased_exp());
 
-                let mut tmp = itoa::Buffer::new();
-                let coeff = tmp.format(self.coeff()).as_bytes();
-                // SAFETY: `self.coeff()` is in [0, MAX_COEFF],
-                // so `tmp.format` writes [1, DIGITS] to `tmp`.
-                // `tmp.format` returns a subslice of `tmp`, so
-                // the length of `coeff` must be in [1, DIGITS].
-                unsafe {
-                    assume(!coeff.is_empty());
-                    assume(coeff.len() <= Self::DIGITS as usize);
-                }
-
-                // `e` is the adjusted exponent.
-                // `pre` is the number of digits before the '.'.
+                // `e` is the adjusted exponent in [0, pre-1].
+                // NB: `e` is either 0 or `pre-1`.
+                //
+                // `pre` is the number of digits before the
+                // decimal point in [-5, DIGITS+EMAX].
                 let (e, pre) = {
                     let mut e = 0;
                     #[allow(clippy::cast_possible_wrap)]
                     let mut pre = (coeff.len() as i32) + exp;
                     if exp > 0 || pre < -5 {
-                        // Exponential form
+                        // Exponential form.
                         e = pre - 1;
                         pre = 1;
                     }
                     // SAFETY:
                     //
-                    // Because `coeff.len()` is in [1, DIGITS]
-                    // and `exp` is in [MIN_EXP, MAX_EXP], `pre`
-                    // is initially in [1+MIN_EXP,
-                    // DIGITS+MAX_EXP]. After adjustment into
-                    // exponential form, `pre` is in [min(1, -5),
-                    // DIGITS+MAX_EXP].
+                    // `coeff.len()` = [1, DIGITS]
+                    // `exp` = [ETINY, EMAX]
+                    // `pre` = `coeff.len() + exp`
+                    //       = [1, DIGITS] + [ETINY, EMAX]
+                    //       = [1+ETINY, DIGITS+EMAX]
+                    //
+                    // If `pre` is converted to exponential form,
+                    // `pre` is set to 1. Therefore:
+                    //
+                    // `pre` = [min(1, -5), DIGITS+EMAX]
+                    //       = [-5, DIGITS+EMAX]
                     unsafe {
                         assume(pre >= -5);
-                        assume(pre <= (Self::DIGITS + Self::MAX_EXP as u32) as i32);
+                        assume(pre <= (Self::DIGITS + Self::EMAX as u32) as i32);
                     }
                     (e, pre)
                 };
 
                 if pre > 0 {
-                    // SAFETY: `pre` was in [min(1, -5),
-                    // DIGITS+MAX_EXP].  This block is predicated
-                    // on `pre > 0`, so `pre` is now in [1,
-                    // DIGITS+MAX_EXP].
+                    // SAFETY:
+                    //
+                    // Before this block
+                    //
+                    // `pre` = [-5, DIGITS+EMAX]
+                    //
+                    // This block is predicated on `pre > 0`,
+                    // meaning
+                    //
+                    // `pre` = [1, DIGITS+EMAX]
                     unsafe {
                         assume(pre <= (Self::DIGITS + Self::MAX_EXP as u32) as i32);
                     }
@@ -110,8 +122,11 @@ macro_rules! impl_dtoa {
 
                     if pre < coeff.len() {
                         let (pre, post) = coeff.split_at(pre);
+                        // Write `pre` before the dot.
                         $crate::util::copy_from_slice(&mut dst[i..i + pre.len()], pre);
+                        // Dot!
                         dst[i + pre.len()].write(b'.');
+                        // Write `post` after the dot.
                         $crate::util::copy_from_slice(
                             &mut dst[i + pre.len() + 1..i + pre.len() + 1 + post.len()],
                             post,
@@ -136,10 +151,10 @@ macro_rules! impl_dtoa {
                         //println!("i={i}");
 
                         // `e` is either 0 or `pre-1`. Since
-                        // `pre` is in [1, DIGITS+MAX_EXP] and
-                        // DIGITS+MAX_EXP <= u16::MAX, the cast
+                        // `pre` = [1, DIGITS+EMAX] and
+                        // `DIGITS+EMAX <= u16::MAX`, the cast
                         // cannot wrap.
-                        const_assert!(($name::DIGITS + $name::MAX_EXP as u32) < u16::MAX as u32);
+                        const_assert!(($name::DIGITS + $name::EMAX as u32) < u16::MAX as u32);
                         let s = $crate::itoa::itoa4(e.unsigned_abs() as u16);
                         $crate::util::copy_from_slice(&mut dst[i..i + 4], &s.to_bytes());
                         i += s.digits();
@@ -147,50 +162,77 @@ macro_rules! impl_dtoa {
 
                     let start = usize::from(self.is_sign_positive());
                     //println!("start={start} i={i} len={}", dst.len());
-                    // SAFETY: `buf` only ever contains UTF-8.
-                    return unsafe {
-                        str::from_utf8_unchecked($crate::util::slice_assume_init_ref(
-                            &dst[start..i],
-                        ))
-                    };
+                    // SAFETY: We wrote to `dst[..i]`.
+                    let buf = unsafe { $crate::util::slice_assume_init_ref(&dst[start..i]) };
+                    // SAFETY: We only write UTF-8 to `dst`.
+                    return unsafe { str::from_utf8_unchecked(buf) };
                 }
+                debug_assert!(pre <= 0);
 
-                // SAFETY: TODO
-                unsafe {
-                    assume(pre >= -5);
-                    assume(pre <= 0);
-                }
+                let pre = {
+                    // SAFETY:
+                    //
+                    // `pre` = [-5, DIGITS+EMAX]
+                    //
+                    // The previous block is predicated on `pre
+                    // > 0`, meaning at this point `pre <= 0`.
+                    // Therefore, `pre` must be in [-5, 0].
+                    unsafe {
+                        assume(pre >= -5);
+                        assume(pre <= 0);
+                    }
 
-                // -5 => 7
-                // -4 => 6
-                // -3 => 5
-                // -2 => 4
-                // -1 => 3
-                //  0 => 2
-                let pre = 2 + pre.unsigned_abs() as usize;
-                // SAFETY: `pre` was in [-5, 0]. After negation and
-                // adding 2, `pre` is now in [2, 7].
-                unsafe {
-                    assume(pre >= 2);
-                    assume(pre <= 7);
-                }
-                const_assert!(1 + 7 + $name::DIGITS as usize <= $crate::conv::Buffer::len());
+                    // Rewrite `pre`:
+                    // -5 => 7
+                    // -4 => 6
+                    // -3 => 5
+                    // -2 => 4
+                    // -1 => 3
+                    //  0 => 2
+                    let pre = 2 + pre.unsigned_abs() as usize;
 
-                $crate::util::copy(dst, b"-0.00000");
+                    // SAFETY:
+                    //
+                    // `pre` = 2 + abs([-5, 0])
+                    //       = [2, 2] + abs([-5, 0])
+                    //       = [2, 2] + [0, 5]
+                    //       = [2, 7]
+                    unsafe {
+                        assume(pre <= 7);
+                        assume(pre >= 2);
+                    }
+
+                    pre
+                };
+
+                const PREFIX: &[u8; 8] = b"-0.00000";
+                const_assert!(PREFIX.len() + $name::DIGITS as usize <= $crate::conv::Buffer::len());
+                $crate::util::copy(dst, PREFIX);
+
+                // `pre` = [2, 7]
+                // `i` = 1 + `pre`
+                //     = 1 + [2, 7]
+                //     = [3, 8]
                 let mut i = 1 + pre;
-                // SAFETY: `pre` was in [-5, 0]. After negation
-                // and adding 2, `pre` is now in [2, 7]. `coeff`
-                // is in [1, DIGITS], so `i+pre+coeff.len()` is
-                // in [1+2+DIGITS, 1+7+DIGITS].
+                // SAFETY:
+                //
+                // `coeff.len()` = [1, DIGITS]
+                // tmp = `dst.len() - i`
+                //     = [48, N] - [3, 8]
+                //     = [40, N-3]
                 let (_, rest) = dst.split_at_mut(i);
-                $crate::util::copy_from_slice(&mut rest[..coeff.len()], coeff);
-                i += coeff.len();
+                if rest.len() >= coeff.len() {
+                    i += $crate::util::copy(rest, coeff);
+                }
 
                 let start = usize::from(self.is_sign_positive());
-                // SAFETY: `buf` only ever contains UTF-8.
-                unsafe {
-                    str::from_utf8_unchecked($crate::util::slice_assume_init_ref(&dst[start..i]))
-                }
+                // SAFETY: We wrote to `dst[..i]`.
+                let buf = unsafe {
+                    // x
+                    $crate::util::slice_assume_init_ref(&dst[start..i])
+                };
+                // SAFETY: We only write UTF-8 to `dst`.
+                unsafe { str::from_utf8_unchecked(buf) }
             }
         }
 

@@ -47,7 +47,7 @@ pub(super) const fn const_eq_shifted(lhs: u64, rhs: u64, shift: u32) -> bool {
 
 /// Returns the number of decimal digits in `x`.
 ///
-/// The result will be in [0, 39].
+/// The result will be in [0, 20].
 pub(super) const fn digits(mut x: u64) -> u32 {
     // Ensure that `x` is non-zero so that `digits(0) == 1`.
     //
