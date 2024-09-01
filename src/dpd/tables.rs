@@ -1,6 +1,6 @@
 use super::{
     bcd::{self, Str3},
-    dpd,
+    encoding as dpd,
 };
 
 /// Maps 12-bit BCDs to 10-bit DPDs.

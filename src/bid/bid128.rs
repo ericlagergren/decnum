@@ -3,7 +3,7 @@ use core::{cmp::Ordering, fmt, mem::size_of, num::FpCategory, str};
 use super::{arith128, base::impl_dec};
 use crate::{
     conv::{self, ParseError},
-    dpd::Dpd128,
+    dpd::{self, Dpd128},
     util::{self, assume, const_assert},
 };
 
@@ -153,14 +153,18 @@ impl Bid128 {
     }
 
     /// Creates a quiet NaN.
-    pub(crate) const fn nan(sign: bool) -> Self {
-        let bits = signbit(sign) | comb(0x1f000);
+    pub(crate) const fn nan(sign: bool, payload: u128) -> Self {
+        debug_assert!(payload <= Self::PAYLOAD_MAX);
+
+        let bits = signbit(sign) | comb(0x1f000) | payload;
         Self::from_bits(bits)
     }
 
     /// Creates a signaling NaN.
-    pub(crate) const fn snan(sign: bool) -> Self {
-        let bits = signbit(sign) | comb(0x1f800);
+    pub(crate) const fn snan(sign: bool, payload: u128) -> Self {
+        debug_assert!(payload <= Self::PAYLOAD_MAX);
+
+        let bits = signbit(sign) | comb(0x1f800) | payload;
         Self::from_bits(bits)
     }
 
@@ -221,8 +225,23 @@ impl Bid128 {
 
     /// Converts the `Bid128` to a `Dpd128`.
     pub const fn to_dpd128(self) -> Dpd128 {
-        // TODO: inf/nan
-        Dpd128::from_parts_bin(self.signbit(), self.unbiased_exp(), self.coeff())
+        if self.is_nan() {
+            let payload = dpd::pack_bin_u113(self.payload());
+            if self.is_snan() {
+                Dpd128::snan(self.signbit(), payload)
+            } else {
+                Dpd128::nan(self.signbit(), payload)
+            }
+        } else if self.is_infinite() {
+            Dpd128::inf(self.signbit())
+        } else {
+            Dpd128::from_parts_bin(self.signbit(), self.unbiased_exp(), self.coeff())
+        }
+    }
+
+    /// Converts the `Dpd128` to a `Bid128`.
+    pub const fn from_dpd128(dpd: Dpd128) -> Self {
+        dpd.to_bid128()
     }
 }
 
@@ -363,9 +382,9 @@ mod tests {
     use crate::dectest::{self, Dec128};
 
     impl Bid128 {
-        const SNAN: Self = Self::snan(false);
-        const NEG_NAN: Self = Self::nan(true);
-        const NEG_SNAN: Self = Self::snan(true);
+        const SNAN: Self = Self::snan(false, 0);
+        const NEG_NAN: Self = Self::nan(true, 0);
+        const NEG_SNAN: Self = Self::snan(true, 0);
     }
 
     #[test]
@@ -395,12 +414,16 @@ mod tests {
         }
     }
 
+    // g: 7e0025dd7 c253688c305f4cc887c4248
+    // w: 7e0025dd7 f0c056e4e73ff15357e65ca
+
     #[test]
     fn test_encode() {
         const CASES: &'static str = include_str!("../../testdata/dqEncode.decTest");
         for case in dectest::parse(CASES).unwrap() {
             println!("case = {case}");
             case.run(&Dec128::new()).unwrap();
+            println!("");
         }
     }
 

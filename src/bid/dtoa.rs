@@ -9,9 +9,15 @@ macro_rules! impl_dtoa {
                 let start = usize::from(self.is_sign_positive());
                 if self.is_special() {
                     if self.is_infinite() {
+                        // `start` is either 0 or 1, so this
+                        // cannot panic.
+                        #[allow(clippy::string_slice)]
                         return &"-Infinity"[start..];
                     }
-                    if self.diagnostic() == 0 {
+                    if self.payload() == 0 {
+                        // `start` is either 0 or 1, so this
+                        // cannot panic.
+                        #[allow(clippy::string_slice)]
                         return if self.is_snan() {
                             &"-sNaN"[start..]
                         } else {
@@ -19,14 +25,14 @@ macro_rules! impl_dtoa {
                         };
                     }
                 }
-                debug_assert!(self.is_finite() || (self.is_nan() && self.diagnostic() != 0));
+                debug_assert!(self.is_finite() || (self.is_nan() && self.payload() != 0));
 
                 let mut tmp = ::itoa::Buffer::new();
                 let coeff = {
                     let x = if self.is_finite() {
                         self.coeff()
                     } else {
-                        self.diagnostic()
+                        self.payload()
                     };
                     debug_assert!($arith::digits(x) <= Self::DIGITS);
 
@@ -36,7 +42,7 @@ macro_rules! impl_dtoa {
                     match coeff.split_at_checked(Self::DIGITS as usize) {
                         Some((s, rest)) => {
                             // `self.coeff()` is at most `DIGITS`
-                            // long and `self.diagnostic()` is
+                            // long and `self.payload()` is
                             // smaller, so `rest` should always
                             // be empty.
                             debug_assert!(rest.is_empty());
@@ -80,8 +86,6 @@ macro_rules! impl_dtoa {
                         e = pre - 1;
                         pre = 1;
                     }
-                    // SAFETY:
-                    //
                     // `coeff.len()` = [1, DIGITS]
                     // `exp` = [ETINY, EMAX]
                     // `pre` = `coeff.len() + exp`
@@ -89,20 +93,16 @@ macro_rules! impl_dtoa {
                     //       = [1+ETINY, DIGITS+EMAX]
                     //
                     // If `pre` is converted to exponential form,
-                    // `pre` is set to 1. Therefore:
+                    // `pre` = 1. Therefore:
                     //
                     // `pre` = [min(1, -5), DIGITS+EMAX]
                     //       = [-5, DIGITS+EMAX]
-                    unsafe {
-                        assume(pre >= -5);
-                        assume(pre <= (Self::DIGITS + Self::EMAX as u32) as i32);
-                    }
+                    debug_assert!(pre >= -5);
+                    debug_assert!(pre <= (Self::DIGITS + Self::EMAX as u32) as i32);
                     (e, pre)
                 };
 
                 if pre > 0 {
-                    // SAFETY:
-                    //
                     // Before this block
                     //
                     // `pre` = [-5, DIGITS+EMAX]
@@ -111,9 +111,7 @@ macro_rules! impl_dtoa {
                     // meaning
                     //
                     // `pre` = [1, DIGITS+EMAX]
-                    unsafe {
-                        assume(pre <= (Self::DIGITS + Self::MAX_EXP as u32) as i32);
-                    }
+                    debug_assert!(pre <= (Self::DIGITS + Self::EMAX as u32) as i32);
 
                     let pre = pre.unsigned_abs() as usize;
 
@@ -131,13 +129,12 @@ macro_rules! impl_dtoa {
                             &mut dst[i + pre.len() + 1..i + pre.len() + 1 + post.len()],
                             post,
                         );
-                        i += 1;
+                        i += 1; // dot
                     } else {
                         $crate::util::copy_from_slice(&mut dst[i..i + coeff.len()], coeff);
                     };
                     i += coeff.len();
 
-                    //println!("e={e}");
                     if e != 0 {
                         dst[i].write(b'E');
                         i += 1;
@@ -147,8 +144,6 @@ macro_rules! impl_dtoa {
                             dst[i].write(b'+');
                         };
                         i += 1;
-
-                        //println!("i={i}");
 
                         // `e` is either 0 or `pre-1`. Since
                         // `pre` = [1, DIGITS+EMAX] and
@@ -161,7 +156,6 @@ macro_rules! impl_dtoa {
                     }
 
                     let start = usize::from(self.is_sign_positive());
-                    //println!("start={start} i={i} len={}", dst.len());
                     // SAFETY: We wrote to `dst[..i]`.
                     let buf = unsafe { $crate::util::slice_assume_init_ref(&dst[start..i]) };
                     // SAFETY: We only write UTF-8 to `dst`.
@@ -170,17 +164,13 @@ macro_rules! impl_dtoa {
                 debug_assert!(pre <= 0);
 
                 let pre = {
-                    // SAFETY:
-                    //
                     // `pre` = [-5, DIGITS+EMAX]
                     //
                     // The previous block is predicated on `pre
                     // > 0`, meaning at this point `pre <= 0`.
                     // Therefore, `pre` must be in [-5, 0].
-                    unsafe {
-                        assume(pre >= -5);
-                        assume(pre <= 0);
-                    }
+                    debug_assert!(pre >= -5);
+                    debug_assert!(pre <= 0);
 
                     // Rewrite `pre`:
                     // -5 => 7
@@ -191,16 +181,12 @@ macro_rules! impl_dtoa {
                     //  0 => 2
                     let pre = 2 + pre.unsigned_abs() as usize;
 
-                    // SAFETY:
-                    //
                     // `pre` = 2 + abs([-5, 0])
                     //       = [2, 2] + abs([-5, 0])
                     //       = [2, 2] + [0, 5]
                     //       = [2, 7]
-                    unsafe {
-                        assume(pre <= 7);
-                        assume(pre >= 2);
-                    }
+                    debug_assert!(pre <= 7);
+                    debug_assert!(pre >= 2);
 
                     pre
                 };
@@ -214,23 +200,26 @@ macro_rules! impl_dtoa {
                 //     = 1 + [2, 7]
                 //     = [3, 8]
                 let mut i = 1 + pre;
-                // SAFETY:
-                //
-                // `coeff.len()` = [1, DIGITS]
-                // tmp = `dst.len() - i`
-                //     = [48, N] - [3, 8]
-                //     = [40, N-3]
                 let (_, rest) = dst.split_at_mut(i);
-                if rest.len() >= coeff.len() {
-                    i += $crate::util::copy(rest, coeff);
-                }
+                // Use `min(rest, coeff)` to avoid an unnecessary
+                // bounds check.
+                //
+                // The compiler knows that
+                //
+                // - `i` = [3, 8]
+                // - `dst.len()` = 48
+                // - `coeff.len()` = [1, DIGITS]
+                // - DIGITS < `dst.len()`
+                //
+                // but for some reason it doesn't know that
+                // `rest.len()` = [40, 45]. All it knows is that
+                // `rest.len() > 0`.
+                let n = ::core::cmp::min(rest.len(), coeff.len());
+                i += $crate::util::copy(&mut rest[..n], &coeff[..n]);
 
                 let start = usize::from(self.is_sign_positive());
                 // SAFETY: We wrote to `dst[..i]`.
-                let buf = unsafe {
-                    // x
-                    $crate::util::slice_assume_init_ref(&dst[start..i])
-                };
+                let buf = unsafe { $crate::util::slice_assume_init_ref(&dst[start..i]) };
                 // SAFETY: We only write UTF-8 to `dst`.
                 unsafe { str::from_utf8_unchecked(buf) }
             }
@@ -246,13 +235,19 @@ macro_rules! impl_dtoa {
 
         impl ::core::fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                let sign = self.signbit() as u8;
+                let sign = u8::from(self.signbit());
                 if self.is_nan() {
+                    write!(f, "[{sign},")?;
                     if self.is_snan() {
-                        write!(f, "[{sign},sNaN]")
+                        write!(f, "s")?;
                     } else {
-                        write!(f, "[{sign},qNaN]")
+                        write!(f, "q")?;
                     }
+                    write!(f, "NaN")?;
+                    if self.payload() != 0 {
+                        write!(f, ",{}", self.payload())?;
+                    }
+                    write!(f, "]")
                 } else if self.is_infinite() {
                     write!(f, "[{sign},inf]")
                 } else {
@@ -261,7 +256,7 @@ macro_rules! impl_dtoa {
                         "[{sign},{},{},form={}]",
                         self.coeff(),
                         self.unbiased_exp(),
-                        (self.is_form2() as u8) + 1,
+                        u8::from(self.is_form2()) + 1,
                     )
                 }
             }

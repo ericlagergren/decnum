@@ -61,6 +61,8 @@ pub(super) const fn digits(mut x: u64) -> u32 {
     x |= 1;
 
     let r = ((bitlen(x) + 1) * 1233) / 4096;
+    // `r` is in [0, 19], so it cannot panic.
+    #[allow(clippy::indexing_slicing)]
     let p = POW10[r as usize];
     r + (x >= p) as u32
 }
@@ -73,6 +75,8 @@ pub(super) const fn bitlen(x: u64) -> u32 {
 }
 
 /// All 128-bit powers of 10.
+// It's a const initializer, so it's okay to panic.
+#[allow(clippy::indexing_slicing)]
 const POW10: [u64; 20] = {
     let mut tab = [0u64; 20];
     let mut i = 0;

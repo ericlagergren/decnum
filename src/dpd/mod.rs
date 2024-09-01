@@ -2,8 +2,9 @@
 //! packed decimal significands.
 
 mod bcd;
-mod dpd;
 mod dpd128;
+mod encoding;
 mod tables;
 
 pub use dpd128::Dpd128;
+pub(crate) use encoding::*;

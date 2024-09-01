@@ -3,7 +3,6 @@ use core::{fmt, mem::MaybeUninit, str};
 use super::{
     bid::{Bid128, Bid64},
     dpd::Dpd128,
-    util,
 };
 
 mod private {
@@ -69,13 +68,13 @@ impl Number for Bid64 {}
 impl Number for Dpd128 {}
 
 /// A buffer for converting floating point decimals to text.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Debug)]
 pub struct Buffer {
-    pub(super) buf: [MaybeUninit<u8>; Self::MAX_STR_LEN],
+    pub(crate) buf: [MaybeUninit<u8>; Self::MAX_STR_LEN],
 }
 
 impl Buffer {
-    pub(super) const MAX_STR_LEN: usize = 48;
+    pub(crate) const MAX_STR_LEN: usize = 48;
 
     /// Creates a `Buffer`.
     pub const fn new() -> Self {
@@ -85,7 +84,7 @@ impl Buffer {
     }
 
     #[allow(dead_code)] // false positive?
-    pub(super) const fn len() -> usize {
+    pub(crate) const fn len() -> usize {
         Self::MAX_STR_LEN
     }
 
@@ -95,18 +94,19 @@ impl Buffer {
     pub fn format<D: Number>(&mut self, d: D, fmt: Fmt) -> &str {
         d.write(self, fmt)
     }
+}
 
-    /// Returns a subslice of the buffer as a string.
-    ///
-    /// # Safety
-    ///
-    /// - `start..end` must have been written to.
-    /// - `start..end` must contain valid UTF-8.
-    pub(crate) unsafe fn to_str(&self, start: usize, end: usize) -> &str {
-        // SAFETY: We wrote to `dst[..i+coeff.len()]`
-        let buf = unsafe { util::slice_assume_init_ref(&self.buf[start..end]) };
-        // SAFETY: We only write UTF-8 to `dst`.
-        unsafe { str::from_utf8_unchecked(buf) }
+impl Clone for Buffer {
+    // The internals are hidden, so this is an easy perf win.
+    #[allow(clippy::non_canonical_clone_impl)]
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+impl Default for Buffer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -139,11 +139,11 @@ impl ParseError {
         }
     }
 
-    pub(super) const fn empty() -> Self {
+    pub(crate) const fn empty() -> Self {
         Self::new(ErrorKind::Empty, "")
     }
 
-    pub(super) const fn invalid(reason: &'static str) -> Self {
+    pub(crate) const fn invalid(reason: &'static str) -> Self {
         Self::new(ErrorKind::Invalid, reason)
     }
 }
@@ -179,39 +179,124 @@ impl fmt::Display for ErrorKind {
 }
 
 /// Is `v` three digits?
-pub(super) const fn is_3digits(v: u32) -> bool {
+pub(crate) const fn is_3digits(v: u32) -> bool {
     let a = v.wrapping_add(0x0046_4646);
     let b = v.wrapping_sub(0x0030_3030);
     (a | b) & 0x0080_8080 == 0
 }
 
 // /// Is `v` four digits?
-// pub(super) const fn is_4digits(v: u32) -> bool {
+// pub(crate) const fn is_4digits(v: u32) -> bool {
 //     check_4digits(v) == 0
 // }
 
 /// Returns a mask over the digits in `v`.
 ///
 /// Each byte is 0x00 if it is a digit, or 0x80 otherwise.
-pub(super) const fn check_4digits(v: u32) -> u32 {
+pub(crate) const fn check_4digits(v: u32) -> u32 {
     let a = v.wrapping_add(0x4646_4646);
     let b = v.wrapping_sub(0x3030_3030);
     (a | b) & 0x8080_8080
 }
 
 /// Reports whether `a == b` using ASCII case folding.
-pub(super) const fn equal_fold(a: &[u8], b: &[u8]) -> bool {
+pub(crate) const fn equal_fold_ascii(mut a: &[u8], mut b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    let mut i = 0;
-    while i < a.len() && i < b.len() {
-        if !a[i].eq_ignore_ascii_case(&b[i]) {
+    while let (Some(lhs), Some(rhs)) = (a.split_first_chunk(), b.split_first_chunk()) {
+        if to_ascii_lower8(u64::from_le_bytes(*lhs.0))
+            != to_ascii_lower8(u64::from_le_bytes(*rhs.0))
+        {
             return false;
         }
-        i += 1;
+        a = lhs.1;
+        b = rhs.1;
+    }
+    while let (Some(lhs), Some(rhs)) = (a.split_first(), b.split_first()) {
+        if to_ascii_lower(*lhs.0) != to_ascii_lower(*rhs.0) {
+            return false;
+        }
+        a = lhs.1;
+        b = rhs.1;
     }
     true
+}
+
+/// Converts eight characters to their lowercase ASCII
+/// equivalent.
+///
+/// Characters that are not uppercase ASCII letters are left
+/// unchanged.
+const fn to_ascii_lower8(s: u64) -> u64 {
+    // Taken from BIND 9
+    // https://gitlab.isc.org/isc-projects/bind9/-/blob/8a09d54d6befaf3e35a59c48b926da893303a375/lib/isc/include/isc/ascii.h#L62
+    // https://gitlab.isc.org/isc-projects/bind9/-/blob/8a09d54d6befaf3e35a59c48b926da893303a375/LICENSE
+    const MASK: u64 = 0x0101010101010101;
+    let heptets = s & (0x7F * MASK);
+    let is_gt_z = heptets + ((0x7F - b'Z') as u64) * MASK;
+    let is_ge_a = heptets + ((0x80 - b'A') as u64) * MASK;
+    let is_ascii = !s & (0x80 * MASK);
+    let is_upper = is_ascii & (is_ge_a ^ is_gt_z);
+    s | is_upper >> 2
+}
+
+/// Converts four characters to their lowercase ASCII
+/// equivalent.
+///
+/// Characters that are not uppercase ASCII letters are left
+/// unchanged.
+const fn to_ascii_lower4(s: u32) -> u32 {
+    // Taken from BIND 9
+    // https://gitlab.isc.org/isc-projects/bind9/-/blob/8a09d54d6befaf3e35a59c48b926da893303a375/lib/isc/include/isc/ascii.h#L62
+    // https://gitlab.isc.org/isc-projects/bind9/-/blob/8a09d54d6befaf3e35a59c48b926da893303a375/LICENSE
+    const MASK: u32 = 0x01010101;
+    let heptets = s & (0x7F * MASK);
+    let is_ascii = !s & (0x80 * MASK);
+    let is_gt_z = heptets + ((0x7F - b'Z') as u32) * MASK;
+    let is_ge_a = heptets + ((0x80 - b'A') as u32) * MASK;
+    let is_upper = (is_ge_a ^ is_gt_z) & is_ascii;
+    s | (is_upper >> 2)
+}
+
+/// Converts three characters to their lowercase ASCII
+/// equivalent.
+///
+/// Characters that are not uppercase ASCII letters are left
+/// unchanged.
+const fn to_ascii_lower3(s: u32) -> u32 {
+    // Taken from BIND 9
+    // https://gitlab.isc.org/isc-projects/bind9/-/blob/8a09d54d6befaf3e35a59c48b926da893303a375/lib/isc/include/isc/ascii.h#L62
+    // https://gitlab.isc.org/isc-projects/bind9/-/blob/8a09d54d6befaf3e35a59c48b926da893303a375/LICENSE
+    const MASK: u32 = 0x01010101;
+    let heptets = s & (0x7F * MASK);
+    let is_ascii = !s & (0x80 * MASK);
+    let is_gt_z = heptets + ((0x7F - b'Z') as u32) * MASK;
+    let is_ge_a = heptets + ((0x80 - b'A') as u32) * MASK;
+    let is_upper = (is_ge_a ^ is_gt_z) & is_ascii;
+    s | (is_upper >> 2)
+}
+
+/// Converts `c` to its lowercase ASCII equivalent.
+///
+/// If `c` is not an uppercase ASCII letter then `c` remains
+/// unchanged.
+const fn to_ascii_lower(c: u8) -> u8 {
+    // This is a const initializer, so panicking is okay.
+    #[allow(clippy::indexing_slicing)]
+    const TABLE: [u8; 256] = {
+        let mut table = [0u8; 256];
+        let mut i = 0;
+        while i < table.len() {
+            table[i] = (i as u8).to_ascii_lowercase();
+            i += 1;
+        }
+        table
+    };
+    // `c` has 256 possible values and so does `TABLE`, so this
+    // cannot panic.
+    #[allow(clippy::indexing_slicing)]
+    TABLE[c as usize]
 }
 
 #[cfg(test)]

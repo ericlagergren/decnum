@@ -110,6 +110,8 @@ macro_rules! impl_dec_internal {
             const COEFF_MASK: $ucoeff = (1 << Self::COEFF_BITS) - 1;
 
             const PAYLOAD_MASK: $ucoeff = Self::COEFF_MASK;
+            const PAYLOAD_DIGITS: u32 = $arith::digits(Self::PAYLOAD_MASK);
+            const PAYLOAD_MAX: $ucoeff = Self::PAYLOAD_MASK;
 
             const MAX_SCALEB_N: u32 = 2 * (Self::EMAX as u32 + Self::MAX_PREC);
 
@@ -132,7 +134,8 @@ macro_rules! impl_dec_internal {
             /// If the number is finite, the result is in [0,
             /// [`LIMIT`][Self::LIMIT]].
             const fn biased_exp(self) -> $biased {
-                // The exponent only has meaning for finite numbers.
+                // The exponent only has meaning for finite
+                // numbers.
                 debug_assert!(self.is_finite());
 
                 let exp = if self.is_form2() {
@@ -153,18 +156,18 @@ macro_rules! impl_dec_internal {
             /// If the number is finite, the result is in
             /// [[`ETINY`][Self::ETINY], [`EMAX`][Self::EMAX]].
             const fn unbiased_exp(self) -> $unbiased {
-                const_assert!($name::LIMIT < <$unbiased>::MAX as $biased);
-                const_assert!(<$unbiased>::MAX - ($name::LIMIT as $unbiased) > $name::BIAS);
+                const_assert!($name::LIMIT.checked_add_signed($name::BIAS).is_some());
 
-                // The exponent only has meaning for finite numbers.
+                // The exponent only has meaning for finite
+                // numbers.
                 debug_assert!(self.is_finite());
 
                 // `self.biased_exp()` is in [0, LIMIT] and
-                // `LIMIT < <$unbiased>::MAX`, so the cast cannot
+                // `LIMIT <= <$unbiased>::MAX`, so the cast cannot
                 // wrap.
                 //
                 // The subtraction cannot wrap since
-                //    LIMIT + BIAS < <$unbiased>::MAX
+                //    LIMIT + BIAS <= <$unbiased>::MAX
                 //    0 - BIAS > <$unbiased>::MIN
                 #[allow(clippy::cast_possible_wrap)]
                 let exp = (self.biased_exp() as $unbiased) - Self::BIAS;
@@ -221,7 +224,7 @@ macro_rules! impl_dec_internal {
             }
 
             /// Returns a NaN's diagnostic information.
-            const fn diagnostic(self) -> $ucoeff {
+            const fn payload(self) -> $ucoeff {
                 // The coefficient only has meaning for NaNs.
                 debug_assert!(self.is_nan());
 
@@ -291,7 +294,8 @@ macro_rules! impl_dec_internal {
                         // Subnormal < ETINY, so exp = ETINY and
                         // the coeff is rounded.
                         //
-                        // TODO(eric): Round to 0, don't hard code 0.
+                        // TODO(eric): Round to 0, don't hard
+                        // code 0.
                         return Self::from_parts(sign, Self::ETINY, 0);
                     }
                     debug_assert!(adj >= Self::ETINY);
@@ -308,7 +312,11 @@ macro_rules! impl_dec_internal {
                     } else {
                         let shift = exp - (Self::EMAX - (Self::MAX_PREC - 1) as i16);
                         if shift > 0 {
-                            coeff *= (10 as $ucoeff).pow(shift as u32);
+                            // `shift > 0`, so there isn't any
+                            // sign to lose.
+                            #[allow(clippy::cast_sign_loss)]
+                            let e = shift as u32;
+                            coeff *= (10 as $ucoeff).pow(e);
                             exp -= shift;
                         }
                     }
@@ -422,7 +430,7 @@ macro_rules! impl_dec_pub {
             /// Do not use this constant to determine whether
             /// a number is NaN. Use [`is_nan`][Self::is_nan]
             /// instead.
-            pub const NAN: Self = Self::nan(false);
+            pub const NAN: Self = Self::nan(false, 0);
 
             /// Infinity (∞).
             ///
@@ -788,6 +796,8 @@ macro_rules! impl_dec_pub {
             /// [`PartialEq`]. For example, they consider
             /// negative and positive zero equal, while
             /// `const_total_cmp` doesn't.
+            #[allow(clippy::cast_possible_wrap)]
+            #[allow(clippy::cast_sign_loss)]
             pub const fn const_total_cmp(self, other: Self) -> Ordering {
                 let mut lhs = self.to_bits() as $icoeff;
                 let mut rhs = other.to_bits() as $icoeff;

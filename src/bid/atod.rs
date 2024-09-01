@@ -191,10 +191,7 @@ macro_rules! impl_atod {
                 (coeff, dropped)
             }
 
-            fn parse_exp(mut s: &[u8]) -> Result<$unbiased, ParseError> {
-                if cfg!(debug_assertions) {
-                    println!("parse_exp: {}", str::from_utf8(s).unwrap());
-                }
+            const fn parse_exp(mut s: &[u8]) -> Result<$unbiased, ParseError> {
                 if s.is_empty() {
                     return Ok(0);
                 }
@@ -230,22 +227,56 @@ macro_rules! impl_atod {
                 if sign {
                     exp = -exp;
                 }
-                if cfg!(debug_assertions) {
-                    println!("exp = {exp} sign = {sign}");
-                }
                 Ok(exp)
             }
 
             const fn parse_special(sign: bool, s: &[u8]) -> Result<Self, ParseError> {
-                if conv::equal_fold(s, b"inf") || conv::equal_fold(s, b"infinity") {
-                    Ok(Self::inf(sign))
-                } else if conv::equal_fold(s, b"nan") || conv::equal_fold(s, b"qnan") {
-                    Ok(Self::nan(sign))
-                } else if conv::equal_fold(s, b"snan") {
-                    Ok(Self::snan(sign))
-                } else {
-                    Err(ParseError::invalid("unknown special"))
+                if s.len() > "snan".len() + Self::PAYLOAD_DIGITS as usize {
+                    return Err(ParseError::invalid("unknown special"));
                 }
+                if conv::equal_fold_ascii(s, b"inf") || conv::equal_fold_ascii(s, b"infinity") {
+                    return Ok(Self::inf(sign));
+                }
+
+                const fn atoi(mut s: &[u8]) -> Result<$ucoeff, ParseError> {
+                    let mut n: $ucoeff = 0;
+                    while let Some((&c, rest)) = s.split_first() {
+                        let d = c.wrapping_sub(b'0');
+                        if d >= 10 {
+                            return Err(ParseError::invalid("expected digit"));
+                        }
+                        n = match n.checked_mul(10) {
+                            Some(n) => n,
+                            None => return Err(ParseError::invalid("payload overflow")),
+                        };
+                        n = match n.checked_add(d as $ucoeff) {
+                            Some(n) => n,
+                            None => return Err(ParseError::invalid("payload overflow")),
+                        };
+                        s = rest;
+                    }
+                    Ok(n)
+                }
+
+                if let Some((chunk, rest)) = s.split_first_chunk::<4>() {
+                    if conv::equal_fold_ascii(chunk, b"snan") {
+                        return match atoi(rest) {
+                            Ok(payload) => Ok(Self::nan(sign, payload)),
+                            Err(err) => Err(err),
+                        };
+                    }
+                }
+
+                if let Some((chunk, rest)) = s.split_first_chunk::<3>() {
+                    if conv::equal_fold_ascii(chunk, b"nan") {
+                        return match atoi(rest) {
+                            Ok(payload) => Ok(Self::nan(sign, payload)),
+                            Err(err) => Err(err),
+                        };
+                    }
+                }
+
+                Err(ParseError::invalid("unknown special"))
             }
         }
 

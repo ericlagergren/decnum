@@ -36,7 +36,7 @@ pub(super) const fn const_cmp(lhs: u128, rhs: u128) -> Ordering {
 
 /// Reports whether `(lhs * 10^shift) == rhs`.
 pub(super) const fn const_cmp_shifted(lhs: u128, rhs: u128, shift: u32) -> Ordering {
-    shl(lhs, shift).const_cmp128(rhs as u128)
+    shl(lhs, shift).const_cmp128(rhs)
 }
 
 /// Reports whether `(lhs * 10^shift) == rhs`.
@@ -60,6 +60,8 @@ pub(super) const fn digits(mut x: u128) -> u32 {
     x |= 1;
 
     let r = ((bitlen(x) + 1) * 1233) / 4096;
+    // `r` is in [0, 38], so it cannot panic.
+    #[allow(clippy::indexing_slicing)]
     let p = POW10[r as usize];
     r + (x >= p) as u32
 }
@@ -72,6 +74,8 @@ pub(super) const fn bitlen(x: u128) -> u32 {
 }
 
 /// All 128-bit powers of 10.
+// This is a const initializer, so panicking is okay.
+#[allow(clippy::indexing_slicing)]
 const POW10: [u128; 39] = {
     let mut tab = [0u128; 39];
     let mut i = 0;

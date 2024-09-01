@@ -49,13 +49,17 @@ impl Bid64 {
     }
 
     /// Creates a quiet NaN.
-    const fn nan(sign: bool) -> Self {
+    const fn nan(sign: bool, payload: u64) -> Self {
+        debug_assert!(payload <= Self::PAYLOAD_MAX);
+
         let bits = signbit(sign) | comb(0x1f00);
         Self::from_bits(bits)
     }
 
     /// Creates a signaling NaN.
-    const fn snan(sign: bool) -> Self {
+    const fn snan(sign: bool, payload: u64) -> Self {
+        debug_assert!(payload <= Self::PAYLOAD_MAX);
+
         let bits = signbit(sign) | comb(0x1f80);
         Self::from_bits(bits)
     }
@@ -182,7 +186,7 @@ macro_rules! from_unsigned_impl {
         impl From<$ty> for Bid64 {
             #[inline]
             fn from(coeff: $ty) -> Self {
-                Self::from_u64(coeff as u64)
+                Self::from_u64(u64::from(coeff))
             }
         }
     )*)
@@ -194,7 +198,7 @@ macro_rules! from_signed_impl {
         impl From<$ty> for Bid64 {
             #[inline]
             fn from(coeff: $ty) -> Self {
-                Self::from_i64(coeff as i64)
+                Self::from_i64(i64::from(coeff))
             }
         }
     )*)
@@ -217,9 +221,9 @@ mod tests {
     use crate::decnumber::Quad;
 
     impl Bid64 {
-        const SNAN: Self = Self::snan(false);
-        const NEG_NAN: Self = Self::nan(true);
-        const NEG_SNAN: Self = Self::snan(true);
+        const SNAN: Self = Self::snan(false, 0);
+        const NEG_NAN: Self = Self::nan(true, 0);
+        const NEG_SNAN: Self = Self::snan(true, 0);
     }
 
     #[test]

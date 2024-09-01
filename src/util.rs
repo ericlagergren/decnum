@@ -24,15 +24,26 @@ pub(crate) const unsafe fn assume(b: bool) {
 
 /// Asserts that every byte in `s` is an ASCII digit.
 #[track_caller]
+#[allow(clippy::indexing_slicing)] // debug code
 pub(crate) const fn debug_assert_all_digits(s: &[u8]) {
     if !cfg!(debug_assertions) {
         return;
     }
     let mut i = 0;
     while i < s.len() {
-        debug_assert!(matches!(s[i], b'0'..=b'9'));
+        debug_assert!(s[i].is_ascii_digit());
         i += 1;
     }
+}
+
+/// Expands, e.g., 0x7f into 0x7f7f7f...
+pub(crate) const fn mask32(x: u32) -> u32 {
+    x * 0x01010101
+}
+
+/// Expands, e.g., 0x7f into 0x7f7f7f...
+pub(crate) const fn mask64(x: u64) -> u64 {
+    x * 0x0101010101010101
 }
 
 /// See [`MaybeUninit::copy_from_slice`].
@@ -75,50 +86,4 @@ pub(crate) fn copy(dst: &mut [MaybeUninit<u8>], src: &[u8]) -> usize {
     #[allow(clippy::indexing_slicing)]
     copy_from_slice(&mut dst[..n], src);
     n
-}
-
-/// Transmutes `&mut [T; N]` to `&mut [T; M]`.
-///
-/// NB: This function is safe because `M <= N`.
-#[inline(always)]
-pub(crate) fn sub_array<T, const N: usize, const M: usize>(src: &mut [T; N]) -> &mut [T; M] {
-    const { assert!(M <= N) }
-    // SAFETY: See the `const` block above, the references do not
-    // outlive `src`, and the result is also an exclusive
-    // reference.
-    unsafe { &mut *(src.as_mut_ptr().cast::<[T; M]>()) }
-}
-
-/// Transmutes `&mut [T; N]` to `&mut [T; M]`.
-///
-/// NB: This function is safe because `M <= N`.
-#[inline(always)]
-pub(crate) fn sub_array_at<T, const N: usize, const M: usize, const I: usize>(
-    src: &mut [T; N],
-) -> &mut [T; M] {
-    const {
-        assert!(M <= N);
-        assert!(I <= M);
-        assert!(N <= M - I);
-    }
-    // SAFETY: See the `const` block above, the references do not
-    // outlive `src`, and the result is also an exclusive
-    // reference.
-    unsafe { &mut *(src.as_mut_ptr().add(I).cast::<[T; M]>()) }
-}
-
-#[inline(always)]
-pub(crate) fn split_array_mut<T, const N: usize, const L: usize, const R: usize>(
-    src: &mut [T; N],
-) -> (&mut [T; L], &mut [T; R]) {
-    const {
-        assert!(L <= N);
-        assert!(R <= N);
-        assert!(L + R <= N);
-        assert!(usize::MAX - L >= N);
-        assert!(usize::MAX - R >= N);
-    }
-    let lhs = unsafe { &mut *(src.as_mut_ptr().cast::<[T; L]>()) };
-    let rhs = unsafe { &mut *(src.as_mut_ptr().add(L).cast::<[T; R]>()) };
-    (lhs, rhs)
 }

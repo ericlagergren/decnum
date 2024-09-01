@@ -7,7 +7,7 @@ use core::{
     str::{self, FromStr},
 };
 
-use super::dpd;
+use super::encoding as dpd;
 use crate::{
     bid::Bid128,
     conv::{Buffer, Fmt, ParseError},
@@ -65,6 +65,8 @@ impl Dpd128 {
     const COEFF_BITS: u32 = 110;
     const COEFF_MASK: u128 = (1 << 110) - 1;
 
+    const PAYLOAD_MASK: u128 = Self::COEFF_MASK;
+
     const fn signbit(self) -> bool {
         (self.0 & Self::SIGN_MASK) != 0
     }
@@ -78,11 +80,6 @@ impl Dpd128 {
     /// Returns the coefficient MSD.
     const fn msd(self) -> u8 {
         self.comb().msd()
-    }
-
-    /// Reports whether the MSD is non-zero.
-    const fn have_msd(self) -> bool {
-        self.comb().have_msd()
     }
 
     /// Returns the exponent continuation field.
@@ -187,6 +184,13 @@ impl Dpd128 {
         self.coeff() | ((self.msd() as u128) << 110)
     }
 
+    /// Returns the payload.
+    const fn payload(self) -> u128 {
+        debug_assert!(self.is_nan());
+
+        self.0 & Self::PAYLOAD_MASK
+    }
+
     pub(crate) const fn from_parts_bin(sign: bool, exp: i16, bin: u128) -> Self {
         debug_assert!(exp >= Self::MIN_EXP);
         debug_assert!(exp <= Self::MAX_EXP);
@@ -270,7 +274,7 @@ impl Dpd128 {
     pub const DIGITS: u32 = 34;
 
     /// Not a Number (NaN).
-    pub const NAN: Self = Self::nan(false);
+    pub const NAN: Self = Self::nan(false, 0);
 
     /// Infinity (∞).
     pub const INFINITY: Self = Self::inf(false);
@@ -368,19 +372,7 @@ impl Dpd128 {
     /// TODO: NaN should return the number of digits in the
     /// payload.
     pub const fn digits(self) -> u32 {
-        if self.is_infinite() {
-            return 1;
-        }
-        if self.have_msd() {
-            return Self::DIGITS;
-        }
-        let coeff = self.coeff();
-        // The number of whole declets.
-        let declets = (128 - coeff.leading_zeros()) / 10;
-        // Shift off the whole declets to figure out how many
-        // significant digits are in the partial declet.
-        let dpd = ((coeff >> (declets * 10)) & 0x3ff) as u16;
-        dpd::sig_digits(dpd) + (declets * 3)
+        self.to_bid128().digits()
     }
 
     /// Reports whether `self == other`.
@@ -437,17 +429,17 @@ impl Dpd128 {
     }
 
     /// Creates a quiet NaN.
-    const fn nan(sign: bool) -> Self {
-        Self::from_fields(sign, 0x1f, 0, 0)
+    pub(crate) const fn nan(sign: bool, payload: u128) -> Self {
+        Self::from_fields(sign, 0x1f, 0, payload)
     }
 
     /// Creates a signaling NaN.
-    const fn snan(sign: bool) -> Self {
-        Self::from_fields(sign, 0x1f, 0x800, 0)
+    pub(crate) const fn snan(sign: bool, payload: u128) -> Self {
+        Self::from_fields(sign, 0x1f, 0x800, payload)
     }
 
     /// Creates an infinity.
-    const fn inf(sign: bool) -> Self {
+    pub(crate) const fn inf(sign: bool) -> Self {
         Self::from_fields(sign, 0x1e, 0, 0)
     }
 
@@ -520,10 +512,11 @@ impl Dpd128 {
     /// Converts the `Dpd128` to a `Bid128`.
     pub const fn to_bid128(self) -> Bid128 {
         if self.is_nan() {
+            let payload = dpd::unpack_bin_u113(self.payload());
             if self.is_snan() {
-                Bid128::snan(self.signbit())
+                Bid128::snan(self.signbit(), payload)
             } else {
-                Bid128::nan(self.signbit())
+                Bid128::nan(self.signbit(), payload)
             }
         } else if self.is_infinite() {
             Bid128::inf(self.signbit())
@@ -531,6 +524,11 @@ impl Dpd128 {
             let coeff = dpd::unpack_bin_u113(self.full_coeff());
             Bid128::from_parts(self.signbit(), self.unbiased_exp(), coeff)
         }
+    }
+
+    /// Converts the `Bid128` to a `Dpd128`.
+    pub const fn from_bid128(bid: Bid128) -> Self {
+        bid.to_dpd128()
     }
 }
 
@@ -779,20 +777,6 @@ impl Comb {
         msd
     }
 
-    /// Reports whether the encoded MSD is non-zero.
-    const fn have_msd(self) -> bool {
-        // The MSD only has meaning for finite numbers.
-        debug_assert!(self.is_finite());
-
-        if (self.0 & Self::AB) == Self::AB {
-            // If bits `ab` are set then the result is `100e`,
-            // which is always non-zero.
-            true
-        } else {
-            (self.0 & (Self::CD | Self::E_)) != 0
-        }
-    }
-
     /// Returns the encoded two MSB for the exponent.
     ///
     /// If the number is finite, the result is always in [0, 2].
@@ -823,9 +807,9 @@ mod tests {
     use crate::decnumber::Quad;
 
     impl Dpd128 {
-        const SNAN: Self = Self::snan(true);
-        const NEG_NAN: Self = Self::nan(true);
-        const NEG_SNAN: Self = Self::snan(true);
+        const SNAN: Self = Self::snan(true, 0);
+        const NEG_NAN: Self = Self::nan(true, 0);
+        const NEG_SNAN: Self = Self::snan(true, 0);
     }
 
     #[test]

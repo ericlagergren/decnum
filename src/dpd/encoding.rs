@@ -153,6 +153,7 @@ pub(super) const fn pack_via_bits(mut bcd: u16) -> u16 {
             ];
             // `idx` is in [0, 7], so the compiler elides the
             // bounds checks.
+            #[allow(clippy::indexing_slicing)]
             let v = LOOKUP[idx as usize];
             (v >> 8, v & 0x00ff)
         }
@@ -372,6 +373,7 @@ pub(crate) const fn pack_bin_u113(mut bin: u128) -> u128 {
         bin = q;
     }
     dpd |= (bin_to_dpd((bin % 10) as u16) as u128) << (i * 10);
+    debug_assert!(dpd & !((1 << 120) - 1) == 0,);
     dpd
 }
 
@@ -694,6 +696,23 @@ mod tests {
 
     #[test]
     fn test_pack_unpack_bin_u113() {
+        fn idk(dpd: u128) -> u128 {
+            let mut bin = 0;
+            let mut i = 0;
+            while i < 12 {
+                let shift = 110 - (i * 10);
+                println!("shift = {shift}");
+                let declet = ((dpd >> shift) & 0x3ff) as u16;
+                bin *= 1000;
+                bin += dpd_to_bin(declet) as u128;
+                i += 1;
+            }
+            bin
+        }
+
+        let got = idk(pack_bin_u113((1 << 113) - 1));
+        assert_eq!(got, (1 << 113) - 1);
+
         // TODO(eric): test (some of) the rest of the digits.
         for bin in 0..=999 {
             let got = pack_bin_u113(bin);
@@ -714,8 +733,21 @@ mod tests {
         };
         let got = pack_bin_u113(10u128.pow(34) - 1);
         assert_eq!(got, want);
+
         let got = unpack_bin_u113(got);
         assert_eq!(got, 10u128.pow(34) - 1);
+
+        let got = unpack_bin_u113(pack_bin_u113((1 << 110) - 1));
+        assert_eq!(got, (1 << 110) - 1);
+
+        let got = unpack_bin_u113(pack_bin_u113((1 << 111) - 1));
+        assert_eq!(got, (1 << 111) - 1);
+
+        let got = unpack_bin_u113(pack_bin_u113((1 << 112) - 1));
+        assert_eq!(got, (1 << 112) - 1);
+
+        let got = unpack_bin_u113(pack_bin_u113((1 << 113) - 1));
+        assert_eq!(got, (1 << 113) - 1);
     }
 
     #[test]

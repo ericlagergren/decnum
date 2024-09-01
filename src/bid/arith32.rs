@@ -2,6 +2,8 @@
 ///
 /// The result will be in [0, 10].
 pub(super) const fn digits(x: u32) -> u32 {
+    // This is a const initializer, so panicking is okay.
+    #[allow(clippy::indexing_slicing)]
     const TABLE: [u64; 32] = {
         let mut table = [0u64; 32];
         let mut i = 0;
@@ -32,14 +34,18 @@ pub(super) const fn digits(x: u32) -> u32 {
     const fn bitlen(x: u32) -> u32 {
         31 - x.leading_zeros()
     }
-    (((x as u64) + TABLE[bitlen(x | 1) as usize]) >> 32) as u32
+    // `bitlen(x)` returns a value in [0, 31], so this cannot
+    // panic.
+    #[allow(clippy::indexing_slicing)]
+    let tv = TABLE[bitlen(x | 1) as usize];
+    (((x as u64) + tv) >> 32) as u32
 }
 
 /// Returns the minimum number of bits required to represent `x`.
 ///
 /// It returns 0 for `x == 0`.
 pub(super) const fn bitlen(x: u32) -> u32 {
-    31 - x.leading_zeros()
+    u32::BITS - x.leading_zeros()
 }
 
 #[cfg(test)]

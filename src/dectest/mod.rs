@@ -82,7 +82,7 @@ pub fn parse(s: &str) -> Result<Vec<Test<'_>>> {
             continue;
         }
 
-        println!("line = {line}");
+        //println!("line = {line}");
         let (name, rest) = line
             .split_once(" ")
             .with_context(|| format!("#{i}: test case missing name: `{line}`"))?;
@@ -130,6 +130,7 @@ impl Test<'_> {
                 input,
                 result: output,
             } => {
+                println!(">>> parsing `got` ...");
                 let got = parse_input(backend, input)?;
                 println!("name = {}", self.id);
                 println!("got = {got}");
@@ -154,10 +155,11 @@ impl Test<'_> {
     }
 
     fn check<B: Backend>(&self, backend: &B, got: B::Dec, want: &str) -> Result<()> {
-        if let Some(s) = want.strip_prefix('#') {
-            let bytes = hex::decode(s.as_bytes())?;
-            let want = backend.from_bytes(&bytes).to_bits();
-            let got = got.to_bits();
+        if want.starts_with('#') {
+            println!(">>> converting `want`...");
+            let want = backend.to_bits(parse_input(backend, want)?);
+            println!(">>> converting `got`...");
+            let got = backend.to_bits(got);
             if got != want {
                 Err(anyhow!("got {got:x}, expected {want:x}"))
             } else {
@@ -351,17 +353,24 @@ impl From<anyhow::Error> for Error {
 /// A testing backend.
 pub trait Backend {
     /// The underlying decimal.
-    type Dec: Dec;
+    type Dec: Copy + fmt::Display + Sized;
+    /// The decimal's bit representation.
+    type Bits: Bits;
 
     /// Creates a decimal from bytes.
     fn from_bytes(&self, bytes: &[u8]) -> Self::Dec;
+
     /// Parses a decimal from a string.
     fn parse(&self, s: &str) -> Result<Self::Dec, ParseError>;
+
+    /// Converts the decimal to its bit representation.
+    fn to_bits(&self, dec: Self::Dec) -> Self::Bits;
+
     /// Multiplies two decimals.
     fn mul(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
 }
 
-/// A backend for [`Bits128`].
+/// A backend for [`Bid128`] and [`Dpd128`].
 pub struct Dec128;
 
 impl Dec128 {
@@ -373,9 +382,22 @@ impl Dec128 {
 
 impl Backend for Dec128 {
     type Dec = Bid128;
+    type Bits = u128;
+
+    fn to_bits(&self, dec: Self::Dec) -> Self::Bits {
+        println!("## to_bits");
+        println!("bid  = 0x{:x}", dec.to_bits());
+        println!("dpd  = 0x{:x}", dec.to_dpd128().to_bits());
+        dec.to_dpd128().to_bits()
+    }
 
     fn from_bytes(&self, bytes: &[u8]) -> Self::Dec {
-        Dpd128::from_be_bytes(bytes.try_into().unwrap()).to_bid128()
+        let dpd = Dpd128::from_be_bytes(bytes.try_into().unwrap());
+        println!("## from_bytes");
+        println!("bid  = 0x{:x}", dpd.to_bid128().to_bits());
+        println!("dpd  = 0x{:x}", dpd.to_bits());
+        println!("dpd2 = 0x{:x}", dpd.to_bid128().to_dpd128().to_bits());
+        dpd.to_bid128()
     }
 
     fn parse(&self, s: &str) -> Result<Self::Dec, ParseError> {
@@ -385,21 +407,6 @@ impl Backend for Dec128 {
     fn mul(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
         lhs * rhs
     }
-}
-
-impl Dec for Bid128 {
-    type Bits = u128;
-    fn to_bits(self) -> Self::Bits {
-        self.to_bits()
-    }
-}
-
-/// A decimal.
-pub trait Dec: Copy + fmt::Display + Sized {
-    /// Its bit representation.
-    type Bits: Bits;
-    /// Converts itself to its bit representation.
-    fn to_bits(self) -> Self::Bits;
 }
 
 /// An integer like `u32`, `u128`, etc.

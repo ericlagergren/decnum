@@ -3,13 +3,13 @@
 use core::{
     cmp::Ordering,
     fmt,
-    hash::Hash,
+    hash::{Hash, Hasher},
     hint,
     ops::{Add, AddAssign},
     str::{self, FromStr},
 };
 
-use super::dpd;
+use super::encoding as dpd;
 use crate::{conv, util::assume};
 
 /// A BCD's bit pattern.
@@ -108,7 +108,7 @@ pub const fn from_bin(bin: u16) -> u16 {
 }
 
 /// A 34 digit BCD.
-#[derive(Copy, Clone, Debug, Hash)]
+#[derive(Copy, Clone, Debug)]
 pub struct Bcd34 {
     pub(super) lo: u128, // 32 digits = 128 bits
     pub(super) hi: u8,   // 2 digits = 8 bits
@@ -484,6 +484,13 @@ impl PartialOrd for Bcd34 {
     }
 }
 
+impl Hash for Bcd34 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.hi.hash(state);
+        self.lo.hash(state);
+    }
+}
+
 impl FromStr for Bcd34 {
     type Err = ParseBcdError;
 
@@ -725,6 +732,7 @@ impl Str4 {
 impl fmt::Display for Str4 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let b = &self.to_bytes();
+        // SAFETY: `b` is ASCII.
         let s = unsafe { str::from_utf8_unchecked(b) };
         write!(f, "{s}")
     }
