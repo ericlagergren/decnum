@@ -1,4 +1,29 @@
+//! `rdfp` is a pure Rust, no-std implementation of IEEE 754-2008
+//! decimal floating point numbers.
+//!
+//! # Features
+//!
 //! TODO
+//!
+//! # Cargo Features
+//!
+//! - `alloc`: Include [`alloc`] support. This is currently
+//! unused, but may be used in the future.
+//!
+//! - `dpd-tables`: Use lookup tables for densely packed decimal
+//! conversions.
+//!
+//! - `rand`: Enable [`rand`] support.
+//!
+//! - `std`: Include [`std`] support. This is currently
+//! unused, but may be used in the future. Implies the `alloc`
+//! feature.
+//!
+//! - `slow-128`: TODO
+//!
+//! [`alloc`]: https://doc.rust-lang.org/alloc/
+//! [`rand`]: https://crates.io/crates/rand
+//! [`std`]: https://doc.rust-lang.org/std/
 
 #![allow(dead_code)] // TODO
 #![allow(clippy::unusual_byte_groupings)]
@@ -41,7 +66,16 @@ mod itoa;
 mod macros;
 mod util;
 
-pub use bid::{Bid128, Bid128 as d128};
+#[doc(inline)]
+#[allow(non_camel_case_types)]
+pub use bid::Bid128 as d128;
+#[doc(inline)]
+#[allow(non_camel_case_types)]
+pub use bid::Bid64 as d64;
 pub use conv::*;
 pub use ctx::*;
-pub use dpd::Dpd128;
+
+/// Simplifies importing common items.
+pub mod prelude {
+    pub use super::{d128, d64};
+}

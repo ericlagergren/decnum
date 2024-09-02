@@ -395,24 +395,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "decnum"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bitflags 2.6.0",
- "cfg-if",
- "criterion",
- "dec",
- "decnum",
- "decnumber-sys",
- "dfp-number-sys",
- "hex",
- "itoa",
- "rand",
- "ruint",
-]
-
-[[package]]
 name = "decnumber-sys"
 version = "0.1.6"
 dependencies = [
@@ -893,6 +875,24 @@ checksum = "1465873a3dfdaa8ae7cb14b4383657caab0b3e8a0aa9ae8e04b044854c8dfce2"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "rdfp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitflags 2.6.0",
+ "cfg-if",
+ "criterion",
+ "dec",
+ "decnumber-sys",
+ "dfp-number-sys",
+ "hex",
+ "itoa",
+ "rand",
+ "rdfp",
+ "ruint",
 ]
 
 [[package]]

@@ -1,4 +1,5 @@
-//! TODO
+//! IEEE 754-2008 decimal floating point numbers with binary
+//! integer significands.
 
 mod arith128;
 mod arith32;

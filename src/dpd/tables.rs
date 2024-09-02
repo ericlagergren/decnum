@@ -21,40 +21,42 @@ pub(crate) const BCD_TO_DPD: [u16; 0x999 + 1] = {
 #[allow(clippy::indexing_slicing)]
 pub(crate) const DPD_TO_BCD: [u16; 1 << 10] = {
     let mut t = [0u16; 1 << 10];
-    let mut bin = 0;
-    while bin <= 999 {
-        let bcd = bcd::from_bin(bin);
-        let dpd = dpd::pack_via_bits_obvious(bcd);
-        t[dpd as usize] = bcd;
-        bin += 1;
+    let mut i = 0;
+    while i < t.len() {
+        let dpd = i as u16;
+        let bcd = dpd::unpack_via_bits(dpd);
+        t[i] = bcd;
+        i += 1;
     }
     t
 };
 
-/// Converts a binary number in [0,999] to a 10-bit DPD.
+/// Converts a binary number in [0, 999] to a 10-bit DPD.
 #[allow(clippy::indexing_slicing)]
 pub(super) const BIN_TO_DPD: [u16; 1000] = {
     let mut t = [0u16; 1000];
-    let mut bin = 0;
-    while bin <= 999 {
-        let bcd = bcd::from_bin(bin as u16);
+    let mut i = 0;
+    while i < t.len() {
+        let bin = i as u16;
+        let bcd = bcd::from_bin(bin);
         let dpd = dpd::pack_via_bits_obvious(bcd);
-        t[bin] = dpd;
-        bin += 1;
+        t[i] = dpd;
+        i += 1;
     }
     t
 };
 
-/// Converts a 10-bit DPD to a binary number in [0,999].
+/// Converts a 10-bit DPD to a binary number in [0, 999].
 #[allow(clippy::indexing_slicing)]
 pub(super) const DPD_TO_BIN: [u16; 1 << 10] = {
     let mut t = [0u16; 1 << 10];
-    let mut bin = 0;
-    while bin <= 999 {
-        let bcd = bcd::from_bin(bin);
-        let dpd = dpd::pack_via_bits_obvious(bcd);
-        t[dpd as usize] = bin;
-        bin += 1;
+    let mut i = 0;
+    while i < t.len() {
+        let dpd = i as u16;
+        let bcd = dpd::unpack_via_bits(dpd);
+        let bin = bcd::to_bin(bcd);
+        t[i] = bin;
+        i += 1;
     }
     t
 };
@@ -66,13 +68,12 @@ pub(super) const DPD_TO_BIN: [u16; 1 << 10] = {
 #[allow(clippy::indexing_slicing)]
 pub(super) const DPD_TO_STR: [Str3; 1 << 10] = {
     let mut t = [Str3::zero(); 1 << 10];
-    let mut bin = 0;
-    while bin <= 999 {
-        let bcd = bcd::from_bin(bin);
-        let dpd = dpd::pack_via_bits_obvious(bcd);
+    let mut i = 0;
+    while i < t.len() {
+        let dpd = i as u16;
         let s = dpd::unpack_to_str_via_bits(dpd);
-        t[dpd as usize] = s;
-        bin += 1;
+        t[i] = s;
+        i += 1;
     }
     t
 };
@@ -81,6 +82,8 @@ pub(super) const DPD_TO_STR: [Str3; 1 << 10] = {
 mod tests {
     use super::*;
 
+    // TODO(eric): this isn't a great test; it should test all
+    // values in all tables.
     #[test]
     fn test_tables() {
         let mut bin = 0;

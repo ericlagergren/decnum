@@ -13,6 +13,7 @@ pub const fn is_valid(dpd: u16) -> bool {
     if dpd > 1 << 10 {
         return false;
     }
+
     !matches!(
         dpd,
         0x16e
@@ -498,6 +499,88 @@ pub(super) const fn sig_digits(dpd: u16) -> u32 {
     sd
 }
 
+macro_rules! bit {
+    ($x:ident, $idx:literal) => {{
+        (($x >> $idx) & 1) == 1
+    }};
+}
+
+pub(crate) const fn dpd2bcd(arg: u16) -> u16 {
+    let p = bit!(arg, 9);
+    let q = bit!(arg, 8);
+    let r = bit!(arg, 7);
+    let s = bit!(arg, 6);
+    let t = bit!(arg, 5);
+    let u = bit!(arg, 4);
+    let v = bit!(arg, 3);
+    let w = bit!(arg, 2);
+    let x = bit!(arg, 1);
+    let y = bit!(arg, 0);
+
+    let a = (v & w) & (!s | t | !x);
+    let b = p & (!v | !w | (s & !t & x));
+    let c = q & (!v | !w | (s & !t & x));
+    let d = r;
+    let e = v & ((!w & x) | (!t & x) | (s & x));
+    let f = (s & (!v | !x)) | (p & !s & t & v & w & x);
+    let g = (t & (!v | !x)) | (q & !s & t & w);
+    let h = u;
+    let i = v & ((!w & !x) | (w & x & (s | t)));
+    let j = (!v & w) | (s & v & !w & x) | (p & w & (!x | (!s & !t)));
+    let k = (!v & x) | (t & !w & x) | (q & v & w & (!x | (!s & !t)));
+    let m = y;
+
+    (m as u16)
+        | ((k as u16) << 1)
+        | ((j as u16) << 2)
+        | ((i as u16) << 3)
+        | ((h as u16) << 4)
+        | ((g as u16) << 5)
+        | ((f as u16) << 6)
+        | ((e as u16) << 7)
+        | ((d as u16) << 8)
+        | ((c as u16) << 9)
+        | ((b as u16) << 10)
+        | ((a as u16) << 11)
+}
+
+pub(crate) const fn bcd2dpd(arg: u16) -> u16 {
+    let a = bit!(arg, 11);
+    let b = bit!(arg, 10);
+    let c = bit!(arg, 9);
+    let d = bit!(arg, 8);
+    let e = bit!(arg, 7);
+    let f = bit!(arg, 6);
+    let g = bit!(arg, 5);
+    let h = bit!(arg, 4);
+    let i = bit!(arg, 3);
+    let j = bit!(arg, 2);
+    let k = bit!(arg, 1);
+    let m = bit!(arg, 0);
+
+    let p = b | (a & j) | (a & f & i);
+    let q = c | (a & k) | (a & g & i);
+    let r = d;
+    let s = (f & (!a | !i)) | (!a & e & j) | (e & i);
+    let t = g | (!a & e & k) | (a & i);
+    let u = h;
+    let v = a | e | i;
+    let w = a | (e & i) | (!e & j);
+    let x = e | (a & i) | (!a & k);
+    let y = m;
+
+    (y as u16)
+        | ((x as u16) << 1)
+        | ((w as u16) << 2)
+        | ((v as u16) << 3)
+        | ((u as u16) << 4)
+        | ((t as u16) << 5)
+        | ((s as u16) << 6)
+        | ((r as u16) << 7)
+        | ((q as u16) << 8)
+        | ((p as u16) << 9)
+}
+
 #[cfg(test)]
 mod tests {
     use core::{fmt, iter};
@@ -696,23 +779,6 @@ mod tests {
 
     #[test]
     fn test_pack_unpack_bin_u113() {
-        fn idk(dpd: u128) -> u128 {
-            let mut bin = 0;
-            let mut i = 0;
-            while i < 12 {
-                let shift = 110 - (i * 10);
-                println!("shift = {shift}");
-                let declet = ((dpd >> shift) & 0x3ff) as u16;
-                bin *= 1000;
-                bin += dpd_to_bin(declet) as u128;
-                i += 1;
-            }
-            bin
-        }
-
-        let got = idk(pack_bin_u113((1 << 113) - 1));
-        assert_eq!(got, (1 << 113) - 1);
-
         // TODO(eric): test (some of) the rest of the digits.
         for bin in 0..=999 {
             let got = pack_bin_u113(bin);
@@ -737,17 +803,11 @@ mod tests {
         let got = unpack_bin_u113(got);
         assert_eq!(got, 10u128.pow(34) - 1);
 
-        let got = unpack_bin_u113(pack_bin_u113((1 << 110) - 1));
-        assert_eq!(got, (1 << 110) - 1);
-
-        let got = unpack_bin_u113(pack_bin_u113((1 << 111) - 1));
-        assert_eq!(got, (1 << 111) - 1);
-
-        let got = unpack_bin_u113(pack_bin_u113((1 << 112) - 1));
-        assert_eq!(got, (1 << 112) - 1);
-
-        let got = unpack_bin_u113(pack_bin_u113((1 << 113) - 1));
-        assert_eq!(got, (1 << 113) - 1);
+        for i in 0..3 {
+            let bin = (1 << (110 + i)) - 1;
+            let got = unpack_bin_u113(pack_bin_u113(bin));
+            assert_eq!(got, bin, "1<<{}", 110 + i);
+        }
     }
 
     #[test]

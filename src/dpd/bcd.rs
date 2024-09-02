@@ -70,11 +70,17 @@ pub const fn classify(bcd: u16) -> Pattern {
 
 /// Converts the 16-bit BCD to a binary number.
 pub const fn to_bin(bcd: u16) -> u16 {
+    let bcd = {
+        // abcd -> cdab
+        let rev = bcd.swap_bytes();
+        // cdab -> dcba
+        ((rev & 0x0f0f) << 4) | ((rev & 0xf0f0) >> 4)
+    };
     let mut bin = 0;
     let mut s = 0;
     while s < 16 {
-        bin += (bcd >> s) & 0xf;
         bin *= 10;
+        bin += (bcd >> s) & 0xf;
         s += 4;
     }
     bin
@@ -85,7 +91,7 @@ pub const fn to_bin(bcd: u16) -> u16 {
 /// # Example
 ///
 /// ```
-/// use decnum::bcd;
+/// use rdfp::bcd;
 ///
 /// let bcd = bcd::from_bin(1234);
 /// assert_eq!(bcd, 0x1234);
@@ -402,7 +408,7 @@ impl Bcd34 {
     /// # Example
     ///
     /// ```
-    /// use decnum::bcd::Bcd34;
+    /// use rdfp::bcd::Bcd34;
     ///
     /// let bcd = Bcd34::from_bin(1234);
     /// let mut buf = [0u8; Bcd34::DIGITS as usize];
@@ -427,7 +433,7 @@ impl Bcd34 {
     /// # Example
     ///
     /// ```
-    /// use decnum::bcd::Bcd34;
+    /// use rdfp::bcd::Bcd34;
     ///
     /// let bcd = Bcd34::from_bin(1234);
     /// let mut buf = [0u8; Bcd34::DIGITS as usize];
@@ -889,9 +895,10 @@ mod tests {
 
     #[test]
     fn test_to_from_bin() {
-        for bin in 0..=999 {
-            let got = to_bin(from_bin(bin));
-            assert_eq!(got, bin);
+        for bin in 0..=9999 {
+            let bcd = from_bin(bin);
+            let got = to_bin(bcd);
+            assert_eq!(got, bin, "{bcd:04x}");
         }
     }
 

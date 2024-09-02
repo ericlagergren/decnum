@@ -118,7 +118,7 @@ impl u96 {
     /// # Examples
     ///
     /// ```rust
-    /// use decnum::u96;
+    /// use rdfp::u96;
     ///
     /// assert_eq!(u96::MAX.logical_shl(95),
     ///     "39614081257132168796771975168".parse::<u96>().unwrap());
@@ -141,7 +141,7 @@ impl u96 {
     /// # Examples
     ///
     /// ```rust
-    /// use decnum::u96;
+    /// use rdfp::u96;
     ///
     /// assert_eq!(u96::MAX.logical_shr(95), u96::from_u64(1));
     /// assert_eq!(u96::MAX.logical_shr(96), u96::from_u64(0));

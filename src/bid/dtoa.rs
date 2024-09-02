@@ -3,7 +3,7 @@ macro_rules! impl_dtoa {
         impl $name {
             /// Converts the decimal to a string.
             #[allow(clippy::indexing_slicing)]
-            pub fn format(self, dst: &mut $crate::conv::Buffer) -> &str {
+            pub(crate) fn format(self, dst: &mut $crate::conv::Buffer) -> &str {
                 let dst = &mut dst.buf;
 
                 let start = usize::from(self.is_sign_positive());
@@ -14,6 +14,7 @@ macro_rules! impl_dtoa {
                         #[allow(clippy::string_slice)]
                         return &"-Infinity"[start..];
                     }
+                    println!("payload = {}", self.payload());
                     if self.payload() == 0 {
                         // `start` is either 0 or 1, so this
                         // cannot panic.
@@ -55,12 +56,12 @@ macro_rules! impl_dtoa {
                 debug_assert!(coeff.len() <= Self::DIGITS as usize);
 
                 if self.is_nan() {
-                    let i = if self.is_snan() {
+                    let mut i = if self.is_snan() {
                         $crate::util::copy(dst, b"-sNaN")
                     } else {
                         $crate::util::copy(dst, b"-NaN")
                     };
-                    $crate::util::copy(&mut dst[i..], coeff);
+                    i += $crate::util::copy(&mut dst[i..], coeff);
 
                     // SAFETY: We wrote to `dst[..i+coeff.len()]`
                     let buf = unsafe { $crate::util::slice_assume_init_ref(&dst[start..i]) };

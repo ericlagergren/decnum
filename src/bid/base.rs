@@ -73,6 +73,7 @@ macro_rules! impl_dec_internal {
 
             const COMB_BITS: u32 = Self::G;
             const COMB_SHIFT: u32 = Self::K - Self::S - Self::G;
+            const COMB_MASK: $ucoeff = ((1 << Self::COMB_BITS) - 1) << Self::COMB_SHIFT;
 
             // Top N bits of the combination field.
             const COMB_TOP2: $ucoeff = 0x3 << (Self::SIGN_SHIFT - 2);
@@ -80,6 +81,7 @@ macro_rules! impl_dec_internal {
             const COMB_TOP5: $ucoeff = 0x1f << (Self::SIGN_SHIFT - 5);
             const COMB_TOP6: $ucoeff = 0x3f << (Self::SIGN_SHIFT - 6);
 
+            /// The number of bits in the exponent.
             const EXP_BITS: u32 = Self::W + 2;
             const EXP_MASK: $biased = (1 << Self::EXP_BITS) - 1;
 
@@ -112,6 +114,9 @@ macro_rules! impl_dec_internal {
             const PAYLOAD_MASK: $ucoeff = Self::COEFF_MASK;
             const PAYLOAD_DIGITS: u32 = $arith::digits(Self::PAYLOAD_MASK);
             const PAYLOAD_MAX: $ucoeff = Self::PAYLOAD_MASK;
+
+            /// A mask for bits G6 through Gw+4.
+            const CANONICAL_NAN: $ucoeff = !Self::COMB_TOP6 & Self::COMB_MASK;
 
             const MAX_SCALEB_N: u32 = 2 * (Self::EMAX as u32 + Self::MAX_PREC);
 
@@ -541,6 +546,23 @@ macro_rules! impl_dec_pub {
                 (self.0 & MASK1) == 0 && (self.0 & MASK2) != MASK2
             }
 
+            /// Reports whether the number is in its canonical
+            /// format.
+            pub const fn is_canonical(self) -> bool {
+                if self.is_nan() {
+                    return self.0 & Self::CANONICAL_NAN == 0;
+                }
+                false
+            }
+
+            /// Converts the number to its canonical encoding.
+            pub const fn canonical(self) -> Self {
+                if self.is_nan() {
+                    return self;
+                }
+                self
+            }
+
             /// Returns the floating point category for the
             /// number.
             pub const fn classify(self) -> FpCategory {
@@ -596,7 +618,7 @@ macro_rules! impl_dec_pub {
             /// This is a const version of [`PartialEq`].
             pub fn const_eq(self, other: Self) -> bool {
                 if cfg!(debug_assertions) {
-                    println!("const_eq({self}, {other})");
+                    println!("const_eq({self:?}, {other:?})");
                 }
                 if self.is_nan() || other.is_nan() {
                     // NaN != NaN
@@ -840,17 +862,17 @@ macro_rules! impl_dec_pub {
                     // `Self::rounded` into `Self::new`
                     //
                     // ```text
-                    // decnum::bid::bid128::Bid128::from_i64:
+                    // rdfp::bid::bid128::Bid128::from_i64:
                     // Lfunc_begin13:
                     // 	asr x1, x0, #63
                     // 	mov w2, #0
-                    // 	b decnum::bid::bid128::Bid128::new
+                    // 	b rdfp::bid::bid128::Bid128::new
                     // ```
                     //
                     // and if it doesn't
                     //
                     // ```text
-                    // decnum::bid::bid128::Bid128::from_i64:
+                    // rdfp::bid::bid128::Bid128::from_i64:
                     // Lfunc_begin13:
                     // 	mov x1, x0
                     // 	cmp x0, #0
@@ -870,7 +892,7 @@ macro_rules! impl_dec_pub {
             /// Creates a number from its raw bits.
             ///
             /// ```rust
-            /// use decnum::Bid128;
+            /// use rdfp::d128;
             ///
             /// let got = Bid128::from_bits(0x2207c0000000000000000000000000a5);
             /// let want = "12.5".parse::<Bid128>().unwrap();

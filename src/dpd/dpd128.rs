@@ -184,11 +184,21 @@ impl Dpd128 {
         self.coeff() | ((self.msd() as u128) << 110)
     }
 
+    /// Returns the full coefficient as a binary number.
+    const fn full_coeff_bin(self) -> u128 {
+        dpd::unpack_bin_u113(self.full_coeff())
+    }
+
     /// Returns the payload.
     const fn payload(self) -> u128 {
         debug_assert!(self.is_nan());
 
         self.0 & Self::PAYLOAD_MASK
+    }
+
+    /// Returns the payload as a binary number.
+    pub(crate) const fn payload_bin(self) -> u128 {
+        dpd::unpack_bin_u113(self.payload())
     }
 
     pub(crate) const fn from_parts_bin(sign: bool, exp: i16, bin: u128) -> Self {
@@ -446,7 +456,7 @@ impl Dpd128 {
     /// Creates a `d128` from its raw bits.
     ///
     /// ```rust
-    /// use decnum::d128;
+    /// use rdfp::d128;
     ///
     /// let got = Dpd128::from_bits(0x2207c0000000000000000000000000a5);
     /// let want = "12.5".parse::<d128>().unwrap();
@@ -459,7 +469,7 @@ impl Dpd128 {
     /// Creates a `d128` from a little-endian byte array.
     ///
     /// ```rust
-    /// use decnum::d128;
+    /// use rdfp::d128;
     /// ```
     pub const fn from_le_bytes(bytes: [u8; 16]) -> Self {
         Self::from_bits(u128::from_le_bytes(bytes))
@@ -512,17 +522,15 @@ impl Dpd128 {
     /// Converts the `Dpd128` to a `Bid128`.
     pub const fn to_bid128(self) -> Bid128 {
         if self.is_nan() {
-            let payload = dpd::unpack_bin_u113(self.payload());
             if self.is_snan() {
-                Bid128::snan(self.signbit(), payload)
+                Bid128::snan(self.signbit(), self.payload_bin())
             } else {
-                Bid128::nan(self.signbit(), payload)
+                Bid128::nan(self.signbit(), self.payload_bin())
             }
         } else if self.is_infinite() {
             Bid128::inf(self.signbit())
         } else {
-            let coeff = dpd::unpack_bin_u113(self.full_coeff());
-            Bid128::from_parts(self.signbit(), self.unbiased_exp(), coeff)
+            Bid128::from_parts(self.signbit(), self.unbiased_exp(), self.full_coeff_bin())
         }
     }
 
@@ -690,27 +698,30 @@ impl fmt::UpperExp for Dpd128 {
 
 impl fmt::Debug for Dpd128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, ">> ")?;
-
-        for word in [
-            (self.0 >> 96) as u32,
-            (self.0 >> 64) as u32,
-            (self.0 >> 32) as u32,
-            (self.0 as u32),
-        ] {
-            let b = word.to_be_bytes();
-            for (i, c) in b.iter().enumerate() {
-                write!(f, "{c:02x}")?;
-                if i == 3 {
-                    write!(f, " ")?;
-                }
+        let sign = u8::from(self.signbit());
+        if self.is_nan() {
+            write!(f, "[{sign},")?;
+            if self.is_snan() {
+                write!(f, "s")?;
+            } else {
+                write!(f, "q")?;
             }
+            write!(f, "NaN")?;
+            if self.payload() != 0 {
+                write!(f, ",{}", self.payload_bin())?;
+            }
+            write!(f, "]")
+        } else if self.is_infinite() {
+            write!(f, "[{sign},inf]")
+        } else {
+            write!(
+                f,
+                "[{sign},{},{}]",
+                self.full_coeff_bin(),
+                self.unbiased_exp(),
+                // TODO(eric): form
+            )
         }
-        let b = self.0.to_be_bytes();
-        let sign = b[15] >> 7;
-        let cb = (b[15] >> 2) & 0x1f;
-        let ec = (u16::from(b[15] & 0x3) << 10) | u16::from(b[14] << 2) | u16::from(b[13] >> 6);
-        write!(f, " [S:{sign} Cb:{cb:02x} Ec:{ec:02x}]",)
     }
 }
 

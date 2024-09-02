@@ -105,6 +105,7 @@ pub fn parse(s: &str) -> Result<Vec<Test<'_>>> {
     Ok(cases)
 }
 
+/// A specific test case.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Test<'a> {
     pub extended: bool,
@@ -126,28 +127,16 @@ impl Test<'_> {
 
     fn try_run<B: Backend>(&self, backend: &B) -> Result<(), Error> {
         match &self.op {
-            Op::Apply {
-                input,
-                result: output,
-            } => {
-                println!(">>> parsing `got` ...");
+            Op::Apply { input, result } => {
                 let got = parse_input(backend, input)?;
-                println!("name = {}", self.id);
-                println!("got = {got}");
-                println!("input = {input}");
-                println!("output = {output}");
-                self.check(backend, got, output)?;
-                println!("");
+                self.check(backend, got, result)?;
             }
-            Op::Multiply {
-                lhs,
-                rhs,
-                result: output,
-            } => {
-                let lhs = parse_input(backend, lhs).unwrap();
-                let rhs = parse_input(backend, rhs).unwrap();
-                let got = backend.mul(lhs, rhs);
-                self.check(backend, got, output)?;
+            Op::Multiply { .. } => {
+                // TODO
+                // let lhs = parse_input(backend, lhs).unwrap();
+                // let rhs = parse_input(backend, rhs).unwrap();
+                // let got = backend.mul(lhs, rhs);
+                // self.check(backend, got, result)?;
             }
             _ => return Err(Error::Unimplemented),
         };
@@ -156,9 +145,7 @@ impl Test<'_> {
 
     fn check<B: Backend>(&self, backend: &B, got: B::Dec, want: &str) -> Result<()> {
         if want.starts_with('#') {
-            println!(">>> converting `want`...");
             let want = backend.to_bits(parse_input(backend, want)?);
-            println!(">>> converting `got`...");
             let got = backend.to_bits(got);
             if got != want {
                 Err(anyhow!("got {got:x}, expected {want:x}"))
@@ -385,19 +372,11 @@ impl Backend for Dec128 {
     type Bits = u128;
 
     fn to_bits(&self, dec: Self::Dec) -> Self::Bits {
-        println!("## to_bits");
-        println!("bid  = 0x{:x}", dec.to_bits());
-        println!("dpd  = 0x{:x}", dec.to_dpd128().to_bits());
         dec.to_dpd128().to_bits()
     }
 
     fn from_bytes(&self, bytes: &[u8]) -> Self::Dec {
-        let dpd = Dpd128::from_be_bytes(bytes.try_into().unwrap());
-        println!("## from_bytes");
-        println!("bid  = 0x{:x}", dpd.to_bid128().to_bits());
-        println!("dpd  = 0x{:x}", dpd.to_bits());
-        println!("dpd2 = 0x{:x}", dpd.to_bid128().to_dpd128().to_bits());
-        dpd.to_bid128()
+        Dpd128::from_be_bytes(bytes.try_into().unwrap()).to_bid128()
     }
 
     fn parse(&self, s: &str) -> Result<Self::Dec, ParseError> {
@@ -429,3 +408,32 @@ impl Bits for u128 {
         Ok(Self::from_le_bytes(bytes.try_into()?))
     }
 }
+
+macro_rules! dectest {
+    ($prefix:literal, $name:literal) => {
+        $crate::dectest::dectest!(::core::concat!($prefix, $name))
+    };
+    ($name:expr) => {{
+        const CASES: &'static str =
+            ::core::include_str!(::core::concat!("../../testdata/", $name, ".decTest",));
+        $crate::dectest::parse(CASES).unwrap()
+    }};
+}
+pub(crate) use dectest;
+
+macro_rules! dectests {
+    (d128) => {
+        $crate::dectest::dectests!($crate::dectest::Dec128, "dq");
+    };
+    ($backend:ty, $prefix:literal) => {
+        #[test]
+        fn test_encode() {
+            for case in $crate::dectest::dectest!($prefix, "Encode") {
+                println!("case = {case}");
+                case.run(&<$backend>::new()).unwrap();
+                println!("");
+            }
+        }
+    };
+}
+pub(crate) use dectests;

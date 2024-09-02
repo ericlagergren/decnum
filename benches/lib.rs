@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use decnum::{bcd, dpd};
+use rdfp::{bcd, dpd};
 use rand::{thread_rng, Rng};
 
 fn bench_dpd(c: &mut Criterion) {

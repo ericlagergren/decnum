@@ -1,15 +1,23 @@
 [package]
-name = "decnum"
+name = "rdfp"
 version = "0.1.0"
 edition = "2021"
 description = """
-  TODO
+  Pure Rust implementation of IEEE 754-2008 decimal floating
+  point numbers.
 """
 license = "BSD-3-Clause"
 readme = "README.md"
 repository = "https://github.com/ericlagergren/decnum"
-keywords = [ "todo" ]
-categories = [ "no-std", "no-std::no-alloc" ]
+keywords = [
+	"decimal",
+	"dfp",
+	"decnumber"
+]
+categories = [
+	"no-std",
+	"no-std::no-alloc",
+]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
@@ -44,11 +52,12 @@ itoa = { version = "1.0.11", default-features = false }
 rand = { version = "0.8.5", default-features = false, optional = true }
 
 [dev-dependencies]
-decnum = { path = ".", features = ["rand", "std"] }
+rdfp = { path = ".", features = ["rand", "std"] }
 
 anyhow = { version = "1.0.86" }
 hex = { version = "0.4.3" }
 
+# For benchmarks.
 criterion = { version = "0.4" }
 itoa = { version = "1.0.11" }
 rand = { version = "0.8.5" }

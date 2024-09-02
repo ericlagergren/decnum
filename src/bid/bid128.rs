@@ -379,7 +379,9 @@ const fn comb(bits: u32) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dectest::{self, Dec128};
+    use crate::dectest::dectests;
+
+    dectests!(d128);
 
     impl Bid128 {
         const SNAN: Self = Self::snan(false, 0);
@@ -389,10 +391,25 @@ mod tests {
 
     #[test]
     fn test_idk() {
-        let d = crate::decnumber::Quad::parse("1.23E+6144");
-        println!("{d}");
-        let d = Bid128::parse("1.23E+6144").unwrap();
-        println!("{d}");
+        let x = Dpd128::from_bits(0x7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e);
+        println!("dpd {x:?} {:x}", x.to_bits());
+
+        let y = x.to_bid128();
+        println!("bid {y:?} {:x}", y.to_bits());
+
+        let z = y.to_dpd128();
+        println!("dpd {z:?} {:x}", z.to_bits());
+
+        println!("{}", x.payload_bin());
+        println!("{}", y.payload());
+        println!("{}", z.payload_bin());
+
+        let got = z;
+        let want = Dpd128::from_bits(0x7e003e7e7c7e7e7e7e7c7e7e7e7e7c7e);
+        println!("want = {want:?} {:x}", want.to_bits());
+        assert_eq!(got, want);
+
+        assert!(false);
     }
 
     #[test]
@@ -411,19 +428,6 @@ mod tests {
             let got = d.unbiased_exp();
             assert_eq!(got, want, "(2) d={:024b}", d.to_bits() >> (128 - 24));
             assert_eq!(d.coeff(), Bid128::MAX_COEFF as u128, "#{want}");
-        }
-    }
-
-    // g: 7e0025dd7 c253688c305f4cc887c4248
-    // w: 7e0025dd7 f0c056e4e73ff15357e65ca
-
-    #[test]
-    fn test_encode() {
-        const CASES: &'static str = include_str!("../../testdata/dqEncode.decTest");
-        for case in dectest::parse(CASES).unwrap() {
-            println!("case = {case}");
-            case.run(&Dec128::new()).unwrap();
-            println!("");
         }
     }
 
@@ -482,5 +486,19 @@ mod tests {
         let rhs = Bid128::new(12300, -2);
         println!("lhs = {lhs} {}", lhs.unbiased_exp());
         println!("rhs = {rhs} {}", rhs.unbiased_exp());
+    }
+
+    #[test]
+    fn test_is_canonical() {
+        const MAX: u32 = (1 << 11) - 1;
+        for exp in 0..=MAX {
+            // s gggggg gggggg ggggg
+            //   012345 6789ab 01234
+            //          x----------x
+            let bits = Bid128::nan(false, 0).to_bits();
+            let g = (exp as u128) << (Bid128::SIGN_SHIFT - 11);
+            let got = Bid128::from_bits(bits | g);
+            assert!(!got.is_canonical())
+        }
     }
 }
