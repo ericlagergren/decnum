@@ -11,7 +11,19 @@ macro_rules! impl_dec {
         $crate::bid::base::impl_dec_internal!(
             $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
         );
-        $crate::bid::base::impl_dec_pub!(
+        $crate::bid::base::impl_dec_consts!(
+            $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
+        );
+        $crate::bid::base::impl_dec_to_from_repr!(
+            $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
+        );
+        $crate::bid::base::impl_dec_arith!(
+            $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
+        );
+        $crate::bid::base::impl_dec_misc!(
+            $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
+        );
+        $crate::bid::base::impl_dec_misc2!(
             $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
         );
         $crate::bid::base::impl_dec_impls!($name);
@@ -33,20 +45,29 @@ macro_rules! impl_dec_internal {
     ) => {
         // Internal stuff.
         impl $name {
+            /// The storage width in bits.
             const K: u32 = (size_of::<$name>() * 8) as u32;
+            /// The size of the sign bit in bits.
             const S: u32 = 1;
+            /// The width of the exponent in bits.
             const W: u32 = Self::K / 16 + 4;
+            /// Used to compute [`G`][Self::G] and
+            /// [`EXP_BITS`][Self::EXP_BITS].
             const G: u32 = Self::W + 5;
+            /// The width of the trailing significand in bits.
             const T: u32 = 15 * (Self::K / 16) - 10;
+            /// The number of digits of precision.
             const P: u32 = 9 * (Self::K / 32) - 2;
 
+            /// The storage width in bytes.
             const BYTES: usize = (Self::K / 8) as usize;
 
-            /// The bias added to the encoded exponent in order to
-            /// convert it to the "actual" exponent.
+            /// The bias added to the encoded exponent in order
+            /// to convert it to the "actual" exponent.
             const BIAS: $unbiased = Self::EMAX + (Self::P as $unbiased) - 2;
 
-            /// The maxmimum value of the biased encoded exponent.
+            /// The maxmimum value of the biased encoded
+            /// exponent.
             const LIMIT: $biased = (3 * (1 << Self::W)) - 1;
 
             /// The maximum allowed unbiased exponent.
@@ -66,13 +87,20 @@ macro_rules! impl_dec_internal {
             /// The maximum adjusted exponent.
             const ADJ_EMIN: $unbiased = Self::MIN_EXP - ((Self::MAX_PREC as $unbiased) - 1);
 
+            /// The number of digits of precision.
             const MAX_PREC: u32 = Self::P;
 
+            /// The shift needed to set the sign bit.
             const SIGN_SHIFT: u32 = Self::K - Self::S;
+            /// Masks just the sign bit.
             const SIGN_MASK: $ucoeff = 1 << Self::SIGN_SHIFT;
 
+            /// The number of bits in the combination field.
             const COMB_BITS: u32 = Self::G;
+            /// The shift needed to set the entire combination
+            /// field.
             const COMB_SHIFT: u32 = Self::K - Self::S - Self::G;
+            /// Masks just the combination field.
             const COMB_MASK: $ucoeff = ((1 << Self::COMB_BITS) - 1) << Self::COMB_SHIFT;
 
             // Top N bits of the combination field.
@@ -83,12 +111,24 @@ macro_rules! impl_dec_internal {
 
             /// The number of bits in the exponent.
             const EXP_BITS: u32 = Self::W + 2;
+            /// Masks only the used bits in an exponent.
+            ///
+            /// NB: This does *not* mask bits in the combination
+            /// field.
             const EXP_MASK: $biased = (1 << Self::EXP_BITS) - 1;
 
+            /// Masks the exponent in the combination field for
+            /// a form one number.
             const FORM1_EXP_MASK: $ucoeff = (Self::EXP_MASK as $ucoeff) << Self::FORM1_EXP_SHIFT;
+            /// The shift to set the exponent for a form one
+            /// number.
             const FORM1_EXP_SHIFT: u32 = Self::SIGN_SHIFT - Self::EXP_BITS;
 
+            /// Masks the exponent in the combination field for
+            /// a form two number.
             const FORM2_EXP_MASK: $ucoeff = Self::FORM1_EXP_MASK >> 2;
+            /// The shift to set the exponent for a form Two
+            /// number.
             const FORM2_EXP_SHIFT: u32 = Self::FORM1_EXP_SHIFT + 2;
 
             /// The number of bits in the form one coefficient.
@@ -106,13 +146,19 @@ macro_rules! impl_dec_internal {
             /// The number of bits required to represent
             /// [`MAX_COEFF`][Self::MAX_COEFF].
             const MAX_COEFF_BITS: u32 = super::$arith::bitlen(Self::MAX_COEFF as $ucoeff);
+            /// Masks the bits used by the maximum coefficient.
             const MAX_COEFF_MASK: $ucoeff = (1 << Self::MAX_COEFF_BITS) - 1;
 
+            /// The number of bits in the trailing significand.
             const COEFF_BITS: u32 = Self::T;
+            /// MAsks the trailing significand field.
             const COEFF_MASK: $ucoeff = (1 << Self::COEFF_BITS) - 1;
 
+            /// Masks a NaN's payload.
             const PAYLOAD_MASK: $ucoeff = Self::COEFF_MASK;
+            /// The maximum number of digits in a NaN's payload.
             const PAYLOAD_DIGITS: u32 = $arith::digits(Self::PAYLOAD_MASK);
+            /// The maximum allowed NaN payload.
             const PAYLOAD_MAX: $ucoeff = Self::PAYLOAD_MASK;
 
             /// A mask for bits G6 through Gw+4.
@@ -177,15 +223,9 @@ macro_rules! impl_dec_internal {
                 #[allow(clippy::cast_possible_wrap)]
                 let exp = (self.biased_exp() as $unbiased) - Self::BIAS;
 
-                if self.is_finite() {
-                    // SAFETY: `self.unbiased_exp()` returns an
-                    // integer in [0, LIMIT]. Subtracting `BIAS`
-                    // TODO
-                    unsafe {
-                        assume(exp >= Self::ETINY);
-                        assume(exp <= Self::EMAX);
-                    }
-                }
+                debug_assert!(exp >= Self::ETINY);
+                debug_assert!(exp <= Self::EMAX);
+
                 exp
             }
 
@@ -193,7 +233,8 @@ macro_rules! impl_dec_internal {
             ///
             /// This is `exp + digits - 1`.
             const fn adjusted_exp(self) -> $unbiased {
-                // The exponent only has meaning for finite numbers.
+                // The exponent only has meaning for finite
+                // numbers.
                 debug_assert!(self.is_finite());
 
                 const_assert!($name::DIGITS <= <$unbiased>::MAX as u32);
@@ -249,7 +290,8 @@ macro_rules! impl_dec_internal {
                 self
             }
 
-            /// Creates a rounded number.
+            /// Creates a rounded number from its sign, unbiased
+            /// exponent, and coefficient.
             const fn rounded(sign: bool, mut exp: $unbiased, mut coeff: $ucoeff) -> Self {
                 // This method also works if we don't need to
                 // round, but for performance reasons we always
@@ -265,7 +307,7 @@ macro_rules! impl_dec_internal {
                 }
 
                 let mut digits = $arith::digits(coeff) as $unbiased;
-                let mut drop = max(digits - Self::DIGITS as i16, Self::ETINY - exp);
+                let mut drop = max(digits - Self::DIGITS as $unbiased, Self::ETINY - exp);
                 if drop > 0 {
                     exp += drop;
 
@@ -340,6 +382,8 @@ macro_rules! impl_dec_internal {
 
             /// Creates a finite number from the sign, unbiased
             /// exponent, an coefficient.
+            ///
+            /// The result is exact and unrounded.
             pub(crate) const fn from_parts(sign: bool, exp: $unbiased, coeff: $ucoeff) -> Self {
                 debug_assert!(coeff <= Self::MAX_COEFF as $ucoeff);
                 debug_assert!(exp >= Self::ADJ_EMIN);
@@ -371,8 +415,11 @@ macro_rules! impl_dec_internal {
                 Self::from_bits(bits)
             }
 
-            // Do we need to use form two?
+            // Do we need to encode the coefficient using form
+            // two?
             const fn need_form2(coeff: $ucoeff) -> bool {
+                debug_assert!(coeff <= Self::MAX_COEFF as $ucoeff);
+
                 // Form one is 3+T bits with an implicit leading 0b0.
                 // Form two is 4+T bits with an implicit leading 0b100.
                 if Self::MAX_COEFF_BITS <= Self::FORM1_COEFF_BITS {
@@ -389,7 +436,7 @@ macro_rules! impl_dec_internal {
 }
 pub(crate) use impl_dec_internal;
 
-macro_rules! impl_dec_pub {
+macro_rules! impl_dec_consts {
     (
         $name:ident,
         $ucoeff:ty,
@@ -399,7 +446,6 @@ macro_rules! impl_dec_pub {
         $comb:ty,
         $arith:ident $(,)?
     ) => {
-        // Misc.
         impl $name {
             /// The largest value that can be represented by this
             /// type.
@@ -454,160 +500,27 @@ macro_rules! impl_dec_pub {
             /// a number is infinity. Use
             /// [`is_infinite`][Self::is_infinite] instead.
             pub const NEG_INFINITY: Self = Self::inf(true);
+        }
+    };
+}
+pub(crate) use impl_dec_consts;
 
-            /// Reports whether the number is neither infinite
-            /// nor NaN.
-            pub const fn is_finite(self) -> bool {
-                !self.is_special()
-            }
-
-            /// Reports whether the number is infinite or NaN.
-            const fn is_special(self) -> bool {
-                // When the first (top) four bits of the
-                // combination field are set, the number is
-                // either an infinity or a NaN.
-                self.0 & Self::COMB_TOP4 == Self::COMB_TOP4
-            }
-
-            /// Reports whether the number is a NaN.
-            pub const fn is_nan(self) -> bool {
-                // When the first (top) four bits of the
-                // combination field are set, the number is
-                // either an infinity or a NaN. The fifth bit
-                // signals NaN.
-                self.0 & Self::COMB_TOP5 == Self::COMB_TOP5
-            }
-
-            /// Reports whether the number is a quiet NaN.
-            pub const fn is_qnan(self) -> bool {
-                // When the number is a NaN, the sixth
-                // combination bit signals whether the NaN is
-                // signaling.
-                self.0 & Self::COMB_TOP6 == Self::COMB_TOP5
-            }
-
-            /// Reports whether the number is a signaling NaN.
-            pub const fn is_snan(self) -> bool {
-                // When the number is a NaN, the sixth
-                // combination bit signals whether the NaN is
-                // signaling.
-                self.0 & Self::COMB_TOP6 == Self::COMB_TOP6
-            }
-
-            /// Reports whether the number is either positive or negative
-            /// infinity.
-            pub const fn is_infinite(self) -> bool {
-                // When the first (top) four bits of the
-                // combination field are set, the number is
-                // either an infinity or a NaN. The fifth bit
-                // signals NaN.
-                self.0 & Self::COMB_TOP5 == Self::COMB_TOP4
-            }
-
-            /// Reports whether the number is neither zero,
-            /// infinite, subnormal, or NaN.
-            pub const fn is_normal(self) -> bool {
-                if self.is_special() || self.is_zero() {
-                    return false;
-                }
-                debug_assert!(self.is_finite());
-
-                self.adjusted_exp() > Self::MIN_EXP
-            }
-
-            /// Reports whether the number is subnormal.
-            pub const fn is_subnormal(self) -> bool {
-                if self.is_special() || self.is_zero() {
-                    return false;
-                }
-                debug_assert!(self.is_finite());
-
-                self.adjusted_exp() <= Self::MIN_EXP
-            }
-
-            /// Reports whether the number is positive, including
-            /// `+0.0`.
-            pub const fn is_sign_positive(self) -> bool {
-                !self.is_sign_negative()
-            }
-
-            /// Reports whether the number is negative, including
-            /// `-0.0`.
-            pub const fn is_sign_negative(self) -> bool {
-                self.signbit()
-            }
-
-            /// Reports whether the number is `-0.0` or `+0.0`.
-            pub const fn is_zero(self) -> bool {
-                // Covers the coefficient and form one.
-                const MASK1: $ucoeff = (0x7 << $name::COMB_SHIFT) | $name::COEFF_MASK;
-                // Covers form two and specials.
-                const MASK2: $ucoeff = 0x18 << $name::COMB_SHIFT;
-                (self.0 & MASK1) == 0 && (self.0 & MASK2) != MASK2
-            }
-
-            /// Reports whether the number is in its canonical
-            /// format.
-            pub const fn is_canonical(self) -> bool {
-                if self.is_nan() {
-                    return self.0 & Self::CANONICAL_NAN == 0;
-                }
-                false
-            }
-
-            /// Converts the number to its canonical encoding.
-            pub const fn canonical(self) -> Self {
-                if self.is_nan() {
-                    return self;
-                }
-                self
-            }
-
-            /// Returns the floating point category for the
-            /// number.
-            pub const fn classify(self) -> FpCategory {
-                // TODO(eric): Optimize this.
-                if self.is_nan() {
-                    FpCategory::Nan
-                } else if self.is_infinite() {
-                    FpCategory::Infinite
-                } else if self.is_zero() {
-                    FpCategory::Zero
-                } else if self.is_normal() {
-                    FpCategory::Normal
-                } else {
-                    FpCategory::Subnormal
-                }
-            }
-
-            /// Returns the number of significant digits in the
-            /// number.
-            ///
-            /// If the number is infinity or zero, it returns 1.
-            ///
-            /// The result will always be in [1,
-            /// [`DIGITS`][Self::DIGITS]].
-            ///
-            /// TODO: NaN should return the number of digits in
-            /// the payload.
-            pub const fn digits(self) -> u32 {
-                if self.is_finite() {
-                    $arith::digits(self.coeff())
-                } else {
-                    1
-                }
-            }
-
-            /// Returns the unbiased exponent.
-            ///
-            /// If the number is infinite or NaN, it returns
-            /// `None`.
-            pub const fn exponent(self) -> Option<$unbiased> {
-                if self.is_finite() {
-                    Some(self.unbiased_exp())
-                } else {
-                    None
-                }
+macro_rules! impl_dec_arith {
+    (
+        $name:ident,
+        $ucoeff:ty,
+        $icoeff:ty,
+        $biased:ty,
+        $unbiased:ty,
+        $comb:ty,
+        $arith:ident $(,)?
+    ) => {
+        // Arithmetic operations.
+        // <https://speleotrove.com/decimal/daops.html>
+        impl $name {
+            /// Returns the absolute value of `self`.
+            pub const fn abs(self) -> Self {
+                Self::from_bits(self.0 & !Self::SIGN_MASK)
             }
 
             /// Reports whether `self == other`.
@@ -795,6 +708,77 @@ macro_rules! impl_dec_pub {
                 }
             }
 
+            /// Returns `-self`.
+            ///
+            /// This is the same as [`Neg`][core::ops::Neg], but can be
+            /// used in a const context.
+            #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+            pub const fn const_neg(self) -> Self {
+                Self(self.0 ^ Self::SIGN_MASK)
+            }
+
+            /// Returns `self - other`.
+            ///
+            /// This is the same as [`Sub`][core::ops::Sub], but can be
+            /// used in a const context.
+            #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+            pub const fn const_sub(self, rhs: Self) -> Self {
+                // x - y = x + -y
+                self.const_add(rhs.const_neg())
+            }
+        }
+    };
+}
+pub(crate) use impl_dec_arith;
+
+macro_rules! impl_dec_misc {
+    (
+        $name:ident,
+        $ucoeff:ty,
+        $icoeff:ty,
+        $biased:ty,
+        $unbiased:ty,
+        $comb:ty,
+        $arith:ident $(,)?
+    ) => {
+        // Misc operations.
+        // <https://speleotrove.com/decimal/damisc.html>
+        impl $name {
+            /// Performs the digit-wise _and_ of `self` and
+            /// `rhs`, aligned at the least-significant digit.
+            /// The resulting digits are 1 if both digits are 1,
+            /// or 0 otherwise.
+            pub const fn and(self, _rhs: Self) -> Self {
+                todo!()
+            }
+
+            /// Converts the number to its canonical encoding.
+            pub const fn canonical(self) -> Self {
+                if self.is_nan() {
+                    return self;
+                }
+                todo!()
+            }
+
+            /// Returns the floating point category for the
+            /// number.
+            pub const fn classify(self) -> FpCategory {
+                // TODO(eric): Optimize this.
+                if self.is_nan() {
+                    FpCategory::Nan
+                } else if self.is_infinite() {
+                    FpCategory::Infinite
+                } else if self.is_zero() {
+                    FpCategory::Zero
+                } else if self.is_normal() {
+                    FpCategory::Normal
+                } else {
+                    FpCategory::Subnormal
+                }
+            }
+
             /// Returns the total ordering between `self` and
             /// `other`.
             ///
@@ -837,8 +821,180 @@ macro_rules! impl_dec_pub {
                     Ordering::Equal
                 }
             }
-        }
 
+            /// Equivalent to
+            /// [`const_total_cmp`][Self::const_total_cmp], but
+            /// with both signs assumed to be zero.
+            pub const fn total_cmp_magnitude(self, rhs: Self) -> Ordering {
+                self.copy_abs().const_total_cmp(rhs.copy_abs())
+            }
+
+            /// Returns the absolute value of the number.
+            ///
+            /// Unlike [`abs`][Self::abs],
+            pub const fn copy_abs(self) -> Self {
+                self.abs()
+            }
+
+            /// Reports whether the number is neither infinite
+            /// nor NaN.
+            pub const fn is_finite(self) -> bool {
+                !self.is_special()
+            }
+
+            /// Reports whether the number is infinite or NaN.
+            const fn is_special(self) -> bool {
+                // When the first (top) four bits of the
+                // combination field are set, the number is
+                // either an infinity or a NaN.
+                self.0 & Self::COMB_TOP4 == Self::COMB_TOP4
+            }
+
+            /// Reports whether the number is a NaN.
+            pub const fn is_nan(self) -> bool {
+                // When the first (top) four bits of the
+                // combination field are set, the number is
+                // either an infinity or a NaN. The fifth bit
+                // signals NaN.
+                self.0 & Self::COMB_TOP5 == Self::COMB_TOP5
+            }
+
+            /// Reports whether the number is a quiet NaN.
+            pub const fn is_qnan(self) -> bool {
+                // When the number is a NaN, the sixth
+                // combination bit signals whether the NaN is
+                // signaling.
+                self.0 & Self::COMB_TOP6 == Self::COMB_TOP5
+            }
+
+            /// Reports whether the number is a signaling NaN.
+            pub const fn is_snan(self) -> bool {
+                // When the number is a NaN, the sixth
+                // combination bit signals whether the NaN is
+                // signaling.
+                self.0 & Self::COMB_TOP6 == Self::COMB_TOP6
+            }
+
+            /// Reports whether the number is either positive or negative
+            /// infinity.
+            pub const fn is_infinite(self) -> bool {
+                // When the first (top) four bits of the
+                // combination field are set, the number is
+                // either an infinity or a NaN. The fifth bit
+                // signals NaN.
+                self.0 & Self::COMB_TOP5 == Self::COMB_TOP4
+            }
+
+            /// Reports whether the number is neither zero,
+            /// infinite, subnormal, or NaN.
+            pub const fn is_normal(self) -> bool {
+                if self.is_special() || self.is_zero() {
+                    return false;
+                }
+                debug_assert!(self.is_finite());
+
+                self.adjusted_exp() > Self::MIN_EXP
+            }
+
+            /// Reports whether the number is subnormal.
+            pub const fn is_subnormal(self) -> bool {
+                if self.is_special() || self.is_zero() {
+                    return false;
+                }
+                debug_assert!(self.is_finite());
+
+                self.adjusted_exp() <= Self::MIN_EXP
+            }
+
+            /// Reports whether the number is positive, including
+            /// `+0.0`.
+            pub const fn is_sign_positive(self) -> bool {
+                !self.is_sign_negative()
+            }
+
+            /// Reports whether the number is negative, including
+            /// `-0.0`.
+            pub const fn is_sign_negative(self) -> bool {
+                self.signbit()
+            }
+
+            /// Reports whether the number is `-0.0` or `+0.0`.
+            pub const fn is_zero(self) -> bool {
+                // Covers the coefficient and form one.
+                const MASK1: $ucoeff = (0x7 << $name::COMB_SHIFT) | $name::COEFF_MASK;
+                // Covers form two and specials.
+                const MASK2: $ucoeff = 0x18 << $name::COMB_SHIFT;
+                (self.0 & MASK1) == 0 && (self.0 & MASK2) != MASK2
+            }
+
+            /// Reports whether the number is in its canonical
+            /// format.
+            pub const fn is_canonical(self) -> bool {
+                if self.is_nan() {
+                    return self.0 & Self::CANONICAL_NAN == 0;
+                }
+                false
+            }
+        }
+    };
+}
+pub(crate) use impl_dec_misc;
+
+macro_rules! impl_dec_misc2 {
+    (
+        $name:ident,
+        $ucoeff:ty,
+        $icoeff:ty,
+        $biased:ty,
+        $unbiased:ty,
+        $comb:ty,
+        $arith:ident $(,)?
+    ) => {
+        impl $name {
+            /// Returns the number of significant digits in the
+            /// number.
+            ///
+            /// If the number is infinity or zero, it returns 1.
+            ///
+            /// The result will always be in [1,
+            /// [`DIGITS`][Self::DIGITS]].
+            ///
+            /// TODO: NaN should return the number of digits in
+            /// the payload.
+            pub const fn digits(self) -> u32 {
+                if self.is_finite() {
+                    $arith::digits(self.coeff())
+                } else {
+                    1
+                }
+            }
+
+            /// Returns the unbiased exponent.
+            ///
+            /// If the number is infinite or NaN, it returns
+            /// `None`.
+            pub const fn exponent(self) -> Option<$unbiased> {
+                if self.is_finite() {
+                    Some(self.unbiased_exp())
+                } else {
+                    None
+                }
+            }
+        }
+    };
+}
+pub(crate) use impl_dec_misc2;
+
+macro_rules! impl_dec_to_from_repr {
+    (
+        $name:ident,
+        $ucoeff:ty,
+        $icoeff:ty,
+        $biased:ty,
+        $unbiased:ty,
+        $comb:ty,
+        $arith:ident $(,)?
+    ) => {
         // To/from repr.
         impl $name {
             /// Creates a number from its coefficient and
@@ -925,7 +1081,7 @@ macro_rules! impl_dec_pub {
         }
     };
 }
-pub(crate) use impl_dec_pub;
+pub(crate) use impl_dec_to_from_repr;
 
 macro_rules! impl_dec_impls {
     ($name:ident) => {

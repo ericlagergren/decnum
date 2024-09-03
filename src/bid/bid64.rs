@@ -149,16 +149,6 @@ impl Bid64 {
         todo!()
     }
 
-    /// Returns `-self`.
-    ///
-    /// This is the same as [`Neg`][core::ops::Neg], but can be
-    /// used in a const context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_neg(self) -> Self {
-        Self(self.0 ^ Self::SIGN_MASK)
-    }
-
     /// Returns `self % other`.
     ///
     /// This is the same as [`Rem`][core::ops::Rem], but can be
@@ -167,17 +157,6 @@ impl Bid64 {
                       without modifying the original"]
     pub const fn const_rem(self, _rhs: Self) -> Self {
         todo!()
-    }
-
-    /// Returns `self - other`.
-    ///
-    /// This is the same as [`Sub`][core::ops::Sub], but can be
-    /// used in a const context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_sub(self, rhs: Self) -> Self {
-        // x - y = x + -y
-        self.const_add(rhs.const_neg())
     }
 }
 
