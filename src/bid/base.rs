@@ -161,8 +161,14 @@ macro_rules! impl_dec_internal {
             /// The maximum allowed NaN payload.
             const PAYLOAD_MAX: $ucoeff = Self::PAYLOAD_MASK;
 
-            /// A mask for bits G6 through Gw+4.
+            /// A mask for bits [G6:Gw+4] which must be zero for
+            /// a canonical NaN.
             const CANONICAL_NAN: $ucoeff = !Self::COMB_TOP6 & Self::COMB_MASK;
+
+            /// A mask for bits [G5:Gw+4] as well as the trailing
+            /// significand field which must be zero for
+            /// a canonical infinity.
+            const CANONICAL_INF: $ucoeff = !Self::COMB_TOP5 & Self::COMB_MASK | Self::COEFF_MASK;
 
             const MAX_SCALEB_N: u32 = 2 * (Self::EMAX as u32 + Self::MAX_PREC);
 
@@ -178,6 +184,14 @@ macro_rules! impl_dec_internal {
             /// Is this form two?
             const fn is_form2(self) -> bool {
                 !self.is_form1()
+            }
+
+            /// Reports whether the number is infinite or NaN.
+            const fn is_special(self) -> bool {
+                // When the first (top) four bits of the
+                // combination field are set, the number is
+                // either an infinity or a NaN.
+                self.0 & Self::COMB_TOP4 == Self::COMB_TOP4
             }
 
             /// Returns the biased exponment.
@@ -519,6 +533,8 @@ macro_rules! impl_dec_arith {
         // <https://speleotrove.com/decimal/daops.html>
         impl $name {
             /// Returns the absolute value of `self`.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
             pub const fn abs(self) -> Self {
                 Self::from_bits(self.0 & !Self::SIGN_MASK)
             }
@@ -708,6 +724,21 @@ macro_rules! impl_dec_arith {
                 }
             }
 
+            pub(crate) fn compare(self, rhs: Self) -> Self {
+                match self.const_partial_cmp(rhs) {
+                    Some(Ordering::Greater) => Self::from_parts(false, 0, 1),
+                    Some(Ordering::Less) => Self::from_parts(true, 0, 1),
+                    Some(Ordering::Equal) => Self::from_parts(false, 0, 0),
+                    None => {
+                        if self.is_nan() {
+                            self
+                        } else {
+                            rhs
+                        }
+                    }
+                }
+            }
+
             /// Returns `-self`.
             ///
             /// This is the same as [`Neg`][core::ops::Neg], but can be
@@ -746,20 +777,26 @@ macro_rules! impl_dec_misc {
         // Misc operations.
         // <https://speleotrove.com/decimal/damisc.html>
         impl $name {
-            /// Performs the digit-wise _and_ of `self` and
-            /// `rhs`, aligned at the least-significant digit.
-            /// The resulting digits are 1 if both digits are 1,
-            /// or 0 otherwise.
+            /// TODO
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
             pub const fn and(self, _rhs: Self) -> Self {
                 todo!()
             }
 
             /// Converts the number to its canonical encoding.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
             pub const fn canonical(self) -> Self {
-                if self.is_nan() {
-                    return self;
+                if self.is_nan() && Self::CANONICAL_NAN != 0 {
+                    Self::from_bits(self.0 & !Self::CANONICAL_NAN)
+                } else if self.is_infinite() && Self::CANONICAL_INF != 0 {
+                    Self::from_bits(self.0 & !Self::CANONICAL_INF)
+                } else if self.coeff() <= Self::MAX_COEFF as $ucoeff {
+                    Self::from_bits(self.0 & !Self::COEFF_MASK)
+                } else {
+                    self
                 }
-                todo!()
             }
 
             /// Returns the floating point category for the
@@ -826,14 +863,29 @@ macro_rules! impl_dec_misc {
             /// [`const_total_cmp`][Self::const_total_cmp], but
             /// with both signs assumed to be zero.
             pub const fn total_cmp_magnitude(self, rhs: Self) -> Ordering {
-                self.copy_abs().const_total_cmp(rhs.copy_abs())
+                self.abs().const_total_cmp(rhs.abs())
             }
 
-            /// Returns the absolute value of the number.
-            ///
-            /// Unlike [`abs`][Self::abs],
-            pub const fn copy_abs(self) -> Self {
-                self.abs()
+            /// Returns `self` with the same sign as `rhs`.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn copy_sign(self, rhs: Self) -> Self {
+                let mut bits = self.0;
+                bits &= !Self::SIGN_MASK;
+                bits |= (rhs.0 & Self::SIGN_MASK);
+                Self::from_bits(bits)
+            }
+
+            /// Reports whether the number is in its canonical
+            /// format.
+            pub const fn is_canonical(self) -> bool {
+                if self.is_nan() {
+                    self.0 & Self::CANONICAL_NAN == 0
+                } else if self.is_infinite() {
+                    self.0 & Self::CANONICAL_INF == 0
+                } else {
+                    self.coeff() <= Self::MAX_COEFF as $ucoeff
+                }
             }
 
             /// Reports whether the number is neither infinite
@@ -842,12 +894,14 @@ macro_rules! impl_dec_misc {
                 !self.is_special()
             }
 
-            /// Reports whether the number is infinite or NaN.
-            const fn is_special(self) -> bool {
+            /// Reports whether the number is either positive or
+            /// negative infinity.
+            pub const fn is_infinite(self) -> bool {
                 // When the first (top) four bits of the
                 // combination field are set, the number is
-                // either an infinity or a NaN.
-                self.0 & Self::COMB_TOP4 == Self::COMB_TOP4
+                // either an infinity or a NaN. The fifth bit
+                // signals NaN.
+                self.0 & Self::COMB_TOP5 == Self::COMB_TOP4
             }
 
             /// Reports whether the number is a NaN.
@@ -857,32 +911,6 @@ macro_rules! impl_dec_misc {
                 // either an infinity or a NaN. The fifth bit
                 // signals NaN.
                 self.0 & Self::COMB_TOP5 == Self::COMB_TOP5
-            }
-
-            /// Reports whether the number is a quiet NaN.
-            pub const fn is_qnan(self) -> bool {
-                // When the number is a NaN, the sixth
-                // combination bit signals whether the NaN is
-                // signaling.
-                self.0 & Self::COMB_TOP6 == Self::COMB_TOP5
-            }
-
-            /// Reports whether the number is a signaling NaN.
-            pub const fn is_snan(self) -> bool {
-                // When the number is a NaN, the sixth
-                // combination bit signals whether the NaN is
-                // signaling.
-                self.0 & Self::COMB_TOP6 == Self::COMB_TOP6
-            }
-
-            /// Reports whether the number is either positive or negative
-            /// infinity.
-            pub const fn is_infinite(self) -> bool {
-                // When the first (top) four bits of the
-                // combination field are set, the number is
-                // either an infinity or a NaN. The fifth bit
-                // signals NaN.
-                self.0 & Self::COMB_TOP5 == Self::COMB_TOP4
             }
 
             /// Reports whether the number is neither zero,
@@ -896,14 +924,18 @@ macro_rules! impl_dec_misc {
                 self.adjusted_exp() > Self::MIN_EXP
             }
 
-            /// Reports whether the number is subnormal.
-            pub const fn is_subnormal(self) -> bool {
-                if self.is_special() || self.is_zero() {
-                    return false;
-                }
-                debug_assert!(self.is_finite());
+            /// Reports whether the number is a quiet NaN.
+            pub const fn is_qnan(self) -> bool {
+                // When the number is a NaN, the sixth
+                // combination bit signals whether the NaN is
+                // signaling.
+                self.0 & Self::COMB_TOP6 == Self::COMB_TOP5
+            }
 
-                self.adjusted_exp() <= Self::MIN_EXP
+            /// Reports whether the number is negative, including
+            /// `-0.0`.
+            pub const fn is_sign_negative(self) -> bool {
+                self.signbit()
             }
 
             /// Reports whether the number is positive, including
@@ -912,10 +944,22 @@ macro_rules! impl_dec_misc {
                 !self.is_sign_negative()
             }
 
-            /// Reports whether the number is negative, including
-            /// `-0.0`.
-            pub const fn is_sign_negative(self) -> bool {
-                self.signbit()
+            /// Reports whether the number is a signaling NaN.
+            pub const fn is_snan(self) -> bool {
+                // When the number is a NaN, the sixth
+                // combination bit signals whether the NaN is
+                // signaling.
+                self.0 & Self::COMB_TOP6 == Self::COMB_TOP6
+            }
+
+            /// Reports whether the number is subnormal.
+            pub const fn is_subnormal(self) -> bool {
+                if self.is_special() || self.is_zero() {
+                    return false;
+                }
+                debug_assert!(self.is_finite());
+
+                self.adjusted_exp() <= Self::MIN_EXP
             }
 
             /// Reports whether the number is `-0.0` or `+0.0`.
@@ -927,13 +971,75 @@ macro_rules! impl_dec_misc {
                 (self.0 & MASK1) == 0 && (self.0 & MASK2) != MASK2
             }
 
-            /// Reports whether the number is in its canonical
-            /// format.
-            pub const fn is_canonical(self) -> bool {
+            /// Returns an integer that is the exponent of the
+            /// magnitude of the most significant digit.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn logb(self) -> Self {
+                todo!()
+            }
+
+            /// TODO
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn or(self, _rhs: Self) -> Self {
+                todo!()
+            }
+
+            /// Returns the base in which arithmetic is effected.
+            pub const fn radix() -> u32 {
+                10
+            }
+
+            /// TODO
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn rotate(self, _rhs: Self) -> Self {
+                todo!()
+            }
+
+            /// TODO
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn same_quantum(self, _rhs: Self) -> bool {
+                todo!()
+            }
+
+            /// TODO
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn scaleb(self, n: u32) -> Self {
                 if self.is_nan() {
-                    return self.0 & Self::CANONICAL_NAN == 0;
+                    return self;
                 }
-                false
+                if n > Self::MAX_SCALEB_N {
+                    return Self::NAN;
+                }
+                if self.is_infinite() {
+                    return self;
+                }
+                let mut exp = self.biased_exp() + n as $biased;
+                if exp <= Self::LIMIT {
+                    return self.with_biased_exp(exp);
+                }
+                while exp >= Self::LIMIT {
+                    exp -= 1;
+                }
+                todo!()
+            }
+
+            /// TODO
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn shift(self, _rhs: Self) -> Self {
+                todo!()
+            }
+
+            /// TODO
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn xor(self, _rhs: Self) -> Self {
+                todo!()
             }
         }
     };

@@ -4,7 +4,7 @@ use super::{arith128, base::impl_dec};
 use crate::{
     conv::{self, ParseError},
     dpd::{self, Dpd128},
-    util::{self, assume, const_assert},
+    util::{self, const_assert},
 };
 
 /// A 128-bit decimal floating point number.
@@ -293,29 +293,6 @@ impl Bid128 {
     /// TODO
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
-    pub const fn scaleb(self, n: u32) -> Self {
-        if self.is_nan() {
-            return self;
-        }
-        if n > Self::MAX_SCALEB_N {
-            return Self::NAN;
-        }
-        if self.is_infinite() {
-            return self;
-        }
-        let mut exp = self.biased_exp() + n as u16;
-        if exp <= Self::LIMIT {
-            return self.with_biased_exp(exp);
-        }
-        while exp >= Self::LIMIT {
-            exp -= 1;
-        }
-        todo!()
-    }
-
-    /// TODO
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
     pub const fn set_exponent(self, _n: i16) -> Self {
         todo!()
     }
@@ -468,16 +445,33 @@ mod tests {
     }
 
     #[test]
-    fn test_is_canonical() {
-        const MAX: u32 = (1 << 11) - 1;
-        for exp in 0..=MAX {
-            // s gggggg gggggg ggggg
-            //   012345 6789ab 01234
-            //          x----------x
-            let bits = Bid128::nan(false, 0).to_bits();
-            let g = (exp as u128) << (Bid128::SIGN_SHIFT - 11);
-            let got = Bid128::from_bits(bits | g);
-            assert!(!got.is_canonical())
+    fn test_nan_is_canonical() {
+        const BITS: u32 = Bid128::G - 6;
+        const MAX: u32 = (1 << BITS) - 1;
+        for x in [
+            Bid128::nan(false, Bid128::PAYLOAD_MAX),
+            Bid128::snan(false, Bid128::PAYLOAD_MAX),
+        ] {
+            let bits = x.to_bits();
+            for exp in 0..=MAX {
+                let g = (exp as u128) << (Bid128::SIGN_SHIFT - 6 - BITS);
+                let got = Bid128::from_bits(bits | g);
+                assert_eq!(exp == 0, got.is_canonical(), "#{exp}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_inf_is_canonical() {
+        const BITS: u32 = Bid128::G - 5;
+        const MAX: u32 = (1 << BITS) - 1;
+        for coeff in [0, 1234, Bid128::COEFF_MASK] {
+            for exp in 0..=MAX {
+                let bits = Bid128::inf(false).to_bits();
+                let g = (exp as u128) << (Bid128::SIGN_SHIFT - 5 - BITS);
+                let got = Bid128::from_bits(bits | g | coeff);
+                assert_eq!(exp == 0 && coeff == 0, got.is_canonical(), "#{exp}");
+            }
         }
     }
 }

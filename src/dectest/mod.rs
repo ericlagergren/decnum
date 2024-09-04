@@ -131,6 +131,21 @@ impl Test<'_> {
                 let got = parse_input(backend, input)?;
                 self.check(backend, got, result)?;
             }
+            Op::Canonical { input, result } => {
+                let x = parse_input(backend, input)?;
+                let got = backend.canonical(x);
+                self.check(backend, got, result)?;
+            }
+            Op::Copy { input, result } => {
+                let x = parse_input(backend, input)?;
+                let got = backend.copy(x);
+                self.check(backend, got, result)?;
+            }
+            Op::CopyAbs { input, result } => {
+                let x = parse_input(backend, input)?;
+                let got = backend.copyabs(x);
+                self.check(backend, got, result)?;
+            }
             Op::Multiply { .. } => {
                 // TODO
                 // let lhs = parse_input(backend, lhs).unwrap();
@@ -184,20 +199,41 @@ pub enum Op<'a> {
         input: &'a str,
         result: &'a str,
     },
-    Add,
+    Add {
+        lhs: &'a str,
+        rhs: &'a str,
+        result: &'a str,
+    },
     And,
     Apply {
         input: &'a str,
         result: &'a str,
     },
-    Canonical,
+    Canonical {
+        input: &'a str,
+        result: &'a str,
+    },
     Class,
-    Compare,
-    CompareSig,
+    Compare {
+        lhs: &'a str,
+        rhs: &'a str,
+        result: &'a str,
+    },
+    CompareSig {
+        lhs: &'a str,
+        rhs: &'a str,
+        result: &'a str,
+    },
     CompareTotal,
     CompareTotMag,
-    Copy,
-    CopyAbs,
+    Copy {
+        input: &'a str,
+        result: &'a str,
+    },
+    CopyAbs {
+        input: &'a str,
+        result: &'a str,
+    },
     CopyNegate,
     CopySign,
     Divide,
@@ -252,27 +288,45 @@ impl<'a> Op<'a> {
             .split_once("->")
             .with_context(|| "unable to split on `->`")?;
         let (result, rest) = match rest.trim().split_once(' ') {
-            Some((result, rest)) => (result, rest),
+            Some((result, rest)) => (result.trim(), rest),
             None => (rest, ""),
         };
         let op = match name {
             "abs" => Self::Abs {
                 input: operands.trim(),
-                result: result.trim(),
+                result,
             },
+            "add" => {
+                let (lhs, rhs) = split_binop("add", operands)?;
+                Self::Add { lhs, rhs, result }
+            }
             "apply" => Self::Apply {
                 input: operands.trim(),
-                result: result.trim(),
+                result,
+            },
+            "canonical" => Self::Canonical {
+                input: operands.trim(),
+                result,
+            },
+            "compare" => {
+                let (lhs, rhs) = split_binop("compare", operands)?;
+                Self::Compare { lhs, rhs, result }
+            }
+            "comparesig" => {
+                let (lhs, rhs) = split_binop("comparesig", operands)?;
+                Self::Compare { lhs, rhs, result }
+            }
+            "copy" => Self::Copy {
+                input: operands.trim(),
+                result,
+            },
+            "copyabs" => Self::CopyAbs {
+                input: operands.trim(),
+                result,
             },
             "multiply" => {
-                let (lhs, rhs) = operands
-                    .split_once(" ")
-                    .with_context(|| "unable to parse `multiply` operands")?;
-                Self::Multiply {
-                    lhs: lhs.trim(),
-                    rhs: rhs.trim(),
-                    result: result.trim(),
-                }
+                let (lhs, rhs) = split_binop("multiply", operands)?;
+                Self::Multiply { lhs, rhs, result }
             }
             _ => bail!("unknown op: `{name}`"),
         };
@@ -280,14 +334,39 @@ impl<'a> Op<'a> {
     }
 }
 
+fn split_binop<'a>(op: &'static str, s: &'a str) -> Result<(&'a str, &'a str)> {
+    let (lhs, rhs) = s
+        .split_once(" ")
+        .with_context(|| format!("unable to parse `{op}` operands"))?;
+    Ok((lhs.trim(), rhs.trim()))
+}
+
 impl fmt::Display for Op<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Apply {
-                input,
-                result: output,
-            } => {
-                write!(f, "apply {input} -> {output}")
+            Self::Abs { input, result } => {
+                write!(f, "abs {input} -> {result}")
+            }
+            Self::Add { lhs, rhs, result } => {
+                write!(f, "add {lhs} {rhs} -> {result}")
+            }
+            Self::Apply { input, result } => {
+                write!(f, "apply {input} -> {result}")
+            }
+            Self::Canonical { input, result } => {
+                write!(f, "canonical {input} -> {result}")
+            }
+            Self::Compare { lhs, rhs, result } => {
+                write!(f, "compare {lhs} {rhs} -> {result}")
+            }
+            Self::CompareSig { lhs, rhs, result } => {
+                write!(f, "comparesig {lhs} {rhs} -> {result}")
+            }
+            Self::Copy { input, result } => {
+                write!(f, "copy {input} -> {result}")
+            }
+            Self::CopyAbs { input, result } => {
+                write!(f, "copyabs {input} -> {result}")
             }
             _ => write!(f, "other op"),
         }
@@ -353,8 +432,22 @@ pub trait Backend {
     /// Converts the decimal to its bit representation.
     fn to_bits(&self, dec: Self::Dec) -> Self::Bits;
 
-    /// Multiplies two decimals.
-    fn mul(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+    /// Returns the canonical form of `x` .
+    fn canonical(&self, x: Self::Dec) -> Self::Dec;
+
+    /// Compares `lhs` and `rhs`.
+    fn compare(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+
+    /// Returns a copy of `x`.
+    fn copy(&self, x: Self::Dec) -> Self::Dec {
+        x
+    }
+
+    /// Returns the absolute value of `x`.
+    fn copyabs(&self, x: Self::Dec) -> Self::Dec;
+
+    /// Multiplies `lhs * rhs`.
+    fn multiply(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
 }
 
 /// A backend for [`Bid128`] and [`Dpd128`].
@@ -383,7 +476,19 @@ impl Backend for Dec128 {
         Bid128::parse(s)
     }
 
-    fn mul(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+    fn canonical(&self, x: Self::Dec) -> Self::Dec {
+        x.canonical()
+    }
+
+    fn compare(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+        lhs.compare(rhs)
+    }
+
+    fn copyabs(&self, x: Self::Dec) -> Self::Dec {
+        x.abs()
+    }
+
+    fn multiply(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
         lhs * rhs
     }
 }
@@ -426,6 +531,15 @@ macro_rules! dectests {
         $crate::dectest::dectests!($crate::dectest::Dec128, "dq");
     };
     ($backend:ty, $prefix:literal) => {
+        #[test]
+        fn test_canonical() {
+            for case in $crate::dectest::dectest!($prefix, "Canonical") {
+                println!("case = {case}");
+                case.run(&<$backend>::new()).unwrap();
+                println!("");
+            }
+        }
+
         #[test]
         fn test_encode() {
             for case in $crate::dectest::dectest!($prefix, "Encode") {

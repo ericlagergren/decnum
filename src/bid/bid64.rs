@@ -4,7 +4,7 @@ use super::{arith64, base::impl_dec};
 use crate::{
     conv::{self, ParseError},
     dpd::Dpd128,
-    util::{self, assume, const_assert},
+    util::{self, const_assert},
 };
 
 /// A 128-bit decimal floating point number.
