@@ -347,7 +347,18 @@ mod tests {
 
     #[test]
     fn test_idk() {
-        let x = Dpd128::from_bits(0x7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e);
+        use crate::dpd;
+
+        println!(
+            "{:x}",
+            dpd::unpack((0x77ffcff3fcff3fcff3fcff3fcff3fcffu128 & 0x3ff) as u16)
+        );
+        println!(
+            "{:x}",
+            dpd::unpack(((0x77ffcff3fcff3fcff3fcff3fcff3fcffu128 >> 10) & 0x3ff) as u16)
+        );
+
+        let x = Dpd128::from_bits(0x77ffcff3fcff3fcff3fcff3fcff3fcff);
         println!("dpd {x:?} {:x}", x.to_bits());
 
         let y = x.to_bid128();
@@ -356,12 +367,8 @@ mod tests {
         let z = y.to_dpd128();
         println!("dpd {z:?} {:x}", z.to_bits());
 
-        println!("{}", x.payload_bin());
-        println!("{}", y.payload());
-        println!("{}", z.payload_bin());
-
         let got = z;
-        let want = Dpd128::from_bits(0x7e003e7e7c7e7e7e7e7c7e7e7e7e7c7e);
+        let want = Dpd128::from_bits(0x77ffcff3fcff3fcff3fcff3fcff3fcff);
         println!("want = {want:?} {:x}", want.to_bits());
         assert_eq!(got, want);
 

@@ -14,7 +14,6 @@ macro_rules! impl_dtoa {
                         #[allow(clippy::string_slice)]
                         return &"-Infinity"[start..];
                     }
-                    println!("payload = {}", self.payload());
                     if self.payload() == 0 {
                         // `start` is either 0 or 1, so this
                         // cannot panic.

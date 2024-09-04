@@ -230,6 +230,9 @@ macro_rules! impl_atod {
                 Ok(exp)
             }
 
+            /// Parses a special from `s`.
+            ///
+            /// The sign has already been parsed.
             const fn parse_special(sign: bool, s: &[u8]) -> Result<Self, ParseError> {
                 if s.len() > "snan".len() + Self::PAYLOAD_DIGITS as usize {
                     return Err(ParseError::invalid("unknown special"));
@@ -261,7 +264,7 @@ macro_rules! impl_atod {
                 if let Some((chunk, rest)) = s.split_first_chunk::<4>() {
                     if conv::equal_fold_ascii(chunk, b"snan") {
                         return match atoi(rest) {
-                            Ok(payload) => Ok(Self::nan(sign, payload)),
+                            Ok(payload) => Ok(Self::snan(sign, payload)),
                             Err(err) => Err(err),
                         };
                     }

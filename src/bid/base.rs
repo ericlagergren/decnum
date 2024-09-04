@@ -262,18 +262,29 @@ macro_rules! impl_dec_internal {
             }
 
             /// Returns the full coefficient.
-            const fn coeff(self) -> $ucoeff {
+            ///
+            /// NB: This may be out of range.
+            const fn raw_coeff(self) -> $ucoeff {
                 // The coefficient only has meaning for finite
                 // numbers.
                 debug_assert!(self.is_finite());
 
-                let coeff = if self.is_form2() {
+                if self.is_form2() {
                     // 100 || G[w+4] || T
                     Self::FORM2_IMPLICIT_COEFF_BITS | (self.0 & Self::FORM2_COEFF_MASK)
                 } else {
                     // G[w+2:w+4] || T
                     self.0 & Self::FORM1_COEFF_MASK
-                };
+                }
+            }
+
+            /// Returns the full coefficient.
+            const fn coeff(self) -> $ucoeff {
+                // The coefficient only has meaning for finite
+                // numbers.
+                debug_assert!(self.is_finite());
+
+                let coeff = self.raw_coeff();
 
                 // See 3.2(c)(2).
                 if coeff > Self::MAX_COEFF as $ucoeff {
@@ -724,16 +735,18 @@ macro_rules! impl_dec_arith {
                 }
             }
 
+            #[cfg(test)]
             pub(crate) fn compare(self, rhs: Self) -> Self {
                 match self.const_partial_cmp(rhs) {
                     Some(Ordering::Greater) => Self::from_parts(false, 0, 1),
                     Some(Ordering::Less) => Self::from_parts(true, 0, 1),
                     Some(Ordering::Equal) => Self::from_parts(false, 0, 0),
                     None => {
+                        debug_assert!(self.is_nan() || rhs.is_nan());
                         if self.is_nan() {
-                            self
+                            Self::nan(self.signbit(), self.payload())
                         } else {
-                            rhs
+                            Self::nan(rhs.signbit(), rhs.payload())
                         }
                     }
                 }
@@ -744,7 +757,7 @@ macro_rules! impl_dec_arith {
             /// This is the same as [`Neg`][core::ops::Neg], but can be
             /// used in a const context.
             #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
+                              without modifying the original"]
             pub const fn const_neg(self) -> Self {
                 Self(self.0 ^ Self::SIGN_MASK)
             }
@@ -754,10 +767,25 @@ macro_rules! impl_dec_arith {
             /// This is the same as [`Sub`][core::ops::Sub], but can be
             /// used in a const context.
             #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
+                              without modifying the original"]
             pub const fn const_sub(self, rhs: Self) -> Self {
                 // x - y = x + -y
                 self.const_add(rhs.const_neg())
+            }
+
+            /// TODO
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn quantize(self, _rhs: Self) -> Self {
+                todo!()
+            }
+
+            /// TODO
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            #[cfg(test)]
+            pub(crate) const fn round_to_integral_exact(self) -> Self {
+                self.quantize(Self::from_parts(false, 0, 1))
             }
         }
     };
@@ -792,7 +820,7 @@ macro_rules! impl_dec_misc {
                     Self::from_bits(self.0 & !Self::CANONICAL_NAN)
                 } else if self.is_infinite() && Self::CANONICAL_INF != 0 {
                     Self::from_bits(self.0 & !Self::CANONICAL_INF)
-                } else if self.coeff() <= Self::MAX_COEFF as $ucoeff {
+                } else if self.raw_coeff() > Self::MAX_COEFF as $ucoeff {
                     Self::from_bits(self.0 & !Self::COEFF_MASK)
                 } else {
                     self
@@ -884,7 +912,7 @@ macro_rules! impl_dec_misc {
                 } else if self.is_infinite() {
                     self.0 & Self::CANONICAL_INF == 0
                 } else {
-                    self.coeff() <= Self::MAX_COEFF as $ucoeff
+                    self.raw_coeff() <= Self::MAX_COEFF as $ucoeff
                 }
             }
 

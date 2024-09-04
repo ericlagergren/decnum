@@ -2,7 +2,7 @@
 
 use std::{error, fmt};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 
 use super::{conv::ParseError, ctx::RoundingMode};
 use crate::{bid::Bid128, dpd::Dpd128};
@@ -127,6 +127,13 @@ impl Test<'_> {
 
     fn try_run<B: Backend>(&self, backend: &B) -> Result<(), Error> {
         match &self.op {
+            Op::Add { .. } => {
+                // TODO
+                // let lhs = parse_input(backend, lhs).unwrap();
+                // let rhs = parse_input(backend, rhs).unwrap();
+                // let got = backend.subtract(lhs, rhs);
+                // self.check(backend, got, result)?;
+            }
             Op::Apply { input, result } => {
                 let got = parse_input(backend, input)?;
                 self.check(backend, got, result)?;
@@ -134,6 +141,12 @@ impl Test<'_> {
             Op::Canonical { input, result } => {
                 let x = parse_input(backend, input)?;
                 let got = backend.canonical(x);
+                self.check(backend, got, result)?;
+            }
+            Op::Compare { lhs, rhs, result } => {
+                let lhs = parse_input(backend, lhs)?;
+                let rhs = parse_input(backend, rhs)?;
+                let got = backend.compare(lhs, rhs);
                 self.check(backend, got, result)?;
             }
             Op::Copy { input, result } => {
@@ -146,11 +159,43 @@ impl Test<'_> {
                 let got = backend.copyabs(x);
                 self.check(backend, got, result)?;
             }
+            Op::CopyNegate { input, result } => {
+                let x = parse_input(backend, input)?;
+                let got = backend.copynegate(x);
+                self.check(backend, got, result)?;
+            }
+            Op::CopySign { lhs, rhs, result } => {
+                let lhs = parse_input(backend, lhs)?;
+                let rhs = parse_input(backend, rhs)?;
+                let got = backend.copysign(lhs, rhs);
+                self.check(backend, got, result)?;
+            }
             Op::Multiply { .. } => {
                 // TODO
                 // let lhs = parse_input(backend, lhs).unwrap();
                 // let rhs = parse_input(backend, rhs).unwrap();
-                // let got = backend.mul(lhs, rhs);
+                // let got = backend.multiply(lhs, rhs);
+                // self.check(backend, got, result)?;
+            }
+            Op::Subtract { .. } => {
+                // TODO
+                // let lhs = parse_input(backend, lhs).unwrap();
+                // let rhs = parse_input(backend, rhs).unwrap();
+                // let got = backend.subtract(lhs, rhs);
+                // self.check(backend, got, result)?;
+            }
+            Op::ToIntegralX { .. } => {
+                // TODO
+                // let lhs = parse_input(backend, lhs).unwrap();
+                // let rhs = parse_input(backend, rhs).unwrap();
+                // let got = backend.tointegralx(lhs, rhs);
+                // self.check(backend, got, result)?;
+            }
+            Op::Quantize { .. } => {
+                // TODO
+                // let lhs = parse_input(backend, lhs).unwrap();
+                // let rhs = parse_input(backend, rhs).unwrap();
+                // let got = backend.quantize(lhs, rhs);
                 // self.check(backend, got, result)?;
             }
             _ => return Err(Error::Unimplemented),
@@ -163,18 +208,15 @@ impl Test<'_> {
             let want = backend.to_bits(parse_input(backend, want)?);
             let got = backend.to_bits(got);
             if got != want {
-                Err(anyhow!("got {got:x}, expected {want:x}"))
-            } else {
-                Ok(())
+                bail!("got `{got:x}`, expected `{want:x}`");
             }
         } else {
             let got = got.to_string();
             if got != want {
-                Err(anyhow!("got `{got}`, expected `{want}`"))
-            } else {
-                Ok(())
+                bail!("got `\"{got}\"`, expected `\"{want}\"`");
             }
         }
+        Ok(())
     }
 }
 
@@ -234,8 +276,15 @@ pub enum Op<'a> {
         input: &'a str,
         result: &'a str,
     },
-    CopyNegate,
-    CopySign,
+    CopyNegate {
+        input: &'a str,
+        result: &'a str,
+    },
+    CopySign {
+        lhs: &'a str,
+        rhs: &'a str,
+        result: &'a str,
+    },
     Divide,
     DivideInt,
     Exp,
@@ -260,7 +309,11 @@ pub enum Op<'a> {
     Or,
     Plus,
     Power,
-    Quantize,
+    Quantize {
+        lhs: &'a str,
+        rhs: &'a str,
+        result: &'a str,
+    },
     Reduce,
     Remainder,
     Remaindernear,
@@ -270,10 +323,17 @@ pub enum Op<'a> {
     Scaleb,
     Shift,
     SquareRoot,
-    Subtract,
+    Subtract {
+        lhs: &'a str,
+        rhs: &'a str,
+        result: &'a str,
+    },
     ToEng,
-    Tointegral,
-    Tointegralx,
+    ToIntegral,
+    ToIntegralX {
+        input: &'a str,
+        result: &'a str,
+    },
     ToSci,
     Trim,
     Xor,
@@ -288,8 +348,8 @@ impl<'a> Op<'a> {
             .split_once("->")
             .with_context(|| "unable to split on `->`")?;
         let (result, rest) = match rest.trim().split_once(' ') {
-            Some((result, rest)) => (result.trim(), rest),
-            None => (rest, ""),
+            Some((result, rest)) => (result.trim(), rest.trim()),
+            None => (rest.trim(), ""),
         };
         let op = match name {
             "abs" => Self::Abs {
@@ -324,10 +384,30 @@ impl<'a> Op<'a> {
                 input: operands.trim(),
                 result,
             },
+            "copynegate" => Self::CopyNegate {
+                input: operands.trim(),
+                result,
+            },
+            "copysign" => {
+                let (lhs, rhs) = split_binop("copysign", operands)?;
+                Self::CopySign { lhs, rhs, result }
+            }
             "multiply" => {
                 let (lhs, rhs) = split_binop("multiply", operands)?;
                 Self::Multiply { lhs, rhs, result }
             }
+            "quantize" => {
+                let (lhs, rhs) = split_binop("quantize", operands)?;
+                Self::Quantize { lhs, rhs, result }
+            }
+            "subtract" => {
+                let (lhs, rhs) = split_binop("subtract", operands)?;
+                Self::Subtract { lhs, rhs, result }
+            }
+            "tointegralx" => Self::ToIntegralX {
+                input: operands.trim(),
+                result,
+            },
             _ => bail!("unknown op: `{name}`"),
         };
         Ok((op, rest))
@@ -336,6 +416,7 @@ impl<'a> Op<'a> {
 
 fn split_binop<'a>(op: &'static str, s: &'a str) -> Result<(&'a str, &'a str)> {
     let (lhs, rhs) = s
+        .trim()
         .split_once(" ")
         .with_context(|| format!("unable to parse `{op}` operands"))?;
     Ok((lhs.trim(), rhs.trim()))
@@ -367,6 +448,21 @@ impl fmt::Display for Op<'_> {
             }
             Self::CopyAbs { input, result } => {
                 write!(f, "copyabs {input} -> {result}")
+            }
+            Self::CopyNegate { input, result } => {
+                write!(f, "copynegate {input} -> {result}")
+            }
+            Self::CopySign { lhs, rhs, result } => {
+                write!(f, "copysign {lhs} {rhs} -> {result}")
+            }
+            Self::Quantize { lhs, rhs, result } => {
+                write!(f, "quantize {lhs} {rhs} -> {result}")
+            }
+            Self::Subtract { lhs, rhs, result } => {
+                write!(f, "subtract {lhs} {rhs} -> {result}")
+            }
+            Self::ToIntegralX { input, result } => {
+                write!(f, "tointegralx {input} -> {result}")
             }
             _ => write!(f, "other op"),
         }
@@ -432,22 +528,18 @@ pub trait Backend {
     /// Converts the decimal to its bit representation.
     fn to_bits(&self, dec: Self::Dec) -> Self::Bits;
 
-    /// Returns the canonical form of `x` .
     fn canonical(&self, x: Self::Dec) -> Self::Dec;
-
-    /// Compares `lhs` and `rhs`.
     fn compare(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
-
-    /// Returns a copy of `x`.
     fn copy(&self, x: Self::Dec) -> Self::Dec {
         x
     }
-
-    /// Returns the absolute value of `x`.
     fn copyabs(&self, x: Self::Dec) -> Self::Dec;
-
-    /// Multiplies `lhs * rhs`.
+    fn copynegate(&self, x: Self::Dec) -> Self::Dec;
+    fn copysign(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn multiply(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+    fn quantize(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+    fn subtract(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+    fn tointegralx(&self, x: Self::Dec) -> Self::Dec;
 }
 
 /// A backend for [`Bid128`] and [`Dpd128`].
@@ -488,8 +580,28 @@ impl Backend for Dec128 {
         x.abs()
     }
 
+    fn copynegate(&self, x: Self::Dec) -> Self::Dec {
+        x.const_neg()
+    }
+
+    fn copysign(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+        lhs.copy_sign(rhs)
+    }
+
     fn multiply(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
         lhs * rhs
+    }
+
+    fn quantize(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+        lhs.quantize(rhs)
+    }
+
+    fn subtract(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+        lhs - rhs
+    }
+
+    fn tointegralx(&self, x: Self::Dec) -> Self::Dec {
+        x.round_to_integral_exact()
     }
 }
 
