@@ -64,18 +64,18 @@ macro_rules! impl_dec_internal {
 
             /// The bias added to the encoded exponent in order
             /// to convert it to the "actual" exponent.
-            const BIAS: $unbiased = Self::EMAX + (Self::P as $unbiased) - 2;
+            pub(crate) const BIAS: $unbiased = Self::EMAX + (Self::P as $unbiased) - 2;
 
             /// The maxmimum value of the biased encoded
             /// exponent.
-            const LIMIT: $biased = (3 * (1 << Self::W)) - 1;
+            pub(crate) const LIMIT: $biased = (3 * (1 << Self::W)) - 1;
 
             /// The maximum allowed unbiased exponent.
-            const EMAX: $unbiased = 3 * (1 << (Self::W - 1));
+            pub(crate) const EMAX: $unbiased = 3 * (1 << (Self::W - 1));
 
             /// The minimum allowed unbiased exponent for
             /// a normal value.
-            const EMIN: $unbiased = 1 - Self::EMAX;
+            pub(crate) const EMIN: $unbiased = 1 - Self::EMAX;
 
             /// The minimum unbiased exponent for a subnormal
             /// value.
@@ -405,6 +405,53 @@ macro_rules! impl_dec_internal {
                 coeff > Self::MAX_COEFF as $ucoeff || exp < Self::ADJ_EMIN || exp > Self::ADJ_EMAX
             }
 
+            /// Calls [`from_parts`][Self::from_parts] or
+            /// [`rounded`][Self::rounded], depending whether or
+            /// not rounding is needed.
+            const fn maybe_rounded(sign: bool, exp: $unbiased, coeff: $ucoeff) -> Self {
+                if !Self::need_round(coeff, exp) {
+                    // Fast path: `coeff` and `exp` are obviously
+                    // valid.
+                    Self::from_parts(sign, exp, coeff)
+                } else {
+                    // Slow path: we have to round.
+                    //
+                    // Prevent the compiler from inlining
+                    // `Self::rounded`. Otherwise, `Self::new`
+                    // becomes too large and prevents other
+                    // methods that call `Self::new` from being
+                    // properly optimized. For example, compare
+                    // `Bid128::from_i64` if the compiler inlines
+                    // `Self::rounded` into `Self::new`
+                    //
+                    // ```text
+                    // rdfp::bid::bid128::Bid128::from_i64:
+                    // Lfunc_begin13:
+                    // 	asr x1, x0, #63
+                    // 	mov w2, #0
+                    // 	b rdfp::bid::bid128::Bid128::new
+                    // ```
+                    //
+                    // and if it doesn't
+                    //
+                    // ```text
+                    // rdfp::bid::bid128::Bid128::from_i64:
+                    // Lfunc_begin13:
+                    // 	mov x1, x0
+                    // 	cmp x0, #0
+                    // 	cneg x0, x0, mi
+                    // 	mov x8, #3476778912330022912
+                    // 	bfxil x1, x8, #0, #63
+                    // 	ret
+                    // ```
+                    #[inline(never)]
+                    const fn rounded(sign: bool, exp: $unbiased, coeff: $ucoeff) -> $name {
+                        $name::rounded(sign, exp, coeff)
+                    }
+                    rounded(sign, exp, coeff)
+                }
+            }
+
             /// Creates a finite number from the sign, unbiased
             /// exponent, an coefficient.
             ///
@@ -455,6 +502,27 @@ macro_rules! impl_dec_internal {
                     // Is the MSB set (implying we need bit 4)?
                     (coeff >> (Self::MAX_COEFF_BITS - 1)) & 0x1 != 0
                 }
+            }
+
+            /// Creates a NaN from either `lhs` or `rhs` per
+            /// [Arithmetic operation rules][rules].
+            ///
+            /// One of the two arguments *must* be NaN.
+            ///
+            /// [rules]: https://speleotrove.com/decimal/daops.html
+            pub(super) const fn select_nan(lhs: Self, rhs: Self) -> Self {
+                debug_assert!(lhs.is_nan() || rhs.is_nan());
+
+                let nan = if lhs.is_snan() {
+                    lhs
+                } else if rhs.is_snan() {
+                    rhs
+                } else if lhs.is_nan() {
+                    lhs
+                } else {
+                    rhs
+                };
+                Self::from_bits(nan.0 & !Self::CANONICAL_NAN)
             }
         }
     };
@@ -741,14 +809,7 @@ macro_rules! impl_dec_arith {
                     Some(Ordering::Greater) => Self::from_parts(false, 0, 1),
                     Some(Ordering::Less) => Self::from_parts(true, 0, 1),
                     Some(Ordering::Equal) => Self::from_parts(false, 0, 0),
-                    None => {
-                        debug_assert!(self.is_nan() || rhs.is_nan());
-                        if self.is_nan() {
-                            Self::nan(self.signbit(), self.payload())
-                        } else {
-                            Self::nan(rhs.signbit(), rhs.payload())
-                        }
-                    }
+                    None => Self::select_nan(self, rhs),
                 }
             }
 
@@ -1134,49 +1195,7 @@ macro_rules! impl_dec_to_from_repr {
             /// Creates a number from its coefficient and
             /// exponent.
             pub const fn new(coeff: $icoeff, exp: $unbiased) -> Self {
-                let sign = coeff < 0;
-                let coeff = coeff.unsigned_abs();
-                if !Self::need_round(coeff, exp) {
-                    // Fast path: `coeff` and `exp` are obviously
-                    // valid.
-                    Self::from_parts(sign, exp, coeff)
-                } else {
-                    // Slow path: we have to round.
-                    //
-                    // Prevent the compiler from inlining
-                    // `Self::rounded`. Otherwise, `Self::new`
-                    // becomes too large and prevents other
-                    // methods that call `Self::new` from being
-                    // properly optimized. For example, compare
-                    // `Bid128::from_i64` if the compiler inlines
-                    // `Self::rounded` into `Self::new`
-                    //
-                    // ```text
-                    // rdfp::bid::bid128::Bid128::from_i64:
-                    // Lfunc_begin13:
-                    // 	asr x1, x0, #63
-                    // 	mov w2, #0
-                    // 	b rdfp::bid::bid128::Bid128::new
-                    // ```
-                    //
-                    // and if it doesn't
-                    //
-                    // ```text
-                    // rdfp::bid::bid128::Bid128::from_i64:
-                    // Lfunc_begin13:
-                    // 	mov x1, x0
-                    // 	cmp x0, #0
-                    // 	cneg x0, x0, mi
-                    // 	mov x8, #3476778912330022912
-                    // 	bfxil x1, x8, #0, #63
-                    // 	ret
-                    // ```
-                    #[inline(never)]
-                    const fn rounded(sign: bool, exp: $unbiased, coeff: $ucoeff) -> $name {
-                        $name::rounded(sign, exp, coeff)
-                    }
-                    rounded(sign, exp, coeff)
-                }
+                Self::maybe_rounded(coeff < 0, exp, coeff.unsigned_abs())
             }
 
             /// Creates a number from its raw bits.

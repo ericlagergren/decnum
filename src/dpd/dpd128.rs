@@ -1,51 +1,23 @@
-use core::{
-    cmp::Ordering,
-    fmt,
-    mem::size_of,
-    num::FpCategory,
-    ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
-    str::{self, FromStr},
-};
+use core::{cmp::Ordering, fmt, mem::size_of};
 
 use super::encoding as dpd;
 use crate::{
     bid::Bid128,
-    conv::{Buffer, Fmt, ParseError},
     util::{assume, const_assert},
 };
 
-/// A 128-bit decimal floating point number.
-///
-/// (–1)^sign * coefficient * 10^exp
-///
 /// TODO: docs
-#[allow(non_camel_case_types)]
 #[derive(Copy, Clone)]
 #[repr(transparent)]
-pub struct Dpd128(
-    /// # Layout
-    ///
-    /// ## Bits
-    ///
-    /// 0: sign
-    /// 1-5: combination
-    /// 6-17: exponent continuation
-    /// 17-127: coefficient continuation
-    u128,
-);
+pub struct Dpd128(u128);
 const_assert!(size_of::<Dpd128>() == 128 / 8);
 
 // Internal stuff.
 impl Dpd128 {
-    /// The bias added to the encoded exponent in order to
-    /// convert it to the "actual" exponent.
-    const BIAS: i16 = 6176;
-    /// The maxmimum value of the encoded exponent.
-    const LIMIT: u16 = 12287;
-    /// Minimum unbiased exponent.
-    const EMAX: i16 = 6144;
-    /// Maximum unbiased exponent.
-    const EMIN: i16 = -6143;
+    const BIAS: i16 = Bid128::BIAS;
+    const LIMIT: u16 = Bid128::LIMIT;
+    const EMAX: i16 = Bid128::EMAX;
+    const EMIN: i16 = Bid128::EMIN;
 
     const MAX_PREC: i16 = 34;
 
@@ -258,54 +230,44 @@ impl Dpd128 {
 
 // Public stuff.
 impl Dpd128 {
-    /// The largest value that can be represented by this type.
-    pub const MAX: Self = Self::new(Self::MAX_COEFF, Self::MAX_EXP);
-
-    /// The smallest value that can be represented by this type.
-    pub const MIN: Self = Self::new(Self::MIN_COEFF, Self::MAX_EXP);
-
-    /// The smallest positive value that can be represented by
-    /// this type.
-    pub const MIN_POSITIVE: Self = Self::new(Self::MAX_COEFF, Self::MIN_EXP);
-
     /// The largest allowed coefficient.
-    pub const MAX_COEFF: i128 = 10i128.pow(34) - 1;
+    const MAX_COEFF: i128 = 10i128.pow(34) - 1;
 
     /// The smallestallowed coefficient.
-    pub const MIN_COEFF: i128 = -Self::MAX_COEFF;
+    const MIN_COEFF: i128 = -Self::MAX_COEFF;
 
     /// The maximum allowed exponent.
-    pub const MAX_EXP: i16 = Self::EMAX - Self::MAX_PREC + 1;
+    const MAX_EXP: i16 = Self::EMAX - Self::MAX_PREC + 1;
 
     /// The smallest allowed exponent.
-    pub const MIN_EXP: i16 = Self::EMIN - Self::MAX_PREC + 1;
+    const MIN_EXP: i16 = Self::EMIN - Self::MAX_PREC + 1;
 
     /// The number of base 10 significant digits.
-    pub const DIGITS: u32 = 34;
+    const DIGITS: u32 = 34;
 
     /// Not a Number (NaN).
-    pub const NAN: Self = Self::nan(false, 0);
+    const NAN: Self = Self::nan(false, 0);
 
     /// Infinity (∞).
-    pub const INFINITY: Self = Self::inf(false);
+    const INFINITY: Self = Self::inf(false);
 
     /// Negative infinity (−∞).
-    pub const NEG_INFINITY: Self = Self::inf(true);
+    const NEG_INFINITY: Self = Self::inf(true);
 
     /// Reports whether the number is neither infinite nor NaN.
-    pub const fn is_finite(self) -> bool {
+    const fn is_finite(self) -> bool {
         self.comb().is_finite()
     }
 
     /// Reports whether the number is either positive or negative
     /// infinity.
-    pub const fn is_infinite(self) -> bool {
+    const fn is_infinite(self) -> bool {
         self.comb().is_infinite()
     }
 
     /// Reports whether the number is neither zero, infinite,
     /// subnormal, or NaN.
-    pub const fn is_normal(self) -> bool {
+    const fn is_normal(self) -> bool {
         if self.is_special() || self.is_zero() {
             return false;
         }
@@ -315,7 +277,7 @@ impl Dpd128 {
     }
 
     /// Reports whether the number is subnormal.
-    pub const fn is_subnormal(self) -> bool {
+    const fn is_subnormal(self) -> bool {
         if self.is_special() || self.is_zero() {
             return false;
         }
@@ -325,7 +287,7 @@ impl Dpd128 {
     }
 
     /// Reports whether the number is `-0.0` or `+0.0`.
-    pub const fn is_zero(self) -> bool {
+    const fn is_zero(self) -> bool {
         // Covers the coefficient and MSD <= 7.
         const MASK1: u128 = (0x7 << Dpd128::COMB_SHIFT) | Dpd128::COEFF_MASK;
         // Covers MSD > 7 and specials.
@@ -334,42 +296,37 @@ impl Dpd128 {
     }
 
     /// Reports whether the number is a NaN.
-    pub const fn is_nan(self) -> bool {
+    const fn is_nan(self) -> bool {
         self.comb().is_nan()
     }
 
     /// Reports whether the number is a quiet NaN.
-    pub const fn is_qnan(self) -> bool {
+    const fn is_qnan(self) -> bool {
         // When the number is a NaN, the first exponent
         // continuation bit signals whether the NaN is signaling.
         self.is_nan() && self.econ() >> (Self::ECON_BITS - 1) == 0
     }
 
     /// Reports whether the number is a signaling NaN.
-    pub const fn is_snan(self) -> bool {
+    const fn is_snan(self) -> bool {
         // When the number is a NaN, the first exponent
         // continuation bit signals whether the NaN is signaling.
         self.is_nan() && self.econ() >> (Self::ECON_BITS - 1) == 1
     }
 
     /// Reports whether the number is positive, including `+0.0`.
-    pub const fn is_sign_positive(self) -> bool {
+    const fn is_sign_positive(self) -> bool {
         !self.is_sign_negative()
     }
 
     /// Reports whether the number is negative, including `-0.0`.
-    pub const fn is_sign_negative(self) -> bool {
+    const fn is_sign_negative(self) -> bool {
         self.signbit()
     }
 
     /// Reports whether the number is infinite or NaN.
     const fn is_special(self) -> bool {
         self.comb().is_special()
-    }
-
-    /// Returns the floating point category for the number.
-    pub const fn classify(self) -> FpCategory {
-        self.to_bid128().classify()
     }
 
     /// Returns the number of significant digits in the number.
@@ -381,63 +338,13 @@ impl Dpd128 {
     ///
     /// TODO: NaN should return the number of digits in the
     /// payload.
-    pub const fn digits(self) -> u32 {
+    const fn digits(self) -> u32 {
         self.to_bid128().digits()
-    }
-
-    /// Reports whether `self == other`.
-    ///
-    /// - If either number is NaN, it returns `false`.
-    /// - +0.0 and -0.0 are considered equal.
-    ///
-    /// This is a const version of [`PartialEq`].
-    pub fn const_eq(self, other: Self) -> bool {
-        self.to_bid128().const_eq(other.to_bid128())
-    }
-
-    /// Returns the ordering between `self` and `other`.
-    ///
-    /// - If either number is NaN, it returns `None`.
-    /// - +0.0 and -0.0 are considered equal.
-    ///
-    /// This is a const version of [`PartialOrd`].
-    pub fn const_partial_cmp(self, other: Self) -> Option<Ordering> {
-        self.to_bid128().const_partial_cmp(other.to_bid128())
-    }
-
-    /// Returns the total ordering between `self` and `other`.
-    ///
-    /// The values are oredered as follows:
-    ///
-    /// - negative quiet NaN
-    /// - negative signaling NaN
-    /// - negative infinity
-    /// - negative numbers
-    /// - negative subnormal numbers
-    /// - negative zero
-    /// - positive zero
-    /// - positive subnormal numbers
-    /// - positive numbers
-    /// - positive infinity
-    /// - positive signaling NaN
-    /// - positive quiet NaN
-    ///
-    /// The ordering established by this function does not always
-    /// agree with the [`PartialOrd`] and [`PartialEq`]. For
-    /// example, they consider negative and positive zero equal,
-    /// while `const_total_cmp` doesn't.
-    pub const fn const_total_cmp(self, other: Self) -> Ordering {
-        self.to_bid128().const_total_cmp(other.to_bid128())
     }
 }
 
 // To/from reprs.
 impl Dpd128 {
-    /// Creates a `d128` from its coefficient and exponent.
-    pub const fn new(coeff: i128, exp: i16) -> Self {
-        Bid128::new(coeff, exp).to_dpd128()
-    }
-
     /// Creates a quiet NaN.
     pub(crate) const fn nan(sign: bool, payload: u128) -> Self {
         Self::from_fields(sign, 0x1f, 0, payload)
@@ -485,20 +392,6 @@ impl Dpd128 {
         Self::from_bits(u128::from_ne_bytes(bytes))
     }
 
-    /// Creates a `Dpd128` from `coeff` and an exponent of zero.
-    ///
-    /// The result is always exact.
-    pub const fn from_u32(coeff: u32) -> Self {
-        Self::from_u64(coeff as u64)
-    }
-
-    /// Creates a `Dpd128` from `coeff` and an exponent of zero.
-    ///
-    /// The result is always exact.
-    pub const fn from_u64(coeff: u64) -> Self {
-        Self::from_parts_bin(false, 0, coeff as u128)
-    }
-
     /// Raw transmutation to `u128`.
     pub const fn to_bits(self) -> u128 {
         self.0
@@ -540,137 +433,21 @@ impl Dpd128 {
     }
 }
 
-// Const arithmetic.
-impl Dpd128 {
-    /// Returns `self + other`.
-    ///
-    /// This is the same as [`Add`], but can be used in a const
-    /// context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_add(self, rhs: Self) -> Self {
-        self.to_bid128().const_add(rhs.to_bid128()).to_dpd128()
-    }
-
-    /// Returns `self * other`.
-    ///
-    /// This is the same as [`Mul`], but can be used in a const
-    /// context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_mul(self, rhs: Self) -> Self {
-        self.to_bid128().const_mul(rhs.to_bid128()).to_dpd128()
-    }
-
-    /// Returns `-self`.
-    ///
-    /// This is the same as [`Neg`], but can be used in a const
-    /// context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_neg(self) -> Self {
-        Self(self.0 ^ Self::SIGN_MASK)
-    }
-
-    /// Returns `self - other`.
-    ///
-    /// This is the same as [`Sub`], but can be used in a const
-    /// context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_sub(self, rhs: Self) -> Self {
-        // x - y = x + -y
-        self.const_add(rhs.const_neg())
-    }
-}
-
-// String conversions.
-impl Dpd128 {
-    // const MAX_STR_LEN: usize = Self::DIGITS as usize + "-.E1234".len();
-
-    /// Converts the decimal to a string.
-    #[allow(clippy::indexing_slicing)]
-    pub fn format(self, dst: &mut Buffer) -> &str {
-        self.to_bid128().format(dst)
-    }
-
-    /// Parses a decimal from a string.
-    pub fn parse(s: &str) -> Result<Self, ParseError> {
-        Bid128::parse(s).map(Bid128::to_dpd128)
-    }
-}
-
-impl Add for Dpd128 {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self::Output {
-        self.const_add(rhs)
-    }
-}
-
-impl AddAssign for Dpd128 {
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-
-impl Mul for Dpd128 {
-    type Output = Self;
-    fn mul(self, rhs: Self) -> Self::Output {
-        self.const_mul(rhs)
-    }
-}
-
-impl MulAssign for Dpd128 {
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
-}
-
-impl Neg for Dpd128 {
-    type Output = Self;
-    fn neg(self) -> Self::Output {
-        self.const_neg()
-    }
-}
-
-impl Sub for Dpd128 {
-    type Output = Self;
-    fn sub(self, rhs: Self) -> Self::Output {
-        self.const_sub(rhs)
-    }
-}
-
-impl SubAssign for Dpd128 {
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-
 impl PartialEq for Dpd128 {
     fn eq(&self, other: &Self) -> bool {
-        self.const_eq(*other)
+        PartialEq::eq(&self.to_bid128(), &other.to_bid128())
     }
 }
 
 impl PartialOrd for Dpd128 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.const_partial_cmp(*other)
-    }
-}
-
-impl FromStr for Dpd128 {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Dpd128::parse(s)
+        PartialOrd::partial_cmp(&self.to_bid128(), &other.to_bid128())
     }
 }
 
 impl fmt::Display for Dpd128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut buf = Buffer::new();
-        let str = buf.format(*self, Fmt::Default);
-        write!(f, "{str}")
+        self.to_bid128().fmt(f)
     }
 }
 
@@ -682,17 +459,13 @@ impl fmt::Binary for Dpd128 {
 
 impl fmt::LowerExp for Dpd128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut buf = Buffer::new();
-        let str = buf.format(*self, Fmt::LowerExp);
-        write!(f, "{str}")
+        self.to_bid128().fmt(f)
     }
 }
 
 impl fmt::UpperExp for Dpd128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut buf = Buffer::new();
-        let str = buf.format(*self, Fmt::UpperExp);
-        write!(f, "{str}")
+        self.to_bid128().fmt(f)
     }
 }
 
@@ -809,158 +582,5 @@ impl Comb {
             unsafe { assume(msb <= 2) }
         }
         msb
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::decnumber::Quad;
-
-    impl Dpd128 {
-        const SNAN: Self = Self::snan(true, 0);
-        const NEG_NAN: Self = Self::nan(true, 0);
-        const NEG_SNAN: Self = Self::snan(true, 0);
-    }
-
-    #[test]
-    fn test_exp() {
-        for exp in 0..=Dpd128::MAX_EXP {
-            let d = Dpd128::new(0, exp);
-            let got = d.unbiased_exp();
-            assert_eq!(got, exp, "(1) d={:024b}", d.to_bits() >> (128 - 24));
-            assert_eq!(d.coeff(), 0, "#{exp}");
-
-            let d = Dpd128::new(Bid128::MAX_COEFF, exp);
-            let got = d.unbiased_exp();
-            assert_eq!(got, exp, "(2) d={:024b}", d.to_bits() >> (128 - 24));
-            assert_eq!(d.coeff(), Bid128::MAX_COEFF as u128, "#{exp}");
-        }
-    }
-
-    static STR_TESTS: &[(Dpd128, &'static str)] = &[
-        (Dpd128::NAN, "NaN"),
-        (Dpd128::INFINITY, "Infinity"),
-        (Dpd128::NEG_INFINITY, "-Infinity"),
-        (Dpd128::NAN, "NaN"),
-        (Dpd128::SNAN, "sNaN"),
-        (Dpd128::NEG_NAN, "-NaN"),
-        (Dpd128::NEG_SNAN, "-sNaN"),
-        (Dpd128::new(0, 0), "0"),
-        (Dpd128::new(0, -1), "0.0"),
-        (Dpd128::new(0, Dpd128::MAX_EXP), "0E+6111"),
-        (Dpd128::new(0, Dpd128::MIN_EXP), "0E-6176"),
-        (Dpd128::new(21, -1), "2.1"),
-        (Dpd128::new(210, -2), "2.10"),
-        (
-            Dpd128::new(9111222333444555666777888999000111, Dpd128::MAX_EXP),
-            "9.111222333444555666777888999000111E+6144",
-        ),
-        (
-            Dpd128::new(9111222333444555666777888999000111, Dpd128::MIN_EXP),
-            "9.111222333444555666777888999000111E-6143",
-        ),
-        (
-            Dpd128::new(9111222333444555666777888999000111, 0),
-            "9111222333444555666777888999000111",
-        ),
-        (
-            Dpd128::new(9111222333444555666777888999000111, -2),
-            "91112223334445556667778889990001.11",
-        ),
-        (
-            Dpd128::new(9111222333444555666777888999000111, 2),
-            "9.111222333444555666777888999000111E+35",
-        ),
-        (
-            Dpd128::new(9999999999999999999999999999999999, -39),
-            "0.000009999999999999999999999999999999999",
-        ),
-        (Dpd128::new(42, 1), "4.2E+2"),
-        (Dpd128::new(42, 0), "42"),
-        (Dpd128::new(42, -1), "4.2"),
-        (Dpd128::new(42, -2), "0.42"),
-        (Dpd128::new(42, -3), "0.042"),
-        (Dpd128::new(42, -4), "0.0042"),
-        (Dpd128::new(42, -5), "0.00042"),
-        (Dpd128::new(42, -6), "0.000042"),
-        (Dpd128::new(42, -7), "0.0000042"),
-        (Dpd128::new(42, -8), "4.2E-7"),
-    ];
-
-    #[test]
-    fn test_format() {
-        for (i, (input, want)) in STR_TESTS.iter().enumerate() {
-            let got = input.to_string();
-            assert_eq!(got, *want, "#{i}");
-        }
-    }
-
-    #[test]
-    fn test_parse() {
-        for (i, &(want, output)) in STR_TESTS.iter().enumerate() {
-            let got: Dpd128 = output.parse().unwrap();
-            if got.is_nan() {
-                continue;
-            }
-            assert_eq!(got, want, "#{i}: parse(\"{output}\") -> {want}");
-            println!("");
-        }
-    }
-
-    #[test]
-    fn test_from_u32() {
-        for x in 0..=u32::MAX {
-            let got = Dpd128::from_u32(x);
-            let want = Quad::from_u32(x);
-            assert_eq!(got, want, "#{x}");
-        }
-    }
-
-    #[test]
-    fn test_digits() {
-        for i in 1..Dpd128::DIGITS {
-            let v = 10i128.pow(i);
-            let got = Dpd128::new(v - 1, 0).digits();
-            let want = v.ilog10();
-            assert_eq!(got, want, "#{}", v - 1);
-            println!();
-        }
-    }
-
-    #[test]
-    fn test_partial_cmp() {
-        let tests = [
-            // ("NaN", "3", None),
-            // ("3", "NaN", None),
-            ("2.1", "3", Some(Ordering::Less)),
-            ("2.1", "2.1", Some(Ordering::Equal)),
-            ("2.1", "2.10", Some(Ordering::Equal)),
-            ("3", "2.1", Some(Ordering::Greater)),
-            ("2.1", "-3", Some(Ordering::Greater)),
-            ("-3", "2.1", Some(Ordering::Less)),
-        ];
-        for (i, (lhs, rhs, want)) in tests.into_iter().enumerate() {
-            println!("lhs={lhs} rhs={rhs}");
-            let x: Dpd128 = lhs.parse().unwrap();
-            let y: Dpd128 = rhs.parse().unwrap();
-            println!("x={x} y={y}");
-            let got = PartialOrd::partial_cmp(&x, &y);
-            assert_eq!(got, want, "#{i}: partial_cmp({lhs}, {rhs})");
-            assert_eq!(
-                x.const_partial_cmp(y),
-                want,
-                "#{i}: const_partial_cmp({lhs}, {rhs})"
-            );
-            println!("");
-        }
-    }
-
-    #[test]
-    fn test_shift() {
-        let lhs = Dpd128::new(1230, -1);
-        let rhs = Dpd128::new(12300, -2);
-        println!("lhs = {lhs} {}", lhs.unbiased_exp());
-        println!("rhs = {rhs} {}", rhs.unbiased_exp());
     }
 }
