@@ -626,40 +626,29 @@ impl Bits for u128 {
     }
 }
 
-macro_rules! dectest {
-    ($prefix:literal, $name:literal) => {
-        $crate::dectest::dectest!(::core::concat!($prefix, $name))
-    };
-    ($name:expr) => {{
-        const CASES: &'static str =
-            ::core::include_str!(::core::concat!("../../testdata/", $name, ".decTest",));
-        $crate::dectest::parse(CASES).unwrap()
-    }};
-}
-pub(crate) use dectest;
-
 macro_rules! dectests {
     (d128) => {
         $crate::dectest::dectests!($crate::dectest::Dec128, "dq");
     };
     ($backend:ty, $prefix:literal) => {
-        #[test]
-        fn test_canonical() {
-            for case in $crate::dectest::dectest!($prefix, "Canonical") {
-                println!("case = {case}");
-                case.run(&<$backend>::new()).unwrap();
-                println!("");
+        $crate::dectest::dectests!($backend, $prefix,
+            test_canonical => "Canonical",
+            test_compare => "Compare",
+            test_encode => "Encode",
+        );
+    };
+    ($backend:ty, $prefix:literal, $($name:ident => $test:expr),+ $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                const CASES: &'static str = ::core::include_str!(
+                    ::core::concat!("../../testdata/", $prefix, $test, ".decTest"),
+                );
+                for case in $crate::dectest::parse(CASES).unwrap() {
+                    case.run(&<$backend>::new()).unwrap();
+                }
             }
-        }
-
-        #[test]
-        fn test_encode() {
-            for case in $crate::dectest::dectest!($prefix, "Encode") {
-                println!("case = {case}");
-                case.run(&<$backend>::new()).unwrap();
-                println!("");
-            }
-        }
+        )+
     };
 }
 pub(crate) use dectests;

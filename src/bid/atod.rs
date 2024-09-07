@@ -15,7 +15,7 @@ macro_rules! impl_atod {
                 }
 
                 match s.first() {
-                    Some(b'0'..=b'9') => {}
+                    Some(b'0'..=b'9' | b'.') => {}
                     Some(b'i' | b'I' | b'n' | b'N' | b's' | b'S') => {
                         return Self::parse_special(sign, s)
                     }

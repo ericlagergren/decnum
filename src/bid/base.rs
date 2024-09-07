@@ -70,10 +70,10 @@ macro_rules! impl_dec_internal {
             /// exponent.
             pub(crate) const LIMIT: $biased = (3 * (1 << Self::W)) - 1;
 
-            /// The maximum allowed unbiased exponent.
+            /// The maximum allowed adjusted exponent.
             pub(crate) const EMAX: $unbiased = 3 * (1 << (Self::W - 1));
 
-            /// The minimum allowed unbiased exponent for
+            /// The minimum allowed adjusted exponent for
             /// a normal value.
             pub(crate) const EMIN: $unbiased = 1 - Self::EMAX;
 
@@ -81,11 +81,13 @@ macro_rules! impl_dec_internal {
             /// value.
             const ETINY: $unbiased = Self::EMIN - ((Self::P as $unbiased) - 1);
 
-            /// The maximum adjusted exponent.
-            const ADJ_EMAX: $unbiased = Self::MAX_EXP - ((Self::MAX_PREC as $unbiased) - 1);
+            /// The maximum adjusted exponent for a full-length
+            /// coefficient.
+            const EMAX_LESS_PREC: $unbiased = Self::MAX_EXP - ((Self::MAX_PREC as $unbiased) - 1);
 
-            /// The maximum adjusted exponent.
-            const ADJ_EMIN: $unbiased = Self::MIN_EXP - ((Self::MAX_PREC as $unbiased) - 1);
+            /// The minimum adjusted exponent for a full-length
+            /// coefficient.
+            const EMIN_LESS_PREC: $unbiased = Self::MIN_EXP - ((Self::MAX_PREC as $unbiased) - 1);
 
             /// The number of digits of precision.
             const MAX_PREC: u32 = Self::P;
@@ -375,9 +377,9 @@ macro_rules! impl_dec_internal {
                 debug_assert!(exp >= Self::EMIN);
                 debug_assert!(adj >= Self::EMIN);
 
-                if exp > Self::ADJ_EMAX {
+                if exp > Self::EMAX_LESS_PREC {
                     if coeff == 0 {
-                        exp = Self::ADJ_EMAX; // clamped
+                        exp = Self::EMAX_LESS_PREC; // clamped
                     } else if adj > Self::EMAX {
                         // NB: This is where we'd mark overflow.
                         return Self::inf(sign);
@@ -402,7 +404,9 @@ macro_rules! impl_dec_internal {
 
             /// Does `(coeff, exp)` need to be rounded?
             const fn need_round(coeff: $ucoeff, exp: $unbiased) -> bool {
-                coeff > Self::MAX_COEFF as $ucoeff || exp < Self::ADJ_EMIN || exp > Self::ADJ_EMAX
+                coeff > Self::MAX_COEFF as $ucoeff
+                    || exp < Self::EMIN_LESS_PREC
+                    || exp > Self::EMAX_LESS_PREC
             }
 
             /// Calls [`from_parts`][Self::from_parts] or
@@ -458,8 +462,8 @@ macro_rules! impl_dec_internal {
             /// The result is exact and unrounded.
             pub(crate) const fn from_parts(sign: bool, exp: $unbiased, coeff: $ucoeff) -> Self {
                 debug_assert!(coeff <= Self::MAX_COEFF as $ucoeff);
-                debug_assert!(exp >= Self::ADJ_EMIN);
-                debug_assert!(exp <= Self::ADJ_EMAX);
+                debug_assert!(exp >= Self::EMIN_LESS_PREC);
+                debug_assert!(exp <= Self::EMAX_LESS_PREC);
                 debug_assert!(!Self::need_round(coeff, exp));
 
                 // TODO(eric): If `exp` is valid then this cannot
@@ -522,7 +526,7 @@ macro_rules! impl_dec_internal {
                 } else {
                     rhs
                 };
-                Self::from_bits(nan.0 & !Self::CANONICAL_NAN)
+                Self::nan(nan.signbit(), nan.payload())
             }
         }
     };
@@ -542,11 +546,11 @@ macro_rules! impl_dec_consts {
         impl $name {
             /// The largest value that can be represented by this
             /// type.
-            pub const MAX: Self = Self::new(Self::MAX_COEFF, Self::MAX_EXP);
+            pub const MAX: Self = Self::new(Self::MAX_COEFF, Self::EMAX_LESS_PREC);
 
             /// The smallest value that can be represented by
             /// this type.
-            pub const MIN: Self = Self::new(Self::MIN_COEFF, Self::MAX_EXP);
+            pub const MIN: Self = Self::new(Self::MIN_COEFF, Self::EMIN_LESS_PREC);
 
             /// The smallest positive value that can be
             /// represented by this type.
@@ -728,6 +732,10 @@ macro_rules! impl_dec_arith {
                 // Neither are NaN.
 
                 if self.signbit() ^ other.signbit() {
+                    if cfg!(debug_assertions) {
+                        println!("self is zero = {}", self.is_zero());
+                        println!(" rhs is zero = {}", other.is_zero());
+                    }
                     return if self.is_zero() && other.is_zero() {
                         Some(Ordering::Equal) // 0 == 0
                     } else if self.signbit() {
@@ -778,28 +786,24 @@ macro_rules! impl_dec_arith {
                 // `shift` is in [0, DIGITS].
 
                 if cfg!(debug_assertions) {
+                    println!("lhs coeff = {}", self.coeff());
+                    println!("rhs coeff = {}", other.coeff());
                     println!("lhs exp = {}", self.biased_exp());
                     println!("rhs exp = {}", other.biased_exp());
                     println!("shift = {shift}");
                 }
 
-                if shift == 0 {
-                    return Some($arith::const_cmp(self.coeff(), other.coeff()));
-                }
-                debug_assert!(self.biased_exp() != other.biased_exp());
-
-                if self.biased_exp() > other.biased_exp() {
-                    Some($arith::const_cmp_shifted(
-                        self.coeff(),
-                        other.coeff(),
-                        shift,
-                    ))
+                let ord = if shift == 0 {
+                    $arith::const_cmp(self.coeff(), other.coeff())
+                } else if self.biased_exp() > other.biased_exp() {
+                    $arith::const_cmp_shifted(self.coeff(), other.coeff(), shift)
                 } else {
-                    Some($arith::const_cmp_shifted(
-                        other.coeff(),
-                        self.coeff(),
-                        shift,
-                    ))
+                    $arith::const_cmp_shifted(other.coeff(), self.coeff(), shift).reverse()
+                };
+                if self.signbit() {
+                    Some(ord.reverse())
+                } else {
+                    Some(ord)
                 }
             }
 

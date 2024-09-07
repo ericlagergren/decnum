@@ -120,10 +120,10 @@ impl Bid128 {
         debug_assert!(exp >= Self::EMIN);
         debug_assert!(adj >= Self::EMIN);
 
-        if exp > Self::ADJ_EMAX {
+        if exp > Self::EMAX_LESS_PREC {
             if coeff == 0 {
                 println!("clamped to zero");
-                exp = Self::ADJ_EMAX; // clamped
+                exp = Self::EMAX_LESS_PREC; // clamped
             } else if adj > Self::EMAX {
                 println!("inf");
                 // NB: This is where we'd mark overflow.
@@ -519,30 +519,16 @@ mod tests {
 
     #[test]
     fn test_idk() {
-        use crate::dpd;
+        let x = Bid128::from_bits(0x7c000ff3fcff3fcff3fcff3fcff3fcff);
+        println!("x = {x}");
+        let x = Bid128::from_bits(0x7e004ff3fcff3fcff3ffffffcff3fcff);
+        println!("x = {x}");
 
-        println!(
-            "{:x}",
-            dpd::unpack((0x77ffcff3fcff3fcff3fcff3fcff3fcffu128 & 0x3ff) as u16)
+        let nan = Bid128::select_nan(
+            Bid128::from_bits(0x7e004ff3fcff3fcff3ffffffcff3fcff),
+            Bid128::zero(),
         );
-        println!(
-            "{:x}",
-            dpd::unpack(((0x77ffcff3fcff3fcff3fcff3fcff3fcffu128 >> 10) & 0x3ff) as u16)
-        );
-
-        let x = Dpd128::from_bits(0x77ffcff3fcff3fcff3fcff3fcff3fcff);
-        println!("dpd {x:?} {:x}", x.to_bits());
-
-        let y = x.to_bid128();
-        println!("bid {y:?} {:x}", y.to_bits());
-
-        let z = y.to_dpd128();
-        println!("dpd {z:?} {:x}", z.to_bits());
-
-        let got = z;
-        let want = Dpd128::from_bits(0x77ffcff3fcff3fcff3fcff3fcff3fcff);
-        println!("want = {want:?} {:x}", want.to_bits());
-        assert_eq!(got, want);
+        println!("NaN = {nan}");
 
         assert!(false);
     }
@@ -550,8 +536,8 @@ mod tests {
     #[test]
     fn test_exp() {
         for mut want in Bid128::MIN_EXP..=Bid128::MAX_EXP {
-            if want > Bid128::ADJ_EMAX {
-                want = Bid128::ADJ_EMAX;
+            if want > Bid128::EMAX_LESS_PREC {
+                want = Bid128::EMAX_LESS_PREC;
             }
 
             let d = Bid128::new2(0, want);
