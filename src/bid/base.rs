@@ -205,12 +205,12 @@ macro_rules! impl_dec_internal {
                 // numbers.
                 debug_assert!(self.is_finite());
 
-                let exp = if self.is_form2() {
-                    // exp = G[2:w+3]
-                    ((self.0 & Self::FORM2_EXP_MASK) >> Self::FORM2_EXP_SHIFT) as $biased
-                } else {
+                let exp = if self.is_form1() {
                     // exp = G[0:w+1]
                     ((self.0 & Self::FORM1_EXP_MASK) >> Self::FORM1_EXP_SHIFT) as $biased
+                } else {
+                    // exp = G[2:w+3]
+                    ((self.0 & Self::FORM2_EXP_MASK) >> Self::FORM2_EXP_SHIFT) as $biased
                 };
                 debug_assert!(exp & !Self::EXP_MASK == 0);
                 debug_assert!(exp <= Self::LIMIT);
@@ -271,12 +271,12 @@ macro_rules! impl_dec_internal {
                 // numbers.
                 debug_assert!(self.is_finite());
 
-                if self.is_form2() {
-                    // 100 || G[w+4] || T
-                    Self::FORM2_IMPLICIT_COEFF_BITS | (self.0 & Self::FORM2_COEFF_MASK)
-                } else {
+                if self.is_form1() {
                     // G[w+2:w+4] || T
                     self.0 & Self::FORM1_COEFF_MASK
+                } else {
+                    // 100 || G[w+4] || T
+                    Self::FORM2_IMPLICIT_COEFF_BITS | (self.0 & Self::FORM2_COEFF_MASK)
                 }
             }
 
@@ -1057,11 +1057,12 @@ macro_rules! impl_dec_misc {
 
             /// Reports whether the number is `-0.0` or `+0.0`.
             pub const fn is_zero(self) -> bool {
-                // Covers the coefficient and form one.
-                const MASK1: $ucoeff = (0x7 << $name::COMB_SHIFT) | $name::COEFF_MASK;
-                // Covers form two and specials.
-                const MASK2: $ucoeff = 0x18 << $name::COMB_SHIFT;
-                (self.0 & MASK1) == 0 && (self.0 & MASK2) != MASK2
+                // A number is zero if it is finite and the
+                // coefficient is zero.
+                //
+                // NB: Checking `self.is_form1` helps the
+                // compiler generate much better code.
+                self.is_finite() && self.is_form1() && self.raw_coeff() == 0
             }
 
             /// Returns an integer that is the exponent of the

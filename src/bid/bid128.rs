@@ -468,6 +468,24 @@ impl Bid128 {
     pub const fn set_exponent(self, _n: i16) -> Self {
         todo!()
     }
+
+    // A number is zero if:
+    //
+    // finite (top4 != top4)
+    // coeff == 0
+    // form1 (top2 != top2)
+
+    /// TODO
+    #[no_mangle]
+    pub const fn is_zero0(self) -> bool {
+        self.is_finite() && self.is_form1() && self.raw_coeff() == 0
+    }
+
+    /// TODO
+    #[no_mangle]
+    pub const fn is_zero1(self) -> bool {
+        self.is_finite() && self.is_form1() && self.coeff() == 0
+    }
 }
 
 macro_rules! from_unsigned_impl {
