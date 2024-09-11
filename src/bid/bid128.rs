@@ -468,24 +468,6 @@ impl Bid128 {
     pub const fn set_exponent(self, _n: i16) -> Self {
         todo!()
     }
-
-    // A number is zero if:
-    //
-    // finite (top4 != top4)
-    // coeff == 0
-    // form1 (top2 != top2)
-
-    /// TODO
-    #[no_mangle]
-    pub const fn is_zero0(self) -> bool {
-        self.is_finite() && self.is_form1() && self.raw_coeff() == 0
-    }
-
-    /// TODO
-    #[no_mangle]
-    pub const fn is_zero1(self) -> bool {
-        self.is_finite() && self.is_form1() && self.coeff() == 0
-    }
 }
 
 macro_rules! from_unsigned_impl {
@@ -537,6 +519,9 @@ mod tests {
 
     #[test]
     fn test_idk() {
+        let got = Bid128::const_partial_cmp(Bid128::INFINITY, Bid128::INFINITY);
+        assert_eq!(got, Some(Ordering::Equal));
+
         let x = Bid128::from_bits(0x7c000ff3fcff3fcff3fcff3fcff3fcff);
         println!("x = {x}");
         let x = Bid128::from_bits(0x7e004ff3fcff3fcff3ffffffcff3fcff);

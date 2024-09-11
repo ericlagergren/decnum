@@ -730,26 +730,45 @@ macro_rules! impl_dec_arith {
                     return None;
                 }
                 // Neither are NaN.
+                debug_assert!(!self.is_nan() && !other.is_nan());
 
-                if self.signbit() ^ other.signbit() {
+                if self.signbit() != other.signbit() {
                     if cfg!(debug_assertions) {
                         println!("self is zero = {}", self.is_zero());
                         println!(" rhs is zero = {}", other.is_zero());
                     }
                     return if self.is_zero() && other.is_zero() {
-                        Some(Ordering::Equal) // 0 == 0
+                        // +0 == -0
+                        // -0 == +0
+                        Some(Ordering::Equal)
                     } else if self.signbit() {
-                        Some(Ordering::Less) // -x < +x
+                        // -x < +x
+                        Some(Ordering::Less)
                     } else {
-                        Some(Ordering::Greater) // +x > -x
+                        // +x > -x
+                        Some(Ordering::Greater)
                     };
                 }
                 // Signs are the same.
+                debug_assert!(self.signbit() == other.signbit());
 
-                if self.is_infinite() && other.is_infinite() {
-                    // +inf cmp +inf
-                    // -inf cmp -inf
-                    return Some(Ordering::Equal);
+                if self.is_infinite() || other.is_infinite() {
+                    let ord = if self.is_infinite() == other.is_infinite() {
+                        // +inf cmp +inf
+                        Ordering::Equal
+                    } else if self.is_infinite() {
+                        // +inf cmp x
+                        Ordering::Greater
+                    } else {
+                        // x cmp +inf
+                        Ordering::Less
+                    };
+                    return if self.signbit() {
+                        // Oops, it's actually -inf.
+                        Some(ord.reverse())
+                    } else {
+                        Some(ord)
+                    };
                 }
                 // Both are finite.
                 debug_assert!(self.is_finite() && other.is_finite());
@@ -1059,10 +1078,25 @@ macro_rules! impl_dec_misc {
             pub const fn is_zero(self) -> bool {
                 // A number is zero if it is finite and the
                 // coefficient is zero.
-                //
+                if !self.is_finite() {
+                    return false;
+                }
                 // NB: Checking `self.is_form1` helps the
                 // compiler generate much better code.
-                self.is_finite() && self.is_form1() && self.raw_coeff() == 0
+                if !self.is_form1() {
+                    return false;
+                }
+                // We're finite and using form one, so check that
+                // the coefficient is zero. However, we also have
+                // to account for the fact that a coefficient
+                // greater than `MAX_COEFF` is treated as if it
+                // were zero.
+                //
+                // NB: The compiler generates worse code for the
+                // obvious version.
+                const MAX_COEFF: $ucoeff = $name::MAX_COEFF as $ucoeff;
+                let diff = (MAX_COEFF as $ucoeff).checked_sub(self.raw_coeff());
+                matches!(diff, None | Some(MAX_COEFF))
             }
 
             /// Returns an integer that is the exponent of the
