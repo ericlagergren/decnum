@@ -468,6 +468,18 @@ impl Bid128 {
     pub const fn set_exponent(self, _n: i16) -> Self {
         todo!()
     }
+
+    /// TODO
+    #[no_mangle]
+    pub const fn test1(self, rhs: Self) -> bool {
+        self.is_nan() || rhs.is_nan()
+    }
+
+    /// TODO
+    #[no_mangle]
+    pub const fn test2(self, rhs: Self) -> bool {
+        (self.0 & rhs.0) & Self::COMB_TOP5 == Self::COMB_TOP5
+    }
 }
 
 macro_rules! from_unsigned_impl {
@@ -519,21 +531,12 @@ mod tests {
 
     #[test]
     fn test_idk() {
-        let got = Bid128::const_partial_cmp(Bid128::INFINITY, Bid128::INFINITY);
-        assert_eq!(got, Some(Ordering::Equal));
-
-        let x = Bid128::from_bits(0x7c000ff3fcff3fcff3fcff3fcff3fcff);
+        let x = Bid128::parse("-1e+77").unwrap();
         println!("x = {x}");
-        let x = Bid128::from_bits(0x7e004ff3fcff3fcff3ffffffcff3fcff);
-        println!("x = {x}");
+        let y = Bid128::parse("-1e+11").unwrap();
+        println!("y = {y}");
 
-        let nan = Bid128::select_nan(
-            Bid128::from_bits(0x7e004ff3fcff3fcff3ffffffcff3fcff),
-            Bid128::zero(),
-        );
-        println!("NaN = {nan}");
-
-        assert!(false);
+        assert_eq!(x.partial_cmp(&y), Some(Ordering::Less));
     }
 
     #[test]

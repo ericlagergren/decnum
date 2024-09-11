@@ -715,6 +715,34 @@ macro_rules! impl_dec_arith {
                 }
             }
 
+            /// Returns the maximum of two values.
+            ///
+            /// Same as [`cmp::max`][core::cmp::max], but can be
+            /// used in a const context.
+            pub fn const_max(self, rhs: Self) -> Self {
+                use Ordering::*;
+                match self.const_partial_cmp(rhs) {
+                    Some(Greater | Equal) => self,
+                    Some(Less) => rhs,
+                    // TODO(eric): max(qnan, x) == x
+                    None => Self::select_nan(self, rhs),
+                }
+            }
+
+            /// Returns the minimum of two values.
+            ///
+            /// Same as [`cmp::min`][core::cmp::min], but can be
+            /// used in a const context.
+            pub fn const_min(self, rhs: Self) -> Self {
+                use Ordering::*;
+                match self.const_partial_cmp(rhs) {
+                    Some(Greater) => rhs,
+                    Some(Less | Equal) => self,
+                    // TODO(eric): min(qnan, x) == x
+                    None => Self::select_nan(self, rhs),
+                }
+            }
+
             /// Returns the ordering between `self` and `other`.
             ///
             /// - If either number is NaN, it returns `None`.
@@ -725,6 +753,7 @@ macro_rules! impl_dec_arith {
                 if cfg!(debug_assertions) {
                     println!("partial_cmp({self}, {other})");
                 }
+
                 if self.is_nan() || other.is_nan() {
                     // NaN != NaN
                     return None;
@@ -753,18 +782,21 @@ macro_rules! impl_dec_arith {
                 debug_assert!(self.signbit() == other.signbit());
 
                 if self.is_infinite() || other.is_infinite() {
-                    let ord = if self.is_infinite() == other.is_infinite() {
-                        // +inf cmp +inf
-                        Ordering::Equal
-                    } else if self.is_infinite() {
-                        // +inf cmp x
+                    if cfg!(debug_assertions) {
+                        println!("lhs is inf = {}", self.is_infinite());
+                        println!("rhs is inf = {}", other.is_infinite());
+                    }
+                    let ord = if !self.is_infinite() {
+                        // x cmp inf
+                        Ordering::Less
+                    } else if !other.is_infinite() {
+                        // inf cmp x
                         Ordering::Greater
                     } else {
-                        // x cmp +inf
-                        Ordering::Less
+                        // inf cmp inf
+                        Ordering::Equal
                     };
                     return if self.signbit() {
-                        // Oops, it's actually -inf.
                         Some(ord.reverse())
                     } else {
                         Some(ord)
@@ -778,12 +810,21 @@ macro_rules! impl_dec_arith {
                         println!("lhs is zero = {}", self.is_zero());
                         println!("rhs is zero = {}", other.is_zero());
                     }
-                    return if !self.is_zero() {
-                        Some(Ordering::Greater) // x > 0
+                    let ord = if !self.is_zero() {
+                        // x > 0
+                        Ordering::Greater
                     } else if !other.is_zero() {
-                        Some(Ordering::Less) // 0 < x
+                        // 0 < x
+                        Ordering::Less
                     } else {
-                        Some(Ordering::Equal) // 0 == 0
+                        // +0 == +0
+                        // -0 == -0
+                        Ordering::Equal
+                    };
+                    return if self.signbit() {
+                        Some(ord.reverse())
+                    } else {
+                        Some(ord)
                     };
                 }
                 // Both are non-zero.
@@ -792,14 +833,22 @@ macro_rules! impl_dec_arith {
                 // Bias doesn't matter for this comparison.
                 let shift = self.biased_exp().abs_diff(other.biased_exp()) as u32;
                 if shift >= Self::DIGITS {
+                    if cfg!(debug_assertions) {
+                        println!("hi");
+                    }
                     // The shift is larger than the maximum
                     // precision, so the coefficients do not
                     // overlap. Therefore, the larger exponent is
                     // the larger number.
-                    return if self.biased_exp() < other.biased_exp() {
-                        Some(Ordering::Less)
+                    let ord = if self.biased_exp() < other.biased_exp() {
+                        Ordering::Less
                     } else {
-                        Some(Ordering::Greater)
+                        Ordering::Greater
+                    };
+                    return if self.signbit() {
+                        Some(ord.reverse())
+                    } else {
+                        Some(ord)
                     };
                 }
                 // `shift` is in [0, DIGITS].
@@ -826,12 +875,14 @@ macro_rules! impl_dec_arith {
                 }
             }
 
+            /// Only used by dectest.
             #[cfg(test)]
             pub(crate) fn compare(self, rhs: Self) -> Self {
+                use Ordering::*;
                 match self.const_partial_cmp(rhs) {
-                    Some(Ordering::Greater) => Self::from_parts(false, 0, 1),
-                    Some(Ordering::Less) => Self::from_parts(true, 0, 1),
-                    Some(Ordering::Equal) => Self::from_parts(false, 0, 0),
+                    Some(Greater) => Self::from_parts(false, 0, 1),
+                    Some(Less) => Self::from_parts(true, 0, 1),
+                    Some(Equal) => Self::from_parts(false, 0, 0),
                     None => Self::select_nan(self, rhs),
                 }
             }
@@ -870,6 +921,30 @@ macro_rules! impl_dec_arith {
             #[cfg(test)]
             pub(crate) const fn round_to_integral_exact(self) -> Self {
                 self.quantize(Self::from_parts(false, 0, 1))
+            }
+
+            /// Returns the square root of `self`.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn sqrt(self) -> Self {
+                if self.is_nan() {
+                    // sqrt(±NaN)
+                    return Self::select_nan(self, self);
+                }
+                let ideal = self.unbiased_exp() / 2;
+                if self.is_zero() {
+                    // sqrt(±0) == 0
+                    return Self::from_parts(self.signbit(), ideal, 0);
+                }
+                if self.signbit() {
+                    // sqrt(-x) == NaN
+                    return Self::nan(false, 0);
+                }
+                if self.is_infinite() {
+                    // sqrt(+inf) == +inf
+                    return Self::inf(false);
+                }
+                todo!()
             }
         }
     };

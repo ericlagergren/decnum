@@ -2,11 +2,24 @@
 
 use std::{error, fmt};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use super::{conv::ParseError, ctx::RoundingMode};
 use crate::{bid::Bid128, dpd::Dpd128};
 
+macro_rules! failure {
+    ($msg:literal $(,)?) => {
+        Err(anyhow!($msg).into())
+    };
+    ($err:expr $(,)?) => {
+        Err(anyhow!($err).into())
+    };
+    ($fmt:expr, $($arg:tt)*) => {
+        Err(anyhow!($fmt, $($arg)*).into())
+    };
+}
+
+/// Parses test cases.
 pub fn parse(s: &str) -> Result<Vec<Test<'_>>> {
     let mut extended = 1;
     let mut precision: u32 = 0;
@@ -120,12 +133,7 @@ pub struct Test<'a> {
 
 impl Test<'_> {
     /// Runs a test.
-    pub fn run<B: Backend>(&self, backend: &B) -> Result<(), Failure<'_>> {
-        self.try_run(backend)
-            .map_err(|err| Failure { case: self, err })
-    }
-
-    fn try_run<B: Backend>(&self, backend: &B) -> Result<(), Error> {
+    pub fn run<B: Backend>(&self, backend: &B) -> Result<(), Error> {
         match &self.op {
             Op::Add { .. } => {
                 // TODO
@@ -203,35 +211,46 @@ impl Test<'_> {
         Ok(())
     }
 
-    fn check<B: Backend>(&self, backend: &B, got: B::Dec, want: &str) -> Result<()> {
+    fn check<B: Backend>(&self, backend: &B, got: B::Dec, want: &str) -> Result<(), Error> {
+        if want == "#" {
+            return Err(Error::Unsupported);
+        }
+
         if want.starts_with('#') {
             let want = backend.to_bits(parse_input(backend, want)?);
             let got = backend.to_bits(got);
-            if got != want {
-                bail!("got `{got:x}`, expected `{want:x}`");
-            }
-        } else {
-            let got = got.to_string();
-            if got != want {
-                bail!("got `\"{got}\"`, expected `\"{want}\"`");
-            }
+            return if got != want {
+                failure!("got `{got:x}`, expected `{want:x}`")
+            } else {
+                Ok(())
+            };
         }
-        Ok(())
+
+        let got = got.to_string();
+        if got != want {
+            failure!("got `\"{got}\"`, expected `\"{want}\"`")
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn parse_input<B: Backend>(backend: &B, s: &str) -> Result<B::Dec, Error> {
+    if s == "#" {
+        Err(Error::Unsupported)
+    } else if let Some(s) = s.strip_prefix('#') {
+        let bytes = hex::decode(s.as_bytes()).map_err(|err| Error::Failure(Box::new(err)))?;
+        Ok(backend.from_bytes(&bytes))
+    } else {
+        backend
+            .parse(s)
+            .map_err(|err| Error::Failure(Box::new(err)))
     }
 }
 
 impl fmt::Display for Test<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} {}", self.id, self.op,)
-    }
-}
-
-fn parse_input<B: Backend>(backend: &B, s: &str) -> Result<B::Dec> {
-    if let Some(s) = s.strip_prefix('#') {
-        let bytes = hex::decode(s.as_bytes())?;
-        Ok(backend.from_bytes(&bytes))
-    } else {
-        backend.parse(s).map_err(Into::into)
     }
 }
 
@@ -471,27 +490,15 @@ impl fmt::Display for Op<'_> {
 
 /// A test error.
 #[derive(Debug)]
-pub struct Failure<'a> {
-    case: &'a Test<'a>,
-    err: Error,
-}
-
-impl error::Error for Failure<'_> {}
-
-impl fmt::Display for Failure<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "test failure for `{}`: {}", self.case, self.err)
-    }
-}
-
-#[derive(Debug)]
-enum Error {
-    /// The test is unimplemented.
-    Unimplemented,
+pub enum Error {
+    /// The test failed.
+    Failure(Box<dyn error::Error>),
     /// The test was skipped.
     Skipped,
-    /// The test failed.
-    Failure(anyhow::Error),
+    /// The test is unimplemented.
+    Unimplemented,
+    /// The test is unsupported.
+    Unsupported,
 }
 
 impl error::Error for Error {}
@@ -499,16 +506,17 @@ impl error::Error for Error {}
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
+            Self::Failure(err) => write!(f, "{err}"),
             Self::Skipped => write!(f, "skipped"),
             Self::Unimplemented => write!(f, "unimplemented"),
-            Self::Failure(err) => write!(f, "{err}"),
+            Self::Unsupported => write!(f, "unsupported"),
         }
     }
 }
 
 impl From<anyhow::Error> for Error {
     fn from(err: anyhow::Error) -> Self {
-        Self::Failure(err)
+        Self::Failure(err.into())
     }
 }
 
@@ -561,6 +569,7 @@ impl Backend for Dec128 {
     }
 
     fn from_bytes(&self, bytes: &[u8]) -> Self::Dec {
+        println!("bytes = {}", bytes.len());
         Dpd128::from_be_bytes(bytes.try_into().unwrap()).to_bid128()
     }
 
@@ -645,7 +654,12 @@ macro_rules! dectests {
                     ::core::concat!("../../testdata/", $prefix, $test, ".decTest"),
                 );
                 for case in $crate::dectest::parse(CASES).unwrap() {
-                    case.run(&<$backend>::new()).unwrap();
+                    println!("case = {case}");
+                    match case.run(&<$backend>::new()) {
+                        Err($crate::dectest::Error::Unsupported) => continue,
+                        v => v.unwrap(),
+                    }
+                    println!("");
                 }
             }
         )+
