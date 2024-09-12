@@ -1,3 +1,35 @@
+use core::cmp::Ordering;
+
+/// Shift `x` to the left by `n` digits.
+pub(super) const fn shl(x: u32, n: u32) -> u64 {
+    debug_assert!(n <= 7);
+
+    x as u64 * 10u64.pow(n)
+}
+
+/// Compares `lhs` and `rhs`.
+pub(super) const fn const_cmp(lhs: u32, rhs: u32) -> Ordering {
+    match lhs.checked_sub(rhs) {
+        Some(0) => Ordering::Equal,
+        Some(_) => Ordering::Greater,
+        None => Ordering::Less,
+    }
+}
+
+/// Reports whether `(lhs * 10^shift) == rhs`.
+pub(super) const fn const_cmp_shifted(lhs: u32, rhs: u32, shift: u32) -> Ordering {
+    match shl(lhs, shift).checked_sub(rhs as u64) {
+        Some(0) => Ordering::Equal,
+        Some(_) => Ordering::Greater,
+        None => Ordering::Less,
+    }
+}
+
+/// Reports whether `(lhs * 10^shift) == rhs`.
+pub(super) const fn const_eq_shifted(lhs: u32, rhs: u32, shift: u32) -> bool {
+    shl(lhs, shift) == rhs as u64
+}
+
 /// Returns the number of decimal digits in `x`.
 ///
 /// The result will be in [0, 10].

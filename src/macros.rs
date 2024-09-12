@@ -1,4 +1,4 @@
-use super::bid::{Bid128, Bid64};
+use super::bid::{Bid128, Bid32, Bid64};
 
 // implements the unary operator "op &T"
 // based on "op T" where T is expected to be `Copy`able
@@ -81,7 +81,7 @@ macro_rules! add_impl {
     )*)
 }
 
-add_impl! { Bid64 Bid128 }
+add_impl! { Bid32 Bid64 Bid128 }
 
 macro_rules! sub_impl {
     ($($t:ty)*) => ($(
@@ -99,7 +99,7 @@ macro_rules! sub_impl {
     )*)
 }
 
-sub_impl! { Bid64 Bid128 }
+sub_impl! { Bid32 Bid64 Bid128 }
 
 macro_rules! mul_impl {
     ($($t:ty)*) => ($(
@@ -117,7 +117,7 @@ macro_rules! mul_impl {
     )*)
 }
 
-mul_impl! { Bid64 Bid128 }
+mul_impl! { Bid32 Bid64 Bid128 }
 
 #[allow(unused_macros)] // TODO
 macro_rules! div_impl_integer {
@@ -159,7 +159,7 @@ macro_rules! div_impl_float {
     )*)
 }
 
-div_impl_float! { Bid64 Bid128 }
+div_impl_float! { Bid32 Bid64 Bid128 }
 
 #[allow(unused_macros)] // TODO
 macro_rules! rem_impl_integer {
@@ -216,7 +216,7 @@ macro_rules! rem_impl_float {
     )*)
 }
 
-rem_impl_float! { Bid64 Bid128 }
+rem_impl_float! { Bid32 Bid64 Bid128 }
 
 macro_rules! neg_impl {
     ($($t:ty)*) => ($(
@@ -233,7 +233,7 @@ macro_rules! neg_impl {
     )*)
 }
 
-neg_impl! { Bid64 Bid128 }
+neg_impl! { Bid32 Bid64 Bid128 }
 
 macro_rules! add_assign_impl {
     ($($t:ty)+) => ($(
@@ -249,7 +249,7 @@ macro_rules! add_assign_impl {
     )+)
 }
 
-add_assign_impl! { Bid64 Bid128 }
+add_assign_impl! { Bid32 Bid64 Bid128 }
 
 macro_rules! sub_assign_impl {
     ($($t:ty)+) => ($(
@@ -265,7 +265,7 @@ macro_rules! sub_assign_impl {
     )+)
 }
 
-sub_assign_impl! { Bid64 Bid128 }
+sub_assign_impl! { Bid32 Bid64 Bid128 }
 
 macro_rules! mul_assign_impl {
     ($($t:ty)+) => ($(
@@ -281,7 +281,7 @@ macro_rules! mul_assign_impl {
     )+)
 }
 
-mul_assign_impl! { Bid64 Bid128 }
+mul_assign_impl! { Bid32 Bid64 Bid128 }
 
 macro_rules! div_assign_impl {
     ($($t:ty)+) => ($(
@@ -297,7 +297,7 @@ macro_rules! div_assign_impl {
     )+)
 }
 
-div_assign_impl! { Bid64 Bid128 }
+div_assign_impl! { Bid32 Bid64 Bid128 }
 
 macro_rules! rem_assign_impl {
     ($($t:ty)+) => ($(
@@ -313,4 +313,4 @@ macro_rules! rem_assign_impl {
     )+)
 }
 
-rem_assign_impl! { Bid64 Bid128 }
+rem_assign_impl! { Bid32 Bid64 Bid128 }

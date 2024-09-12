@@ -196,6 +196,19 @@ macro_rules! impl_dec_internal {
                 self.0 & Self::COMB_TOP4 == Self::COMB_TOP4
             }
 
+            /// Returns the top six bits in the combination
+            /// field.
+            ///
+            /// - sNaN: 2^6
+            /// - qNaN: 2^5
+            /// - inf: 2^4
+            ///
+            /// Finite values have values less than 2^4.
+            const fn special_bits(self) -> u8 {
+                let bits = self.0 & Self::COMB_TOP6;
+                (bits >> (Self::SIGN_SHIFT - 6)) as u8
+            }
+
             /// Returns the biased exponment.
             ///
             /// If the number is finite, the result is in [0,
@@ -302,6 +315,12 @@ macro_rules! impl_dec_internal {
                 debug_assert!(self.is_nan());
 
                 self.0 & Self::PAYLOAD_MASK
+            }
+
+            /// TODO: keep this?
+            const fn with_unbiased_exp(self, exp: $unbiased) -> Self {
+                // TODO(eric): debug assertions
+                self.with_biased_exp((exp + Self::BIAS) as $biased)
             }
 
             const fn with_biased_exp(mut self, exp: $biased) -> Self {
@@ -715,34 +734,6 @@ macro_rules! impl_dec_arith {
                 }
             }
 
-            /// Returns the maximum of two values.
-            ///
-            /// Same as [`cmp::max`][core::cmp::max], but can be
-            /// used in a const context.
-            pub fn const_max(self, rhs: Self) -> Self {
-                use Ordering::*;
-                match self.const_partial_cmp(rhs) {
-                    Some(Greater | Equal) => self,
-                    Some(Less) => rhs,
-                    // TODO(eric): max(qnan, x) == x
-                    None => Self::select_nan(self, rhs),
-                }
-            }
-
-            /// Returns the minimum of two values.
-            ///
-            /// Same as [`cmp::min`][core::cmp::min], but can be
-            /// used in a const context.
-            pub fn const_min(self, rhs: Self) -> Self {
-                use Ordering::*;
-                match self.const_partial_cmp(rhs) {
-                    Some(Greater) => rhs,
-                    Some(Less | Equal) => self,
-                    // TODO(eric): min(qnan, x) == x
-                    None => Self::select_nan(self, rhs),
-                }
-            }
-
             /// Returns the ordering between `self` and `other`.
             ///
             /// - If either number is NaN, it returns `None`.
@@ -887,6 +878,20 @@ macro_rules! impl_dec_arith {
                 }
             }
 
+            /// Only used by dectest.
+            #[cfg(test)]
+            pub(crate) fn compare_total(self, rhs: Self) -> Self {
+                if cfg!(debug_assertions) {
+                    println!("compare_total({self}, {rhs})");
+                }
+                use Ordering::*;
+                match self.total_cmp(rhs) {
+                    Greater => Self::from_parts(false, 0, 1),
+                    Less => Self::from_parts(true, 0, 1),
+                    Equal => Self::from_parts(false, 0, 0),
+                }
+            }
+
             /// Returns `-self`.
             ///
             /// This is the same as [`Neg`][core::ops::Neg], but can be
@@ -906,6 +911,73 @@ macro_rules! impl_dec_arith {
             pub const fn const_sub(self, rhs: Self) -> Self {
                 // x - y = x + -y
                 self.const_add(rhs.const_neg())
+            }
+
+            /// Returns the maximum of two values.
+            ///
+            /// If one operand is qNaN and the other is a finite
+            /// number, it returns the finite number.
+            ///
+            /// See IEEE 754-2008 `maxNum`.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub fn max(self, rhs: Self) -> Self {
+                if cfg!(debug_assertions) {
+                    println!("max({self}, {rhs})");
+                    println!("cmp({self},{rhs})={:?}", self.const_partial_cmp(rhs));
+                }
+                if !self.is_nan() && !rhs.is_nan() {
+                    // Both are numeric.
+                    use Ordering::*;
+                    let max = match self.total_cmp(rhs) {
+                        Greater | Equal => self,
+                        Less => rhs,
+                    };
+                    return max.canonical();
+                }
+                return if self.is_snan() || rhs.is_snan() || (self.is_nan() && rhs.is_nan()) {
+                    Self::select_nan(self, rhs)
+                } else if self.is_nan() {
+                    rhs.canonical()
+                } else {
+                    self.canonical()
+                };
+            }
+
+            /// Returns the minimum of two values.
+            ///
+            /// If one operand is qNaN and the other is a finite
+            /// number, it returns the finite number.
+            ///
+            /// See IEEE 754-2008 `minNum`.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub fn min(self, rhs: Self) -> Self {
+                use Ordering::*;
+                let min = match self.const_partial_cmp(rhs) {
+                    Some(Greater) => rhs,
+                    Some(Less | Equal) => self,
+                    None => {
+                        if self.is_qnan() && !rhs.is_nan() {
+                            rhs
+                        } else if !self.is_nan() && rhs.is_qnan() {
+                            self
+                        } else {
+                            Self::select_nan(self, rhs)
+                        }
+                    }
+                };
+                min.canonical()
+            }
+
+            /// Returns `(self * a) + b` without any intermediate
+            /// rounding.
+            ///
+            /// This is also known as "fused multiply add."
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn mul_add(self, _a: Self, _b: Self) -> Self {
+                todo!()
             }
 
             /// TODO
@@ -944,7 +1016,39 @@ macro_rules! impl_dec_arith {
                     // sqrt(+inf) == +inf
                     return Self::inf(false);
                 }
-                todo!()
+
+                const APPROX1: $name = $name::new(256, -3);
+                const APPROX2: $name = $name::new(819, -3);
+                const APPROX3: $name = $name::new(819, -4);
+                const APPROX4: $name = $name::new(256, -1);
+                const PT5: $name = $name::new(5, -1);
+
+                let xprec = self.digits();
+                let mut e = self.unbiased_exp() + xprec as $unbiased;
+                let mut f = self.with_unbiased_exp(e);
+
+                let mut approx = if e % 2 == 0 {
+                    // approx := 0.259 + 0.819 * f
+                    APPROX2.mul_add(f, APPROX1)
+                } else {
+                    // f := f/1-
+                    f = f.with_unbiased_exp(f.unbiased_exp() - 1);
+                    // e := e+1
+                    e += 1;
+                    // approx := 0.0819 + 2.59 * f
+                    APPROX4.mul_add(f, APPROX3)
+                };
+
+                let mut p = 3;
+                while p < $name::MAX_PREC {
+                    p = 2 * p - 2;
+                    if p > $name::MAX_PREC {
+                        p = $name::MAX_PREC;
+                    }
+                    // approx := 0.5*(approx + f/approx)
+                    approx = f.const_div(approx).const_add(approx).const_mul(PT5);
+                }
+                approx.with_unbiased_exp(e / 2)
             }
         }
     };
@@ -1004,9 +1108,9 @@ macro_rules! impl_dec_misc {
             }
 
             /// Returns the total ordering between `self` and
-            /// `other`.
+            /// `rhs`.
             ///
-            /// The values are oredered as follows:
+            /// The values are ordered as follows:
             ///
             /// - negative quiet NaN
             /// - negative signaling NaN
@@ -1025,32 +1129,136 @@ macro_rules! impl_dec_misc {
             /// not always agree with [`PartialOrd`] and
             /// [`PartialEq`]. For example, they consider
             /// negative and positive zero equal, while
-            /// `const_total_cmp` doesn't.
-            #[allow(clippy::cast_possible_wrap)]
-            #[allow(clippy::cast_sign_loss)]
-            pub const fn const_total_cmp(self, other: Self) -> Ordering {
-                let mut lhs = self.to_bits() as $icoeff;
-                let mut rhs = other.to_bits() as $icoeff;
+            /// `total_cmp` doesn't.
+            ///
+            /// See IEEE 754-2008 `totalOrder`.
+            pub const fn total_cmp(self, rhs: Self) -> Ordering {
+                if self.signbit() != rhs.signbit() {
+                    return if self.signbit() {
+                        // -x < +x
+                        Ordering::Less
+                    } else {
+                        // +x > -x
+                        Ordering::Greater
+                    };
+                }
+                // Signs are the same.
+                debug_assert!(self.signbit() == rhs.signbit());
 
-                const BITS: u32 = <$icoeff>::BITS;
+                let ord = self.total_cmp_abs(rhs);
+                return if self.signbit() { ord.reverse() } else { ord };
+            }
 
-                lhs ^= (((lhs >> (BITS - 1)) as $ucoeff) >> 1) as $icoeff;
-                rhs ^= (((rhs >> (BITS - 1)) as $ucoeff) >> 1) as $icoeff;
+            /// `totalOrder`, but without comparing signs.
+            #[inline(always)]
+            const fn total_cmp_abs(self, rhs: Self) -> Ordering {
+                debug_assert!(self.signbit() == rhs.signbit());
 
-                if lhs < rhs {
-                    Ordering::Less
-                } else if lhs > rhs {
-                    Ordering::Greater
+                if self.to_bits() == rhs.to_bits() {
+                    // Same bits, so obviously equal.
+                    return Ordering::Equal;
+                }
+
+                if !self.is_finite() || !rhs.is_finite() {
+                    if self.is_nan() || rhs.is_nan() {
+                        return if !self.is_nan() {
+                            // x < NaN
+                            Ordering::Less
+                        } else if !rhs.is_nan() {
+                            // NaN > rhs
+                            Ordering::Greater
+                        } else if self.special_bits() == rhs.special_bits() {
+                            // Both are the same type of NaN. Compare
+                            // the payloads.
+                            let lhs_pl = self.payload();
+                            let rhs_pl = rhs.payload();
+                            $arith::const_cmp(lhs_pl, rhs_pl)
+                        } else if self.is_snan() {
+                            // sNaN < qNaN
+                            Ordering::Less
+                        } else {
+                            // qNaN > sNaN
+                            Ordering::Greater
+                        };
+                    }
+                    // Both are non-NaN.
+                    debug_assert!(!self.is_nan() && !rhs.is_nan());
+
+                    // Therefore, one must be infinite.
+                    debug_assert!(self.is_infinite() || rhs.is_infinite());
+
+                    return if !self.is_infinite() {
+                        // x < inf
+                        Ordering::Less
+                    } else if !rhs.is_infinite() {
+                        // inf > x
+                        Ordering::Greater
+                    } else {
+                        Ordering::Equal
+                    };
+                }
+                // Both are finite.
+                debug_assert!(self.is_finite() && rhs.is_finite());
+
+                self.total_cmp_abs_finite(rhs).then({
+                    if self.biased_exp() > rhs.biased_exp() {
+                        Ordering::Greater
+                    } else if self.biased_exp() < rhs.biased_exp() {
+                        Ordering::Less
+                    } else {
+                        Ordering::Equal
+                    }
+                })
+            }
+
+            #[inline(always)]
+            const fn total_cmp_abs_finite(self, rhs: Self) -> Ordering {
+                debug_assert!(self.is_finite() && rhs.is_finite());
+
+                if self.is_zero() || rhs.is_zero() {
+                    return if !self.is_zero() {
+                        // x > 0
+                        Ordering::Greater
+                    } else if !rhs.is_zero() {
+                        // 0 < x
+                        Ordering::Less
+                    } else {
+                        Ordering::Equal
+                    };
+                }
+                // Both are non-zero.
+                debug_assert!(!self.is_zero() && !rhs.is_zero());
+
+                // Bias doesn't matter for this comparison.
+                let shift = self.biased_exp().abs_diff(rhs.biased_exp()) as u32;
+                if shift >= Self::DIGITS {
+                    // The shift is larger than the maximum
+                    // precision, so the coefficients do not
+                    // overlap. Therefore, the larger exponent is
+                    // the larger number.
+                    return if self.biased_exp() < rhs.biased_exp() {
+                        Ordering::Less
+                    } else {
+                        Ordering::Greater
+                    };
+                }
+                // `shift` is in [0, DIGITS].
+
+                if shift == 0 {
+                    $arith::const_cmp(self.coeff(), rhs.coeff())
+                } else if self.biased_exp() > rhs.biased_exp() {
+                    $arith::const_cmp_shifted(self.coeff(), rhs.coeff(), shift)
                 } else {
-                    Ordering::Equal
+                    $arith::const_cmp_shifted(rhs.coeff(), self.coeff(), shift).reverse()
                 }
             }
 
-            /// Equivalent to
-            /// [`const_total_cmp`][Self::const_total_cmp], but
+            /// Equivalent to [`total_cmp`][Self::total_cmp], but
             /// with both signs assumed to be zero.
             pub const fn total_cmp_magnitude(self, rhs: Self) -> Ordering {
-                self.abs().const_total_cmp(rhs.abs())
+                // NB: This is equivalent to
+                //    self.abs().total_cmp(rhs.abs())
+                self.total_cmp_abs(rhs)
             }
 
             /// Returns `self` with the same sign as `rhs`.

@@ -516,12 +516,55 @@ const fn comb(bits: u32) -> u128 {
     (bits as u128) << Bid128::COMB_SHIFT
 }
 
+impl Bid128 {
+    /// TODO
+    #[no_mangle]
+    pub const fn total_ord2(self, rhs: Self) -> Ordering {
+        if self.signbit() != rhs.signbit() {
+            return if self.signbit() {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
+        }
+        Ordering::Equal
+    }
+
+    /// TODO
+    #[no_mangle]
+    const fn unpack(self) -> Unpacked {
+        let sign = self.signbit();
+        if self.is_finite() {
+            let exp = self.unbiased_exp();
+            let coeff = self.coeff();
+            Unpacked::Finite { sign, exp, coeff }
+        } else {
+            if self.is_snan() {
+                Unpacked::SNaN { sign }
+            } else if self.is_qnan() {
+                Unpacked::QNaN { sign }
+            } else {
+                Unpacked::Infinite { sign }
+            }
+        }
+    }
+}
+
+/// TODO
+enum Unpacked {
+    QNaN { sign: bool },
+    SNaN { sign: bool },
+    Infinite { sign: bool },
+    Finite { sign: bool, exp: i16, coeff: u128 },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dectest::dectests;
 
-    dectests!(d128);
+    mod dectest {
+        crate::dectest::dectests!(d128);
+    }
 
     impl Bid128 {
         const SNAN: Self = Self::snan(false, 0);
@@ -580,34 +623,6 @@ mod tests {
     }
 
     #[test]
-    fn test_partial_cmp() {
-        let tests = [
-            // ("NaN", "3", None),
-            // ("3", "NaN", None),
-            ("2.1", "3", Some(Ordering::Less)),
-            ("2.1", "2.1", Some(Ordering::Equal)),
-            ("2.1", "2.10", Some(Ordering::Equal)),
-            ("3", "2.1", Some(Ordering::Greater)),
-            ("2.1", "-3", Some(Ordering::Greater)),
-            ("-3", "2.1", Some(Ordering::Less)),
-        ];
-        for (i, (lhs, rhs, want)) in tests.into_iter().enumerate() {
-            println!("lhs={lhs} rhs={rhs}");
-            let x: Bid128 = lhs.parse().unwrap();
-            let y: Bid128 = rhs.parse().unwrap();
-            println!("x={x} y={y}");
-            let got = PartialOrd::partial_cmp(&x, &y);
-            assert_eq!(got, want, "#{i}: partial_cmp({lhs}, {rhs})");
-            assert_eq!(
-                x.const_partial_cmp(y),
-                want,
-                "#{i}: const_partial_cmp({lhs}, {rhs})"
-            );
-            println!("");
-        }
-    }
-
-    #[test]
     fn test_shift() {
         let lhs = Bid128::new(1230, -1);
         let rhs = Bid128::new(12300, -2);
@@ -644,5 +659,50 @@ mod tests {
                 assert_eq!(exp == 0 && coeff == 0, got.is_canonical(), "#{exp}");
             }
         }
+    }
+
+    #[test]
+    fn test_special_ord() {
+        let qnan = Bid128::nan(false, 0);
+        let snan = Bid128::snan(false, 0);
+        let inf = Bid128::inf(false);
+        let max = Bid128::MAX;
+        let min = Bid128::MIN;
+        let zero = Bid128::zero();
+
+        impl Bid128 {
+            const fn sign_mag(self) -> i128 {
+                let mut left = self.to_bits() as i128;
+                left ^= (((left >> 127) as u128) >> 1) as i128;
+                left
+            }
+        }
+
+        println!("qNaN = {:>3}", qnan.special_bits());
+        println!("sNaN = {:>3}", snan.special_bits());
+        println!(" inf = {:>3}", inf.special_bits());
+        println!(" max = {:>3}", max.special_bits());
+        println!(" min = {:>3}", min.special_bits());
+        println!("zero = {:>3}", zero.special_bits());
+
+        println!("");
+
+        println!("qNaN = {:>39}", qnan.to_bits());
+        println!("sNaN = {:>39}", snan.to_bits());
+        println!(" inf = {:>39}", inf.to_bits());
+        println!(" max = {:>39}", max.to_bits());
+        println!(" min = {:>39}", min.to_bits());
+        println!("zero = {:>39}", zero.to_bits());
+
+        println!("");
+
+        println!("qNaN = {:>39}", qnan.sign_mag());
+        println!("sNaN = {:>39}", snan.sign_mag());
+        println!(" inf = {:>39}", inf.sign_mag());
+        println!(" max = {:>39}", max.sign_mag());
+        println!(" min = {:>39}", min.sign_mag());
+        println!("zero = {:>39}", zero.sign_mag());
+
+        assert!(false);
     }
 }

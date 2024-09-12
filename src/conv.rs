@@ -1,10 +1,10 @@
 use core::{fmt, mem::MaybeUninit, str};
 
-use super::bid::{Bid128, Bid64};
+use super::bid::{Bid128, Bid32, Bid64};
 
 mod private {
     use super::{Buffer, Fmt};
-    use crate::bid::{Bid128, Bid64};
+    use crate::bid::{Bid128, Bid32, Bid64};
 
     pub trait Sealed {
         fn write(self, buf: &mut Buffer, fmt: Fmt) -> &str;
@@ -37,14 +37,29 @@ mod private {
             }
         }
     }
+
+    impl Sealed for Bid32 {
+        fn write(self, buf: &mut Buffer, fmt: Fmt) -> &str {
+            match fmt {
+                Fmt::UpperExp => {
+                    todo!()
+                }
+                Fmt::LowerExp => {
+                    todo!()
+                }
+                Fmt::Default => self.format(buf),
+            }
+        }
+    }
 }
 use private::Sealed;
 
 /// A floating point decimal number.
 pub trait Number: Sealed {}
 
-impl Number for Bid128 {}
+impl Number for Bid32 {}
 impl Number for Bid64 {}
+impl Number for Bid128 {}
 
 /// A buffer for converting floating point decimals to text.
 #[derive(Copy, Debug)]
