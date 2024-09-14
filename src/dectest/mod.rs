@@ -44,103 +44,76 @@ pub struct Test<'a> {
 impl Test<'_> {
     /// Runs a test.
     pub fn run<B: Backend>(&self, backend: &B) -> Result<(), Error> {
-        let result = self.result;
+        macro_rules! unary {
+            (@str $input:expr, $f:ident) => {
+                match $input {
+                    input => {
+                        let input = parse_input(backend, input)?;
+                        let got = backend.$f(input);
+                        Self::check_str(got, self.result)?;
+                    }
+                }
+            };
+            ($input:expr, $f:ident) => {
+                match $input {
+                    input => {
+                        let input = parse_input(backend, input)?;
+                        let got = backend.$f(input);
+                        Self::check(backend, got, self.result)?;
+                    }
+                }
+            };
+        }
+
+        macro_rules! binary {
+            (($lhs:expr, $rhs:expr), $f:ident) => {
+                match ($lhs, $rhs) {
+                    (lhs, rhs) => {
+                        let lhs = parse_input(backend, lhs)?;
+                        let rhs = parse_input(backend, rhs)?;
+                        let got = backend.$f(lhs, rhs);
+                        Self::check(backend, got, self.result)?;
+                    }
+                }
+            };
+        }
+
         match &self.op {
             Op::Add { .. } => {
-                // TODO
-                // let lhs = parse_input(backend, lhs).unwrap();
-                // let rhs = parse_input(backend, rhs).unwrap();
-                // let got = backend.subtract(lhs, rhs);
-                // self.check(backend, got, result)?;
+                // binary!((lhs, rhs), add)
             }
             Op::Apply { input } => {
                 let got = parse_input(backend, input)?;
-                self.check(backend, got, result)?;
+                Self::check(backend, got, self.result)?;
             }
-            Op::Canonical { input } => {
-                let x = parse_input(backend, input)?;
-                let got = backend.canonical(x);
-                self.check(backend, got, result)?;
-            }
-            Op::Compare { lhs, rhs } => {
-                let lhs = parse_input(backend, lhs)?;
-                let rhs = parse_input(backend, rhs)?;
-                let got = backend.compare(lhs, rhs);
-                self.check(backend, got, result)?;
-            }
-            Op::CompareTotal { lhs, rhs } => {
-                let lhs = parse_input(backend, lhs)?;
-                let rhs = parse_input(backend, rhs)?;
-                let got = backend.comparetotal(lhs, rhs);
-                self.check(backend, got, result)?;
-            }
-            Op::Copy { input } => {
-                let x = parse_input(backend, input)?;
-                let got = backend.copy(x);
-                self.check(backend, got, result)?;
-            }
-            Op::CopyAbs { input } => {
-                let x = parse_input(backend, input)?;
-                let got = backend.copyabs(x);
-                self.check(backend, got, result)?;
-            }
-            Op::CopyNegate { input } => {
-                let x = parse_input(backend, input)?;
-                let got = backend.copynegate(x);
-                self.check(backend, got, result)?;
-            }
-            Op::CopySign { lhs, rhs } => {
-                let lhs = parse_input(backend, lhs)?;
-                let rhs = parse_input(backend, rhs)?;
-                let got = backend.copysign(lhs, rhs);
-                self.check(backend, got, result)?;
-            }
-            Op::Max { lhs, rhs } => {
-                let lhs = parse_input(backend, lhs)?;
-                let rhs = parse_input(backend, rhs)?;
-                let got = backend.max(lhs, rhs);
-                self.check(backend, got, result)?;
-            }
-            Op::Min { lhs, rhs } => {
-                let lhs = parse_input(backend, lhs)?;
-                let rhs = parse_input(backend, rhs)?;
-                let got = backend.min(lhs, rhs);
-                self.check(backend, got, result)?;
-            }
+            Op::Canonical { input } => unary!(input, canonical),
+            Op::Class { input } => unary!(@str input, class),
+            Op::Compare { lhs, rhs } => binary!((lhs, rhs), compare),
+            Op::CompareTotal { lhs, rhs } => binary!((lhs, rhs), comparetotal),
+            Op::Copy { input } => unary!(input, copy),
+            Op::CopyAbs { input } => unary!(input, copyabs),
+            Op::CopyNegate { input } => unary!(input, copynegate),
+            Op::CopySign { lhs, rhs } => binary!((lhs, rhs), copysign),
+            Op::Max { lhs, rhs } => binary!((lhs, rhs), max),
+            Op::Min { lhs, rhs } => binary!((lhs, rhs), min),
             Op::Multiply { .. } => {
-                // TODO
-                // let lhs = parse_input(backend, lhs).unwrap();
-                // let rhs = parse_input(backend, rhs).unwrap();
-                // let got = backend.multiply(lhs, rhs);
-                // self.check(backend, got, result)?;
+                // binary!((lhs, rhs), multiply)
             }
             Op::Subtract { .. } => {
-                // TODO
-                // let lhs = parse_input(backend, lhs).unwrap();
-                // let rhs = parse_input(backend, rhs).unwrap();
-                // let got = backend.subtract(lhs, rhs);
-                // self.check(backend, got, result)?;
+                // binary!((lhs, rhs), subtract)
             }
             Op::ToIntegralX { .. } => {
-                // TODO
-                // let lhs = parse_input(backend, lhs).unwrap();
-                // let rhs = parse_input(backend, rhs).unwrap();
-                // let got = backend.tointegralx(lhs, rhs);
-                // self.check(backend, got, result)?;
+                // unary!(...)
             }
             Op::Quantize { .. } => {
-                // TODO
-                // let lhs = parse_input(backend, lhs).unwrap();
-                // let rhs = parse_input(backend, rhs).unwrap();
-                // let got = backend.quantize(lhs, rhs);
-                // self.check(backend, got, result)?;
+                // unary!(...)
             }
             _ => return Err(Error::Unimplemented),
         };
         Ok(())
     }
 
-    fn check<B: Backend>(&self, backend: &B, got: B::Dec, want: &str) -> Result<(), Error> {
+    fn check<B: Backend>(backend: &B, got: B::Dec, want: &str) -> Result<(), Error> {
         if want == "#" {
             return Err(Error::Unsupported);
         }
@@ -155,7 +128,10 @@ impl Test<'_> {
             };
         }
 
-        let got = got.to_string();
+        Self::check_str(&got.to_string(), want)
+    }
+
+    fn check_str(got: &str, want: &str) -> Result<(), Error> {
         if got != want {
             failure!("got `\"{got}\"`, expected `\"{want}\"`")
         } else {
@@ -165,9 +141,6 @@ impl Test<'_> {
 }
 
 fn parse_input<B: Backend>(backend: &B, s: &str) -> Result<B::Dec, Error> {
-    let s = s.strip_prefix('\'').unwrap_or(s);
-    let s = s.strip_suffix('\'').unwrap_or(s);
-
     if s == "#" {
         Err(Error::Unsupported)
     } else if let Some(s) = s.strip_prefix('#') {
@@ -235,6 +208,7 @@ pub trait Backend {
     fn to_bits(&self, dec: Self::Dec) -> Self::Bits;
 
     fn canonical(&self, x: Self::Dec) -> Self::Dec;
+    fn class(&self, x: Self::Dec) -> &'static str;
     fn compare(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn comparetotal(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn copy(&self, x: Self::Dec) -> Self::Dec {
@@ -280,6 +254,10 @@ impl Backend for Dec128 {
 
     fn canonical(&self, x: Self::Dec) -> Self::Dec {
         x.canonical()
+    }
+
+    fn class(&self, x: Self::Dec) -> &'static str {
+        x.class()
     }
 
     fn compare(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
@@ -355,6 +333,7 @@ macro_rules! dectests {
     ($backend:ty, $prefix:literal) => {
         $crate::dectest::dectests!($backend, $prefix,
             test_canonical => "Canonical",
+            test_class => "Class",
             test_compare => "Compare",
             test_compare_total => "CompareTotal",
             test_encode => "Encode",

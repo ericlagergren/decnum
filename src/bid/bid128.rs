@@ -574,12 +574,14 @@ mod tests {
 
     #[test]
     fn test_idk() {
-        let x = Bid128::parse("-1e+77").unwrap();
+        let x = Bid128::parse("1.00000000000000000000000000000000E-6143").unwrap();
         println!("x = {x}");
-        let y = Bid128::parse("-1e+11").unwrap();
-        println!("y = {y}");
-
-        assert_eq!(x.partial_cmp(&y), Some(Ordering::Less));
+        println!("x = {}", x.class());
+        println!("special = {}", x.is_special());
+        println!("zero = {}", x.is_zero());
+        println!("adj = {}", x.adjusted_exp());
+        println!("min = {}", Bid128::MIN_EXP);
+        assert!(false);
     }
 
     #[test]

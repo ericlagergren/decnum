@@ -203,6 +203,7 @@ impl<'a> Buf<'a> {
             "apply" => unary!(Apply),
             "canonical" => unary!(Canonical),
             "compare" => binary!(Compare),
+            "class" => unary!(Class),
             "comparesig" => binary!(CompareSig),
             "comparetotal" => binary!(CompareTotal),
             "copy" => unary!(Copy),

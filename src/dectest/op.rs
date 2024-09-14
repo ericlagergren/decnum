@@ -8,7 +8,7 @@ pub enum Op<'a> {
     And,
     Apply { input: &'a str },
     Canonical { input: &'a str },
-    Class,
+    Class { input: &'a str },
     Compare { lhs: &'a str, rhs: &'a str },
     CompareSig { lhs: &'a str, rhs: &'a str },
     CompareTotal { lhs: &'a str, rhs: &'a str },
@@ -70,6 +70,9 @@ impl fmt::Display for Op<'_> {
             }
             Self::Canonical { input } => {
                 write!(f, "canonical {input}")
+            }
+            Self::Class { input } => {
+                write!(f, "class {input}")
             }
             Self::Compare { lhs, rhs } => {
                 write!(f, "compare {lhs} {rhs}")
