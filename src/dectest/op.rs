@@ -3,58 +3,20 @@ use std::fmt;
 /// TODO
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Op<'a> {
-    Abs {
-        input: &'a str,
-        result: &'a str,
-    },
-    Add {
-        lhs: &'a str,
-        rhs: &'a str,
-        result: &'a str,
-    },
+    Abs { input: &'a str },
+    Add { lhs: &'a str, rhs: &'a str },
     And,
-    Apply {
-        input: &'a str,
-        result: &'a str,
-    },
-    Canonical {
-        input: &'a str,
-        result: &'a str,
-    },
+    Apply { input: &'a str },
+    Canonical { input: &'a str },
     Class,
-    Compare {
-        lhs: &'a str,
-        rhs: &'a str,
-        result: &'a str,
-    },
-    CompareSig {
-        lhs: &'a str,
-        rhs: &'a str,
-        result: &'a str,
-    },
-    CompareTotal {
-        lhs: &'a str,
-        rhs: &'a str,
-        result: &'a str,
-    },
+    Compare { lhs: &'a str, rhs: &'a str },
+    CompareSig { lhs: &'a str, rhs: &'a str },
+    CompareTotal { lhs: &'a str, rhs: &'a str },
     CompareTotMag,
-    Copy {
-        input: &'a str,
-        result: &'a str,
-    },
-    CopyAbs {
-        input: &'a str,
-        result: &'a str,
-    },
-    CopyNegate {
-        input: &'a str,
-        result: &'a str,
-    },
-    CopySign {
-        lhs: &'a str,
-        rhs: &'a str,
-        result: &'a str,
-    },
+    Copy { input: &'a str },
+    CopyAbs { input: &'a str },
+    CopyNegate { input: &'a str },
+    CopySign { lhs: &'a str, rhs: &'a str },
     Divide,
     DivideInt,
     Exp,
@@ -63,35 +25,19 @@ pub enum Op<'a> {
     Ln,
     Log10,
     Logb,
-    Max {
-        lhs: &'a str,
-        rhs: &'a str,
-        result: &'a str,
-    },
-    Min {
-        lhs: &'a str,
-        rhs: &'a str,
-        result: &'a str,
-    },
+    Max { lhs: &'a str, rhs: &'a str },
+    Min { lhs: &'a str, rhs: &'a str },
     MaxMag,
     MinMag,
     Minus,
-    Multiply {
-        lhs: &'a str,
-        rhs: &'a str,
-        result: &'a str,
-    },
+    Multiply { lhs: &'a str, rhs: &'a str },
     NextMinus,
     NextPlus,
     NextToward,
     Or,
     Plus,
     Power,
-    Quantize {
-        lhs: &'a str,
-        rhs: &'a str,
-        result: &'a str,
-    },
+    Quantize { lhs: &'a str, rhs: &'a str },
     Reduce,
     Remainder,
     Remaindernear,
@@ -101,17 +47,10 @@ pub enum Op<'a> {
     Scaleb,
     Shift,
     SquareRoot,
-    Subtract {
-        lhs: &'a str,
-        rhs: &'a str,
-        result: &'a str,
-    },
+    Subtract { lhs: &'a str, rhs: &'a str },
     ToEng,
     ToIntegral,
-    ToIntegralX {
-        input: &'a str,
-        result: &'a str,
-    },
+    ToIntegralX { input: &'a str },
     ToSci,
     Trim,
     Xor,
@@ -120,56 +59,56 @@ pub enum Op<'a> {
 impl fmt::Display for Op<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Abs { input, result } => {
-                write!(f, "abs {input} -> {result}")
+            Self::Abs { input } => {
+                write!(f, "abs {input}")
             }
-            Self::Add { lhs, rhs, result } => {
-                write!(f, "add {lhs} {rhs} -> {result}")
+            Self::Add { lhs, rhs } => {
+                write!(f, "add {lhs} {rhs}")
             }
-            Self::Apply { input, result } => {
-                write!(f, "apply {input} -> {result}")
+            Self::Apply { input } => {
+                write!(f, "apply {input}")
             }
-            Self::Canonical { input, result } => {
-                write!(f, "canonical {input} -> {result}")
+            Self::Canonical { input } => {
+                write!(f, "canonical {input}")
             }
-            Self::Compare { lhs, rhs, result } => {
-                write!(f, "compare {lhs} {rhs} -> {result}")
+            Self::Compare { lhs, rhs } => {
+                write!(f, "compare {lhs} {rhs}")
             }
-            Self::CompareSig { lhs, rhs, result } => {
-                write!(f, "comparesig {lhs} {rhs} -> {result}")
+            Self::CompareSig { lhs, rhs } => {
+                write!(f, "comparesig {lhs} {rhs}")
             }
-            Self::CompareTotal { lhs, rhs, result } => {
-                write!(f, "comparetotal {lhs} {rhs} -> {result}")
+            Self::CompareTotal { lhs, rhs } => {
+                write!(f, "comparetotal {lhs} {rhs}")
             }
-            Self::Copy { input, result } => {
-                write!(f, "copy {input} -> {result}")
+            Self::Copy { input } => {
+                write!(f, "copy {input}")
             }
-            Self::CopyAbs { input, result } => {
-                write!(f, "copyabs {input} -> {result}")
+            Self::CopyAbs { input } => {
+                write!(f, "copyabs {input}")
             }
-            Self::CopyNegate { input, result } => {
-                write!(f, "copynegate {input} -> {result}")
+            Self::CopyNegate { input } => {
+                write!(f, "copynegate {input}")
             }
-            Self::CopySign { lhs, rhs, result } => {
-                write!(f, "copysign {lhs} {rhs} -> {result}")
+            Self::CopySign { lhs, rhs } => {
+                write!(f, "copysign {lhs} {rhs}")
             }
-            Self::Max { lhs, rhs, result } => {
-                write!(f, "max {lhs} {rhs} -> {result}")
+            Self::Max { lhs, rhs } => {
+                write!(f, "max {lhs} {rhs}")
             }
-            Self::Min { lhs, rhs, result } => {
-                write!(f, "min {lhs} {rhs} -> {result}")
+            Self::Min { lhs, rhs } => {
+                write!(f, "min {lhs} {rhs}")
             }
-            Self::Multiply { lhs, rhs, result } => {
-                write!(f, "multiply {lhs} {rhs} -> {result}")
+            Self::Multiply { lhs, rhs } => {
+                write!(f, "multiply {lhs} {rhs}")
             }
-            Self::Quantize { lhs, rhs, result } => {
-                write!(f, "quantize {lhs} {rhs} -> {result}")
+            Self::Quantize { lhs, rhs } => {
+                write!(f, "quantize {lhs} {rhs}")
             }
-            Self::Subtract { lhs, rhs, result } => {
-                write!(f, "subtract {lhs} {rhs} -> {result}")
+            Self::Subtract { lhs, rhs } => {
+                write!(f, "subtract {lhs} {rhs}")
             }
-            Self::ToIntegralX { input, result } => {
-                write!(f, "tointegralx {input} -> {result}")
+            Self::ToIntegralX { input } => {
+                write!(f, "tointegralx {input}")
             }
             _ => write!(f, "other op"),
         }

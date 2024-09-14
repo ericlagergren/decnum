@@ -1,169 +1,178 @@
-use anyhow::{bail, Context, Result};
+use std::str::Chars;
+
+use anyhow::{bail, ensure, Context, Result};
 
 use super::{op::Op, Test};
 use crate::ctx::RoundingMode;
 
 /// Parses test cases.
 pub fn parse(s: &str) -> Result<Vec<Test<'_>>> {
-    let mut extended = 1;
-    let mut precision: u32 = 0;
-    let mut max_exp: i16 = 0;
-    let mut min_exp: i16 = 0;
+    let mut extended = true;
+    let mut precision = 0;
+    let mut max_exp = 0;
+    let mut min_exp = 0;
     let mut rounding: RoundingMode = RoundingMode::default();
-    let mut clamp = 0;
-    let mut cases = Vec::new();
+    let mut clamp = false;
+    let mut tests = Vec::new();
+
     for (i, line) in s.lines().enumerate() {
-        if line.is_empty() {
-            continue;
-        }
-
-        if line.starts_with("--") {
-            // A comment.
-            continue;
-        }
-
-        if let Some((_, _)) = line.split_once("version: ") {
-            continue;
-        }
-
-        if let Some((_, v)) = line.split_once("precision: ") {
-            precision = v
-                .trim()
-                .parse()
-                .with_context(|| format!("#{i}: unable to parse precision: `{v}`"))?;
-            continue;
-        }
-
-        if let Some((_, v)) = line.split_once("rounding: ") {
-            rounding = RoundingMode::try_from_str(v.trim())
-                .with_context(|| format!("#{i}: invalid rounding mode: `{v}`"))?;
-            continue;
-        }
-
-        if let Some((_, v)) = line.split_once("maxExponent: ") {
-            max_exp = v
-                .trim()
-                .parse()
-                .with_context(|| format!("#{i}: unable to parse `maxExponent`: `{v}`"))?;
-            continue;
-        }
-
-        if let Some((_, v)) = line.split_once("minExponent: ") {
-            min_exp = v
-                .trim()
-                .parse()
-                .with_context(|| format!("#{i}: unable to parse `minExponent`: `{v}`"))?;
-            continue;
-        }
-        if let Some((_, v)) = line.split_once("minexponent: ") {
-            min_exp = v
-                .trim()
-                .parse()
-                .with_context(|| format!("#{i}: unable to parse `minexponent`: `{v}`"))?;
-            continue;
-        }
-
-        if let Some((_, v)) = line.split_once("extended: ") {
-            extended = v
-                .trim()
-                .parse()
-                .with_context(|| format!("#{i}: unable to parse `extended`: `{v}`"))?;
-            continue;
-        }
-
-        if let Some((_, v)) = line.split_once("clamp: ") {
-            clamp = v
-                .trim()
-                .parse()
-                .with_context(|| format!("#{i}: unable to parse `clamp`: `{v}`"))?;
-            continue;
-        }
-
-        //println!("line = {line}");
-        let (name, rest) = line
-            .split_once(" ")
-            .with_context(|| format!("#{i}: test case missing name: `{line}`"))?;
-        let (op, rest) = Op::parse(rest.trim())
-            .with_context(|| format!("#{i}: unable to parse op: `{rest}`"))?;
-        let _ = rest; // TODO: conds
-        let case = Test {
-            extended: extended == 1,
-            clamp: clamp == 1,
-            precision,
-            max_exp,
-            min_exp,
-            rounding,
-            id: name,
-            op,
+        let line = match Buf::new(line).parse_line() {
+            Ok(None) => continue,
+            Ok(Some(line)) => line,
+            Err(err) => bail!("line #{}: {err}", i + 1),
         };
-        cases.push(case);
+        use Directive::*;
+        match line {
+            Line::Case { id, op, result } => tests.push(Test {
+                extended,
+                clamp,
+                precision,
+                max_exp,
+                min_exp,
+                rounding,
+                id,
+                op,
+                result,
+            }),
+            Line::Directive(d) => match d {
+                Clamp(v) => clamp = v,
+                Extended(v) => extended = v,
+                MaxExponent(n) => max_exp = n,
+                MinExponent(n) => min_exp = n,
+                Precision(n) => precision = n,
+                Rounding(mode) => rounding = mode,
+                Version(_) => {}
+            },
+        }
     }
-    assert!(!cases.is_empty());
-    Ok(cases)
+    assert!(!tests.is_empty());
+    Ok(tests)
 }
 
 struct Buf<'a> {
-    s: &'a str,
+    chars: Chars<'a>,
 }
 
 impl<'a> Buf<'a> {
+    fn new(s: &'a str) -> Self {
+        Self { chars: s.chars() }
+    }
+
+    /// Advances if the next characters are `s`.
     fn consume(&mut self, s: &str) -> bool {
-        if let Some(s) = self.s.strip_prefix(s) {
-            self.s = s;
+        if let Some(s) = self.chars.as_str().strip_prefix(s) {
+            self.chars = s.chars();
             true
         } else {
             false
         }
     }
 
-    fn peek(&self) -> Option<char> {
-        self.s.chars().next()
+    /// Returns the next character.
+    fn next(&mut self) -> Option<char> {
+        self.chars.next()
     }
 
+    /// Peeks at the next character.
+    fn peek(&self) -> Option<char> {
+        self.chars.clone().next()
+    }
+
+    fn drain(&mut self) {
+        while let Some(_) = self.next() {}
+    }
+
+    /// Parses a [`Line`].
     fn parse_line(&mut self) -> Result<Option<Line<'a>>> {
         let token = match self.parse_token() {
             Some(token) => token,
             None => return Ok(None),
         };
         if let Some(kw) = token.strip_suffix(':') {
-            todo!()
+            let val = self.require_token("value")?;
+            Directive::parse(kw, val).map(Line::Directive).map(Some)
         } else {
             let id = token;
             let op = self.parse_op()?;
-            todo!()
+            self.expect_token("->")?;
+            let result = self.require_token("result")?;
+            while let Some(_) = self.parse_token() {
+                // TODO(eric): parse conds
+            }
+            Ok(Some(Line::Case { id, op, result }))
         }
     }
 
+    /// Parses the next token.
     fn parse_token(&mut self) -> Option<&'a str> {
-        self.s = self.s.trim_start();
+        while self.consume(" ") {}
         if self.consume("--") {
-            self.s = "";
+            self.drain();
             return None;
         }
         match self.peek() {
             Some(quote @ ('\'' | '"')) => {
-                self.s = &self.s[1..];
+                self.next();
                 self.parse_quoted_token(quote)
             }
             _ => self.parse_unquoted_token(),
         }
     }
 
+    /// Returns `Err` if the next token is not `token`.
+    fn expect_token(&mut self, token: &str) -> Result<()> {
+        let token = self.require_token(token)?;
+        ensure!(token == "->");
+        Ok(())
+    }
+
+    /// Returns `err` if there is not a token.
     fn require_token(&mut self, what: &str) -> Result<&'a str> {
         self.parse_token()
             .with_context(|| format!("expected `{what}` token"))
     }
 
-    fn parse_quoted_token(&mut self, _quote: char) -> Option<&'a str> {
-        None
+    /// Parses a quoted token.
+    fn parse_quoted_token(&mut self, quote: char) -> Option<&'a str> {
+        let mut n = 0;
+        let orig = self.chars.as_str();
+        while let Some(c) = self.next() {
+            if c == quote {
+                if self.peek() == Some(quote) {
+                    n += c.len_utf8();
+                    self.next();
+                } else {
+                    break;
+                }
+            } else {
+                n += c.len_utf8();
+            }
+        }
+        Some(&orig[..n])
     }
 
+    /// Parses an unquoted token.
     fn parse_unquoted_token(&mut self) -> Option<&'a str> {
-        let (token, rest) = self.s.split_once(' ')?;
-        self.s = rest;
-        Some(token)
+        let mut n = 0;
+        let orig = self.chars.as_str();
+        while let Some(c) = self.peek() {
+            match c {
+                ' ' => break,
+                c => {
+                    n += c.len_utf8();
+                    self.next();
+                }
+            }
+        }
+        let token = &orig[..n];
+        if token.is_empty() {
+            None
+        } else {
+            Some(token)
+        }
     }
 
+    /// Parses an [`Op`].
     fn parse_op(&mut self) -> Result<Op<'a>> {
         let name = self.require_token("operation")?;
 
@@ -176,7 +185,6 @@ impl<'a> Buf<'a> {
             ($name:ident) => {
                 Op::$name {
                     input: op!("input"),
-                    result: op!("result"),
                 }
             };
         }
@@ -185,7 +193,6 @@ impl<'a> Buf<'a> {
                 Op::$name {
                     lhs: op!("lhs"),
                     rhs: op!("rhs"),
-                    result: op!("result"),
                 }
             };
         }
@@ -214,11 +221,31 @@ impl<'a> Buf<'a> {
     }
 }
 
+fn parse_bool(s: &str) -> Result<bool> {
+    match s {
+        "0" => Ok(true),
+        "1" => Ok(false),
+        _ => bail!("invalid bool: `{s}`"),
+    }
+}
+
+fn parse_rounding(s: &str) -> Result<RoundingMode> {
+    RoundingMode::try_from_str(s).with_context(|| format!("unknown RoundingMode: `{s}`"))
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Line<'a> {
-    Test(Test<'a>),
+    /// A test case.
+    Case {
+        id: &'a str,
+        op: Op<'a>,
+        result: &'a str,
+    },
+    /// A test directive.
     Directive(Directive<'a>),
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Directive<'a> {
     Clamp(bool),
     Extended(bool),
@@ -227,4 +254,21 @@ enum Directive<'a> {
     Precision(i32),
     Rounding(RoundingMode),
     Version(&'a str),
+}
+
+impl<'a> Directive<'a> {
+    fn parse(kw: &str, val: &'a str) -> Result<Self> {
+        use Directive::*;
+        let dir = match kw {
+            "clamp" => Clamp(parse_bool(val)?),
+            "extended" => Extended(parse_bool(val)?),
+            "maxexponent" | "maxExponent" => MaxExponent(val.parse()?),
+            "minexponent" | "minExponent" => MinExponent(val.parse()?),
+            "rounding" => Rounding(parse_rounding(val)?),
+            "precision" => Precision(val.parse()?),
+            "version" => Version(val),
+            _ => bail!("unknown directive: `{kw}`"),
+        };
+        Ok(dir)
+    }
 }

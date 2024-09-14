@@ -1,12 +1,16 @@
+//! Partially borrowed from [`rust-dec`].
+//!
+//! [`rust-dec`]: https://github.com/MaterializeInc/rust-dec/tree/e33480a6915c4767c9e56e3c5d1394b0b89e5fbe/dectest
+
 #![cfg(test)]
 
 mod op;
 mod parse;
-
 use std::{error, fmt};
 
 use anyhow::{anyhow, Result};
 use op::Op;
+pub use parse::parse;
 
 use super::{conv::ParseError, ctx::RoundingMode};
 use crate::{bid::Bid128, dpd::Dpd128};
@@ -28,17 +32,19 @@ macro_rules! failure {
 pub struct Test<'a> {
     pub extended: bool,
     pub clamp: bool,
-    pub precision: u32,
-    pub max_exp: i16,
-    pub min_exp: i16,
+    pub precision: i32,
+    pub max_exp: i32,
+    pub min_exp: i32,
     pub rounding: RoundingMode,
     pub id: &'a str,
     pub op: Op<'a>,
+    pub result: &'a str,
 }
 
 impl Test<'_> {
     /// Runs a test.
     pub fn run<B: Backend>(&self, backend: &B) -> Result<(), Error> {
+        let result = self.result;
         match &self.op {
             Op::Add { .. } => {
                 // TODO
@@ -47,55 +53,55 @@ impl Test<'_> {
                 // let got = backend.subtract(lhs, rhs);
                 // self.check(backend, got, result)?;
             }
-            Op::Apply { input, result } => {
+            Op::Apply { input } => {
                 let got = parse_input(backend, input)?;
                 self.check(backend, got, result)?;
             }
-            Op::Canonical { input, result } => {
+            Op::Canonical { input } => {
                 let x = parse_input(backend, input)?;
                 let got = backend.canonical(x);
                 self.check(backend, got, result)?;
             }
-            Op::Compare { lhs, rhs, result } => {
+            Op::Compare { lhs, rhs } => {
                 let lhs = parse_input(backend, lhs)?;
                 let rhs = parse_input(backend, rhs)?;
                 let got = backend.compare(lhs, rhs);
                 self.check(backend, got, result)?;
             }
-            Op::CompareTotal { lhs, rhs, result } => {
+            Op::CompareTotal { lhs, rhs } => {
                 let lhs = parse_input(backend, lhs)?;
                 let rhs = parse_input(backend, rhs)?;
                 let got = backend.comparetotal(lhs, rhs);
                 self.check(backend, got, result)?;
             }
-            Op::Copy { input, result } => {
+            Op::Copy { input } => {
                 let x = parse_input(backend, input)?;
                 let got = backend.copy(x);
                 self.check(backend, got, result)?;
             }
-            Op::CopyAbs { input, result } => {
+            Op::CopyAbs { input } => {
                 let x = parse_input(backend, input)?;
                 let got = backend.copyabs(x);
                 self.check(backend, got, result)?;
             }
-            Op::CopyNegate { input, result } => {
+            Op::CopyNegate { input } => {
                 let x = parse_input(backend, input)?;
                 let got = backend.copynegate(x);
                 self.check(backend, got, result)?;
             }
-            Op::CopySign { lhs, rhs, result } => {
+            Op::CopySign { lhs, rhs } => {
                 let lhs = parse_input(backend, lhs)?;
                 let rhs = parse_input(backend, rhs)?;
                 let got = backend.copysign(lhs, rhs);
                 self.check(backend, got, result)?;
             }
-            Op::Max { lhs, rhs, result } => {
+            Op::Max { lhs, rhs } => {
                 let lhs = parse_input(backend, lhs)?;
                 let rhs = parse_input(backend, rhs)?;
                 let got = backend.max(lhs, rhs);
                 self.check(backend, got, result)?;
             }
-            Op::Min { lhs, rhs, result } => {
+            Op::Min { lhs, rhs } => {
                 let lhs = parse_input(backend, lhs)?;
                 let rhs = parse_input(backend, rhs)?;
                 let got = backend.min(lhs, rhs);

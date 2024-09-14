@@ -953,21 +953,26 @@ macro_rules! impl_dec_arith {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub fn min(self, rhs: Self) -> Self {
-                use Ordering::*;
-                let min = match self.const_partial_cmp(rhs) {
-                    Some(Greater) => rhs,
-                    Some(Less | Equal) => self,
-                    None => {
-                        if self.is_qnan() && !rhs.is_nan() {
-                            rhs
-                        } else if !self.is_nan() && rhs.is_qnan() {
-                            self
-                        } else {
-                            Self::select_nan(self, rhs)
-                        }
-                    }
+                if cfg!(debug_assertions) {
+                    println!("min({self}, {rhs})");
+                    println!("cmp({self},{rhs})={:?}", self.const_partial_cmp(rhs));
+                }
+                if !self.is_nan() && !rhs.is_nan() {
+                    // Both are numeric.
+                    use Ordering::*;
+                    let min = match self.total_cmp(rhs) {
+                        Less | Equal => self,
+                        Greater => rhs,
+                    };
+                    return min.canonical();
+                }
+                return if self.is_snan() || rhs.is_snan() || (self.is_nan() && rhs.is_nan()) {
+                    Self::select_nan(self, rhs)
+                } else if self.is_nan() {
+                    rhs.canonical()
+                } else {
+                    self.canonical()
                 };
-                min.canonical()
             }
 
             /// Returns `(self * a) + b` without any intermediate
