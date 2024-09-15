@@ -253,10 +253,10 @@ macro_rules! impl_dtoa {
                 } else {
                     write!(
                         f,
-                        "[{sign},{},{},form={}]",
-                        self.coeff(),
-                        self.unbiased_exp(),
-                        u8::from(self.is_form2()) + 1,
+                        "[{sign},{exp},{coeff},form={form}]",
+                        coeff = self.coeff(),
+                        exp = self.unbiased_exp(),
+                        form = u8::from(self.is_form2()) + 1,
                     )
                 }
             }

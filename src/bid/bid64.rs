@@ -38,6 +38,7 @@ impl_dec! {
     unbiased_exp = i16,
     comb = u16,
     arith = arith64,
+    prefix = "dd",
 }
 
 // To/from reprs.
@@ -159,7 +160,6 @@ const fn signbit(sign: bool) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decnumber::Quad;
 
     #[test]
     fn test_exp() {
@@ -182,7 +182,7 @@ mod tests {
     fn test_from_u32() {
         for x in 0..=u32::MAX {
             let got = Bid64::from_u32(x);
-            let want = Quad::from_u32(x);
+            let want = crate::decnumber::Quad::from_u32(x);
             assert_eq!(got, want, "#{x}");
         }
     }

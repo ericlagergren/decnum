@@ -48,6 +48,7 @@ impl_dec! {
     unbiased_exp = i16,
     comb = u32,
     arith = arith128,
+    prefix = "dq",
 }
 
 // To/from reprs.
@@ -418,10 +419,12 @@ impl Bid128 {
     const fn coeff2(self) -> u128 {
         self.coeff()
     }
+
     #[no_mangle]
     const fn signed_coeff2(self) -> i128 {
         self.signed_coeff()
     }
+
     #[no_mangle]
     const fn plus2(self) -> Self {
         if self.is_nan() {
@@ -438,10 +441,12 @@ impl Bid128 {
             self
         }
     }
+
     #[no_mangle]
     const fn neg2(self) -> Self {
         self.const_neg()
     }
+
     #[no_mangle]
     const fn canonical2(self) -> Self {
         self.canonical()
@@ -460,10 +465,6 @@ enum Unpacked {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    mod dectest {
-        crate::dectest::dectests!(d128);
-    }
 
     #[test]
     fn test_idk() {
@@ -502,7 +503,7 @@ mod tests {
     fn test_from_u32() {
         for x in 0..=u32::MAX {
             let got = Bid128::from_u32(x);
-            let want = Quad::from_u32(x);
+            let want = crate::decnumber::Quad::from_u32(x);
             assert_eq!(got, want, "#{x}");
         }
     }

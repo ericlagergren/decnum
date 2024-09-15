@@ -6,7 +6,8 @@ macro_rules! impl_dec {
         biased_exp = $biased:ty,
         unbiased_exp = $unbiased:ty,
         comb = $comb:ty,
-        arith = $arith:ident $(,)?
+        arith = $arith:ident,
+        prefix = $prefix:literal $(,)?
     ) => {
         $crate::bid::base::impl_dec_internal!(
             $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
@@ -29,6 +30,7 @@ macro_rules! impl_dec {
         $crate::bid::base::impl_dec_impls!($name);
         $crate::bid::dtoa::impl_dtoa!($name, $arith);
         $crate::bid::atod::impl_atod!($name, $ucoeff, $unbiased, $arith);
+        $crate::bid::base::impl_tests!($name, $ucoeff, $prefix);
     };
 }
 pub(crate) use impl_dec;
@@ -51,8 +53,8 @@ macro_rules! impl_dec_internal {
             const S: u32 = 1;
             /// The width of the exponent in bits.
             const W: u32 = Self::K / 16 + 4;
-            /// Used to compute [`G`][Self::G] and
-            /// [`EXP_BITS`][Self::EXP_BITS].
+            /// The width of the combination field in bits.
+            #[allow(dead_code, reason = "For documentation purposes")]
             const G: u32 = Self::W + 5;
             /// The width of the trailing significand in bits.
             const T: u32 = 15 * (Self::K / 16) - 10;
@@ -96,14 +98,6 @@ macro_rules! impl_dec_internal {
             const SIGN_SHIFT: u32 = Self::K - Self::S;
             /// Masks just the sign bit.
             const SIGN_MASK: $ucoeff = 1 << Self::SIGN_SHIFT;
-
-            /// The number of bits in the combination field.
-            const COMB_BITS: u32 = Self::G;
-            /// The shift needed to set the entire combination
-            /// field.
-            const COMB_SHIFT: u32 = Self::K - Self::S - Self::G;
-            /// Masks just the combination field.
-            const COMB_MASK: $ucoeff = ((1 << Self::COMB_BITS) - 1) << Self::COMB_SHIFT;
 
             // Top N bits of the combination field.
             const COMB_TOP2: $ucoeff = 0x3 << (Self::SIGN_SHIFT - 2);
@@ -165,9 +159,9 @@ macro_rules! impl_dec_internal {
             /// are allowed to be set for a canonical NaN.
             const CANONICAL_NAN: $ucoeff = Self::SIGN_MASK | Self::COMB_TOP6 | Self::PAYLOAD_MASK;
 
-            /// A mask for the bits (all except [G5:Gw+4]) as
-            /// well as the trailing significand field which must
-            /// be zero for a canonical infinity.
+            /// A mask for the bits (all except [G5:Gw+4] as well
+            /// as the trailing significant field) that are
+            /// allowed to be set for a canonical infinity.
             const CANONICAL_INF: $ucoeff = Self::SIGN_MASK | Self::COMB_TOP4;
 
             const MAX_SCALEB_N: u32 = 2 * (Self::EMAX as u32 + Self::MAX_PREC);
@@ -192,6 +186,11 @@ macro_rules! impl_dec_internal {
                 // combination field are set, the number is
                 // either an infinity or a NaN.
                 self.0 & Self::COMB_TOP4 == Self::COMB_TOP4
+            }
+
+            /// Reports whether the number is finite or infinite.
+            const fn is_numeric(self) -> bool {
+                !self.is_nan()
             }
 
             /// Returns the top six bits in the combination
@@ -528,7 +527,7 @@ macro_rules! impl_dec_internal {
                     bits |= (biased as $ucoeff) << Self::FORM1_EXP_SHIFT;
                     bits |= coeff & Self::FORM1_COEFF_MASK;
                 }
-                Self::from_bits(bits)
+                $crate::bid::canonical!(bits)
             }
 
             /// Creates a canonical infinity.
@@ -536,7 +535,7 @@ macro_rules! impl_dec_internal {
                 let mut bits = 0;
                 bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
                 bits |= Self::COMB_TOP4;
-                Self::from_bits(bits)
+                $crate::bid::canonical!(bits)
             }
 
             /// Creates a canonical quiet NaN.
@@ -547,7 +546,7 @@ macro_rules! impl_dec_internal {
                 bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
                 bits |= Self::COMB_TOP5;
                 bits |= payload;
-                Self::from_bits(bits)
+                $crate::bid::canonical!(bits)
             }
 
             /// Creates a canonical signaling NaN.
@@ -558,10 +557,10 @@ macro_rules! impl_dec_internal {
                 bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
                 bits |= Self::COMB_TOP6;
                 bits |= payload;
-                Self::from_bits(bits)
+                $crate::bid::canonical!(bits)
             }
 
-            /// Creates a zero.
+            /// Creates a canonical zero.
             const fn zero() -> Self {
                 Self::new(0, 0)
             }
@@ -852,9 +851,9 @@ macro_rules! impl_dec_arith {
             pub(crate) fn compare(self, rhs: Self) -> Self {
                 use Ordering::*;
                 match self.const_partial_cmp(rhs) {
-                    Some(Greater) => Self::from_parts(false, 0, 1),
-                    Some(Less) => Self::from_parts(true, 0, 1),
-                    Some(Equal) => Self::from_parts(false, 0, 0),
+                    Some(Greater) => Self::new(1, 0), // +1
+                    Some(Less) => Self::new(-1, 0),   // -1
+                    Some(Equal) => Self::zero(),      // +0
                     None => Self::select_nan(self, rhs),
                 }
             }
@@ -862,11 +861,13 @@ macro_rules! impl_dec_arith {
             /// Only used by dectest.
             #[cfg(test)]
             pub(crate) fn compare_sig(mut self, mut rhs: Self) -> Self {
+                /// The bits set for an sNaN.
+                const SNAN_MASK: $ucoeff = $name::COMB_TOP6;
                 if self.is_nan() {
-                    self = Self::from_bits(self.to_bits() | Self::COMB_TOP6)
+                    self = $crate::bid::canonical!(self.0 | SNAN_MASK)
                 }
                 if rhs.is_nan() {
-                    rhs = Self::from_bits(rhs.to_bits() | Self::COMB_TOP6)
+                    rhs = $crate::bid::canonical!(rhs.0 | SNAN_MASK)
                 }
                 self.compare(rhs)
             }
@@ -879,13 +880,15 @@ macro_rules! impl_dec_arith {
                 }
                 use Ordering::*;
                 match self.total_cmp(rhs) {
-                    Greater => Self::from_parts(false, 0, 1),
-                    Less => Self::from_parts(true, 0, 1),
-                    Equal => Self::from_parts(false, 0, 0),
+                    Greater => Self::new(1, 0), // +1
+                    Less => Self::new(-1, 0),   // -1
+                    Equal => Self::zero(),      // +0
                 }
             }
 
             /// Returns `-self`.
+            ///
+            /// This is equivalent to `0 - self`.
             ///
             /// This is the same as [`Neg`][core::ops::Neg], but
             /// can be used in a const context.
@@ -900,7 +903,7 @@ macro_rules! impl_dec_arith {
                     self.copy_abs()
                 } else {
                     // ±0 - self
-                    self.copy_neg()
+                    self.copy_neg().canonical()
                 }
             }
 
@@ -928,22 +931,23 @@ macro_rules! impl_dec_arith {
                     println!("max({self}, {rhs})");
                     println!("cmp({self},{rhs})={:?}", self.const_partial_cmp(rhs));
                 }
-                if !self.is_nan() && !rhs.is_nan() {
-                    // Both are numeric.
+                let max = if self.is_numeric() && rhs.is_numeric() {
+                    // Both are numeric, so `total_cmp` ensures
+                    // that +0 > -0, etc.
                     use Ordering::*;
-                    let max = match self.total_cmp(rhs) {
+                    match self.total_cmp(rhs) {
                         Greater | Equal => self,
                         Less => rhs,
-                    };
-                    return max.canonical();
-                }
-                return if self.is_snan() || rhs.is_snan() || (self.is_nan() && rhs.is_nan()) {
-                    Self::select_nan(self, rhs)
-                } else if self.is_nan() {
-                    rhs.canonical()
+                    }
+                } else if self.is_numeric() && rhs.is_qnan() {
+                    self
+                } else if self.is_qnan() && rhs.is_numeric() {
+                    rhs
                 } else {
-                    self.canonical()
+                    // `select_nan` returns a canonical number.
+                    return Self::select_nan(self, rhs);
                 };
+                max.canonical()
             }
 
             /// Returns the minimum of two values.
@@ -959,7 +963,7 @@ macro_rules! impl_dec_arith {
                     println!("min({self}, {rhs})");
                     println!("cmp({self},{rhs})={:?}", self.const_partial_cmp(rhs));
                 }
-                if !self.is_nan() && !rhs.is_nan() {
+                if self.is_numeric() && rhs.is_numeric() {
                     // Both are numeric.
                     use Ordering::*;
                     let min = match self.total_cmp(rhs) {
@@ -968,13 +972,13 @@ macro_rules! impl_dec_arith {
                     };
                     return min.canonical();
                 }
-                return if self.is_snan() || rhs.is_snan() || (self.is_nan() && rhs.is_nan()) {
+                if self.is_snan() || rhs.is_snan() || (self.is_nan() && rhs.is_nan()) {
                     Self::select_nan(self, rhs)
                 } else if self.is_nan() {
                     rhs.canonical()
                 } else {
                     self.canonical()
-                };
+                }
             }
 
             /// Returns `(self * a) + b` without any intermediate
@@ -999,7 +1003,14 @@ macro_rules! impl_dec_arith {
                               without modifying the original"]
             #[cfg(test)]
             pub(crate) const fn round_to_integral_exact(self) -> Self {
-                self.quantize(Self::from_parts(false, 0, 1))
+                if self.is_nan() {
+                    Self::select_nan(self, self)
+                } else if self.is_infinite() || self.unbiased_exp() >= 0 {
+                    self
+                } else {
+                    // quantize(1e+0)
+                    self.quantize(Self::new(1, 0))
+                }
             }
 
             /// Returns the square root of `self`.
@@ -1086,17 +1097,15 @@ macro_rules! impl_dec_misc {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn canonical(self) -> Self {
-                let d = if self.is_nan() {
-                    Self::from_bits(self.0 & Self::CANONICAL_NAN)
+                if self.is_nan() {
+                    $crate::bid::canonical!(self.0 & Self::CANONICAL_NAN)
                 } else if self.is_infinite() {
-                    Self::inf(self.signbit())
+                    $crate::bid::canonical!(self.0 & Self::CANONICAL_INF)
                 } else if self.raw_coeff() > Self::MAX_COEFF as $ucoeff {
-                    Self::from_bits(self.0 & !Self::COEFF_MASK)
+                    Self::zero()
                 } else {
                     self
-                };
-                debug_assert!(d.is_canonical());
-                d
+                }
             }
 
             #[cfg(test)]
@@ -1167,30 +1176,37 @@ macro_rules! impl_dec_misc {
 
             /// Returns the absolute value of `self`.
             ///
-            /// TODO: unlike [`abs`][Self::abs], ...
+            /// Unlike [`abs`][Self::abs], this operation has no
+            /// special NaN handling and may return
+            /// a non-canonical result.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn copy_abs(self) -> Self {
-                Self::from_bits(self.0 & !Self::SIGN_MASK)
+                $crate::bid::canonical!(self.0 & !Self::SIGN_MASK)
             }
 
             /// Returns `-self`.
             ///
-            /// TODO: unlike [`neg`][core::ops::Neg], ...
+            /// Unlike [`neg`][core::ops::Neg], this operation
+            /// has no special NaN handling and may return
+            /// a non-canonical result.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn copy_neg(self) -> Self {
-                Self::from_bits(self.0 ^ Self::SIGN_MASK)
+                $crate::bid::canonical!(self.0 ^ Self::SIGN_MASK)
             }
 
             /// Returns `self` with the same sign as `rhs`.
+            ///
+            /// This operation has no special NaN handling and
+            /// may return a non-canonical result.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn copy_sign(self, rhs: Self) -> Self {
                 let mut bits = self.0;
                 bits &= !Self::SIGN_MASK;
                 bits |= (rhs.0 & Self::SIGN_MASK);
-                Self::from_bits(bits)
+                $crate::bid::canonical!(bits)
             }
 
             /// Reports whether the number is in its canonical
@@ -1626,17 +1642,17 @@ macro_rules! impl_dec_to_from_repr {
 
             /// Creates a number from a little-endian byte array.
             pub const fn from_le_bytes(bytes: [u8; Self::BYTES]) -> Self {
-                Self::from_bits(<$ucoeff>::from_le_bytes(bytes))
+                $crate::bid::canonical!(<$ucoeff>::from_le_bytes(bytes))
             }
 
             /// Creates a number from a big-endian byte array.
             pub const fn from_be_bytes(bytes: [u8; Self::BYTES]) -> Self {
-                Self::from_bits(<$ucoeff>::from_be_bytes(bytes))
+                $crate::bid::canonical!(<$ucoeff>::from_be_bytes(bytes))
             }
 
             /// Creates a number from a native-endian byte array.
             pub const fn from_ne_bytes(bytes: [u8; Self::BYTES]) -> Self {
-                Self::from_bits(<$ucoeff>::from_ne_bytes(bytes))
+                $crate::bid::canonical!(<$ucoeff>::from_ne_bytes(bytes))
             }
 
             /// Raw transmutation to the number's raw bit
@@ -1687,3 +1703,15 @@ macro_rules! impl_dec_impls {
     };
 }
 pub(crate) use impl_dec_impls;
+
+macro_rules! impl_tests {
+    ($name:ty, $ucoeff:ty, $prefix:literal) => {
+        #[cfg(test)]
+        mod dectests {
+            type T = $crate::dectest::Default<$name>;
+            $crate::dectest::impl_backend!(T, $name, $ucoeff);
+            $crate::dectest::dectests!(T, $prefix);
+        }
+    };
+}
+pub(crate) use impl_tests;

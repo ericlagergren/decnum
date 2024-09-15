@@ -6,14 +6,17 @@
 
 mod op;
 mod parse;
-use std::{error, fmt};
+use std::{error, fmt, marker::PhantomData};
 
 use anyhow::{anyhow, Result};
 use op::Op;
 pub use parse::parse;
 
 use super::{conv::ParseError, ctx::RoundingMode};
-use crate::{bid::Bid128, dpd::Dpd128};
+use crate::{
+    bid::{Bid128, Bid64},
+    dpd::Dpd128,
+};
 
 macro_rules! failure {
     ($msg:literal $(,)?) => {
@@ -232,107 +235,111 @@ pub trait Backend {
     fn tointegralx(&self, x: Self::Dec) -> Self::Dec;
 }
 
-/// A backend for [`Bid128`] and [`Dpd128`].
-pub struct Dec128;
+macro_rules! impl_backend {
+    ($name:ty, $dec:ty, $bits:ty) => {
+        impl $crate::dectest::Backend for $name {
+            type Dec = $dec;
+            type Bits = $bits;
 
-impl Dec128 {
-    /// Creates a [`Dec128`].
-    pub const fn new() -> Self {
-        Self
-    }
+            fn to_bits(&self, dec: Self::Dec) -> Self::Bits {
+                dec.to_dpd128().to_bits()
+            }
+
+            fn from_bytes(&self, bytes: &[u8]) -> Self::Dec {
+                $crate::dpd::Dpd128::from_be_bytes(bytes.try_into().unwrap()).to_bid128()
+            }
+
+            fn parse(&self, s: &str) -> Result<Self::Dec, $crate::conv::ParseError> {
+                <$dec>::parse(s)
+            }
+
+            fn abs(&self, x: Self::Dec) -> Self::Dec {
+                x.abs()
+            }
+
+            fn add(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+                lhs + rhs
+            }
+
+            fn canonical(&self, x: Self::Dec) -> Self::Dec {
+                x.canonical()
+            }
+
+            fn class(&self, x: Self::Dec) -> &'static str {
+                x.class()
+            }
+
+            fn compare(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+                lhs.compare(rhs)
+            }
+
+            fn comparesig(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+                lhs.compare_sig(rhs)
+            }
+
+            fn comparetotal(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+                lhs.compare_total(rhs)
+            }
+
+            fn copy(&self, x: Self::Dec) -> Self::Dec {
+                x
+            }
+
+            fn copyabs(&self, x: Self::Dec) -> Self::Dec {
+                x.copy_abs()
+            }
+
+            fn copynegate(&self, x: Self::Dec) -> Self::Dec {
+                x.copy_neg()
+            }
+
+            fn copysign(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+                lhs.copy_sign(rhs)
+            }
+
+            fn max(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+                lhs.max(rhs)
+            }
+
+            fn min(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+                lhs.min(rhs)
+            }
+
+            fn minus(&self, x: Self::Dec) -> Self::Dec {
+                -x
+            }
+
+            fn multiply(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+                lhs * rhs
+            }
+
+            fn plus(&self, x: Self::Dec) -> Self::Dec {
+                x.plus()
+            }
+
+            fn quantize(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+                lhs.quantize(rhs)
+            }
+
+            fn subtract(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+                lhs - rhs
+            }
+
+            fn tointegralx(&self, x: Self::Dec) -> Self::Dec {
+                x.round_to_integral_exact()
+            }
+        }
+    };
 }
+pub(crate) use impl_backend;
 
-impl Backend for Dec128 {
-    type Dec = Bid128;
-    type Bits = u128;
+/// A default backend for [`Bid128`], [`Bid64`], etc.
+pub struct Default<T>(PhantomData<T>);
 
-    fn to_bits(&self, dec: Self::Dec) -> Self::Bits {
-        dec.to_dpd128().to_bits()
-    }
-
-    fn from_bytes(&self, bytes: &[u8]) -> Self::Dec {
-        println!("bytes = {}", bytes.len());
-        Dpd128::from_be_bytes(bytes.try_into().unwrap()).to_bid128()
-    }
-
-    fn parse(&self, s: &str) -> Result<Self::Dec, ParseError> {
-        Bid128::parse(s)
-    }
-
-    fn abs(&self, x: Self::Dec) -> Self::Dec {
-        x.abs()
-    }
-
-    fn add(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-        lhs + rhs
-    }
-
-    fn canonical(&self, x: Self::Dec) -> Self::Dec {
-        x.canonical()
-    }
-
-    fn class(&self, x: Self::Dec) -> &'static str {
-        x.class()
-    }
-
-    fn compare(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-        lhs.compare(rhs)
-    }
-
-    fn comparesig(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-        lhs.compare_sig(rhs)
-    }
-
-    fn comparetotal(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-        lhs.compare_total(rhs)
-    }
-
-    fn copy(&self, x: Self::Dec) -> Self::Dec {
-        x
-    }
-
-    fn copyabs(&self, x: Self::Dec) -> Self::Dec {
-        x.copy_abs()
-    }
-
-    fn copynegate(&self, x: Self::Dec) -> Self::Dec {
-        x.copy_neg()
-    }
-
-    fn copysign(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-        lhs.copy_sign(rhs)
-    }
-
-    fn max(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-        lhs.max(rhs)
-    }
-
-    fn min(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-        lhs.min(rhs)
-    }
-
-    fn minus(&self, x: Self::Dec) -> Self::Dec {
-        -x
-    }
-
-    fn multiply(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-        lhs * rhs
-    }
-
-    fn plus(&self, x: Self::Dec) -> Self::Dec {
-        x.plus()
-    }
-
-    fn quantize(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-        lhs.quantize(rhs)
-    }
-
-    fn subtract(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-        lhs - rhs
-    }
-
-    fn tointegralx(&self, x: Self::Dec) -> Self::Dec {
-        x.round_to_integral_exact()
+impl<T> Default<T> {
+    /// Creates a new backend.
+    pub const fn new() -> Self {
+        Self(PhantomData)
     }
 }
 
@@ -341,26 +348,21 @@ pub trait Bits: Copy + Eq + PartialEq + fmt::Debug + fmt::LowerHex + Sized {
     /// Parses itself from bytes.
     fn from_bytes(bytes: &[u8]) -> Result<Self>;
 }
-impl Bits for u32 {
-    fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        Ok(Self::from_le_bytes(bytes.try_into()?))
+
+macro_rules! impl_bits {
+    ($($ty:ty),*) => {
+        $(
+            impl Bits for $ty {
+                fn from_bytes(bytes: &[u8]) -> Result<Self> {
+                    Ok(Self::from_le_bytes(bytes.try_into()?))
+                }
+            }
+        )*
     }
 }
-impl Bits for u64 {
-    fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        Ok(Self::from_le_bytes(bytes.try_into()?))
-    }
-}
-impl Bits for u128 {
-    fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        Ok(Self::from_le_bytes(bytes.try_into()?))
-    }
-}
+impl_bits!(u32, u64, u128);
 
 macro_rules! dectests {
-    (d128) => {
-        $crate::dectest::dectests!($crate::dectest::Dec128, "dq");
-    };
     ($backend:ty, $prefix:literal) => {
         $crate::dectest::dectests!($backend, $prefix,
             test_abs => "Abs",
