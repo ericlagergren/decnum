@@ -42,33 +42,6 @@ impl_dec! {
 
 // To/from reprs.
 impl Bid64 {
-    /// Creates an infinity.
-    const fn inf(sign: bool) -> Self {
-        let bits = signbit(sign) | comb(0x1e00);
-        Self::from_bits(bits)
-    }
-
-    /// Creates a quiet NaN.
-    const fn nan(sign: bool, payload: u64) -> Self {
-        debug_assert!(payload <= Self::PAYLOAD_MAX);
-
-        let bits = signbit(sign) | comb(0x1f00);
-        Self::from_bits(bits)
-    }
-
-    /// Creates a signaling NaN.
-    const fn snan(sign: bool, payload: u64) -> Self {
-        debug_assert!(payload <= Self::PAYLOAD_MAX);
-
-        let bits = signbit(sign) | comb(0x1f80);
-        Self::from_bits(bits)
-    }
-
-    /// Creates a zero.
-    const fn zero() -> Self {
-        Self::from_u64(0)
-    }
-
     /// Creates a `Bid64` from `coeff` and an exponent of zero.
     ///
     /// The result is always exact.
@@ -109,11 +82,6 @@ impl Bid64 {
     // TODO(eric): Change this to `to_dpd64`.
     pub const fn to_dpd128(self) -> Dpd128 {
         Dpd128::from_parts_bin(self.signbit(), self.unbiased_exp(), self.coeff() as u128)
-    }
-
-    /// TODO
-    const fn rounded2(sign: bool, exp: i16, coeff: u64) -> Self {
-        Self::rounded(sign, exp, coeff)
     }
 }
 
@@ -188,22 +156,10 @@ const fn signbit(sign: bool) -> u64 {
     (sign as u64) << Bid64::SIGN_SHIFT
 }
 
-const fn comb(bits: u16) -> u64 {
-    debug_assert!(bits & !((1 << Bid64::COMB_BITS) - 1) == 0);
-
-    (bits as u64) << Bid64::COMB_SHIFT
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::decnumber::Quad;
-
-    impl Bid64 {
-        const SNAN: Self = Self::snan(false, 0);
-        const NEG_NAN: Self = Self::nan(true, 0);
-        const NEG_SNAN: Self = Self::snan(true, 0);
-    }
 
     #[test]
     fn test_exp() {
@@ -217,73 +173,6 @@ mod tests {
             let got = d.unbiased_exp();
             assert_eq!(got, exp, "(2) d={:024b}", d.to_bits() >> (64 - 24));
             assert_eq!(d.coeff(), Bid64::MAX_COEFF as u64, "#{exp}");
-        }
-    }
-
-    static STR_TESTS: &[(Bid64, &'static str)] = &[
-        // (Bid64::NAN, "NaN"),
-        // (Bid64::NEG_NAN, "-NaN"),
-        // (Bid64::SNAN, "sNaN"),
-        // (Bid64::NEG_SNAN, "-sNaN"),
-        // (Bid64::INFINITY, "Infinity"),
-        // (Bid64::NEG_INFINITY, "-Infinity"),
-        // (Bid64::new(0, 0), "0"),
-        // (Bid64::new(0, -1), "0.0"),
-        // (Bid64::new(0, Bid64::MAX_EXP), "0E+6111"),
-        // (Bid64::new(0, Bid64::MIN_EXP), "0E-6176"),
-        // (Bid64::new(21, -1), "2.1"),
-        // (Bid64::new(210, -2), "2.10"),
-        // (Bid64::new(42, 1), "4.2E+2"),
-        // (Bid64::new(42, 0), "42"),
-        // (Bid64::new(42, -1), "4.2"),
-        // (Bid64::new(42, -2), "0.42"),
-        // (Bid64::new(42, -3), "0.042"),
-        // (Bid64::new(42, -4), "0.0042"),
-        // (Bid64::new(42, -5), "0.00042"),
-        // (Bid64::new(42, -6), "0.000042"),
-        // (Bid64::new(42, -7), "0.0000042"),
-        // (Bid64::new(42, -8), "4.2E-7"),
-        // (
-        //     Bid64::new(Bid64::MAX_COEFF, -39),
-        //     "0.000009999999999999999999999999999999999",
-        // ),
-        // (Bid64::new(9999, Bid64::MIN_EXP), "1E-12287"),
-        // (Bid64::new(0, Bid64::MAX_EXP), "1E+6145"),
-        // (
-        //     Bid64::new(10i64.pow(Bid64::DIGITS + 1) - 1, Bid64::MAX_EXP),
-        //     "99999999999999999999999999999999999E+6144",
-        // ),
-        // (
-        //     Bid64::new(10i64.pow(Bid64::DIGITS + 1) - 1, 0),
-        //     "99999999999999999999999999999999999",
-        // ),
-        // (
-        //     Bid64::new(10i64.pow(Bid64::DIGITS + 1) - 1, 36),
-        //     "1.000000000000000000000000000000000E+37",
-        // ),
-    ];
-
-    #[test]
-    fn test_format() {
-        for (i, (input, want)) in STR_TESTS.iter().enumerate() {
-            let got = input.to_string();
-            assert_eq!(got, *want, "#{i}");
-        }
-    }
-
-    #[test]
-    fn test_parse() {
-        for (i, &(want, output)) in STR_TESTS.iter().enumerate() {
-            let q = Quad::parse(output);
-            println!("q = {q}");
-            let got: Bid64 = output.parse().unwrap();
-            println!("got = {got}");
-            if want.is_nan() {
-                assert!(got.is_nan(), "#{i}: parse(\"{output}\") -> {want}");
-            } else {
-                assert_eq!(got, want, "#{i}: parse(\"{output}\") -> {want}");
-            }
-            println!("");
         }
     }
 

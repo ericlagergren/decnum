@@ -1,3 +1,6 @@
+// Bitflags
+#![allow(clippy::indexing_slicing)]
+
 use core::marker::PhantomData;
 
 use bitflags::bitflags;
@@ -41,6 +44,7 @@ pub enum RoundingMode {
 }
 
 impl RoundingMode {
+    #[cfg(test)]
     pub(super) fn try_from_str(s: &str) -> Option<Self> {
         let mode = match s {
             "half_even" => Self::ToNearestEven,

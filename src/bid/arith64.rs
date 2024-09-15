@@ -8,6 +8,7 @@ pub(super) const fn shl(x: u64, n: u32) -> u128 {
 }
 
 /// Shift `x` to the right by `n` digits.
+#[allow(dead_code, reason = "TODO")]
 pub(super) const fn shr(mut x: u64, n: u32) -> u64 {
     debug_assert!(n <= 16);
 

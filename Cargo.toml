@@ -24,6 +24,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
 
 [features]
 default = [
+	"std", # TODO
 	"dpd-tables",
 ]
 

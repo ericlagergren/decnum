@@ -172,27 +172,6 @@ impl fmt::Display for ErrorKind {
     }
 }
 
-/// Is `v` three digits?
-pub(crate) const fn is_3digits(v: u32) -> bool {
-    let a = v.wrapping_add(0x0046_4646);
-    let b = v.wrapping_sub(0x0030_3030);
-    (a | b) & 0x0080_8080 == 0
-}
-
-// /// Is `v` four digits?
-// pub(crate) const fn is_4digits(v: u32) -> bool {
-//     check_4digits(v) == 0
-// }
-
-/// Returns a mask over the digits in `v`.
-///
-/// Each byte is 0x00 if it is a digit, or 0x80 otherwise.
-pub(crate) const fn check_4digits(v: u32) -> u32 {
-    let a = v.wrapping_add(0x4646_4646);
-    let b = v.wrapping_sub(0x3030_3030);
-    (a | b) & 0x8080_8080
-}
-
 /// Reports whether `a == b` using ASCII case folding.
 pub(crate) const fn equal_fold_ascii(mut a: &[u8], mut b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -291,19 +270,4 @@ const fn to_ascii_lower(c: u8) -> u8 {
     // cannot panic.
     #[allow(clippy::indexing_slicing)]
     TABLE[c as usize]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_is_3digits() {
-        for d in 0..=u32::MAX {
-            let b = d.to_le_bytes();
-            let want = b[..3].iter().all(|b| matches!(b, b'0'..=b'9'));
-            let got = is_3digits(d);
-            assert_eq!(got, want, "{:?}", &b[..3]);
-        }
-    }
 }

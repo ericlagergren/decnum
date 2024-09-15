@@ -8,16 +8,16 @@
 //! # Cargo Features
 //!
 //! - `alloc`: Include [`alloc`] support. This is currently
-//! unused, but may be used in the future.
+//!   unused, but may be used in the future.
 //!
 //! - `dpd-tables`: Use lookup tables for densely packed decimal
-//! conversions.
+//!   conversions.
 //!
 //! - `rand`: Enable [`rand`] support.
 //!
 //! - `std`: Include [`std`] support. This is currently
-//! unused, but may be used in the future. Implies the `alloc`
-//! feature.
+//!   unused, but may be used in the future. Implies the `alloc`
+//!   feature.
 //!
 //! - `slow-128`: TODO
 //!
@@ -25,7 +25,6 @@
 //! [`rand`]: https://crates.io/crates/rand
 //! [`std`]: https://doc.rust-lang.org/std/
 
-#![allow(dead_code)] // TODO
 #![allow(clippy::unusual_byte_groupings)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(not(any(feature = "std", test)), deny(clippy::std_instead_of_core))]
@@ -67,10 +66,8 @@ mod macros;
 mod util;
 
 #[doc(inline)]
-#[allow(non_camel_case_types)]
 pub use bid::Bid128 as d128;
 #[doc(inline)]
-#[allow(non_camel_case_types)]
 pub use bid::Bid64 as d64;
 pub use conv::*;
 pub use ctx::*;

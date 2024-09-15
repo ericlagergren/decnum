@@ -1,3 +1,5 @@
+#![allow(dead_code, reason = "TODO")]
+
 use core::cmp::Ordering;
 
 use super::arith128;

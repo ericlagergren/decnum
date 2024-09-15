@@ -98,7 +98,7 @@ macro_rules! impl_dtoa {
                     // `pre` = [min(1, -5), DIGITS+EMAX]
                     //       = [-5, DIGITS+EMAX]
                     debug_assert!(pre >= -5);
-                    debug_assert!(pre <= (Self::DIGITS + Self::EMAX as u32) as i32);
+                    debug_assert!(i64::from(pre) <= i64::from(Self::DIGITS + Self::EMAX as u32));
                     (e, pre)
                 };
 
@@ -111,7 +111,7 @@ macro_rules! impl_dtoa {
                     // meaning
                     //
                     // `pre` = [1, DIGITS+EMAX]
-                    debug_assert!(pre <= (Self::DIGITS + Self::EMAX as u32) as i32);
+                    debug_assert!(pre.unsigned_abs() <= Self::DIGITS + Self::EMAX as u32);
 
                     let pre = pre.unsigned_abs() as usize;
 

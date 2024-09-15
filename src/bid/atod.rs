@@ -2,7 +2,7 @@ macro_rules! impl_atod {
     ($name:ident, $ucoeff:ty, $unbiased:ty, $arith:ident) => {
         impl $name {
             /// Parses a decimal from a string.
-            pub fn parse(s: &str) -> Result<Self, ParseError> {
+            pub const fn parse(s: &str) -> Result<Self, ParseError> {
                 let mut s = s.as_bytes();
                 if s.is_empty() {
                     return Err(ParseError::empty());
@@ -27,11 +27,7 @@ macro_rules! impl_atod {
                     Ok((c, e, r)) => (c, e, r),
                     Err(err) => return Err(err),
                 };
-                if cfg!(debug_assertions) {
-                    println!("coeff = {coeff}");
-                    println!("  dot = {sd:?}");
-                    println!("    s = \"{}\"", str::from_utf8(s).unwrap());
-                }
+                #[allow(clippy::cast_possible_wrap, reason = "TODO")]
                 let exp = match Self::parse_exp(s) {
                     // If the decimal-part included a decimal
                     // point the exponent is then reduced by the
@@ -43,14 +39,11 @@ macro_rules! impl_atod {
                     Ok(exp) => exp - sd as $unbiased,
                     Err(err) => return Err(err),
                 };
-                if cfg!(debug_assertions) {
-                    println!("  exp = {exp}");
-                }
 
                 if !Self::need_round(coeff, exp) {
                     Ok(Self::from_parts(sign, exp, coeff))
                 } else {
-                    Ok(Self::rounded2(sign, exp, coeff))
+                    Ok(Self::rounded(sign, exp, coeff))
                 }
             }
 
@@ -59,12 +52,8 @@ macro_rules! impl_atod {
             /// It returns the coefficient, number of digits
             /// after the decimal point, and unused remainder of
             /// the input.
-            fn parse_coeff(s: &[u8]) -> Result<($ucoeff, usize, &[u8]), ParseError> {
+            const fn parse_coeff(s: &[u8]) -> Result<($ucoeff, usize, &[u8]), ParseError> {
                 debug_assert!(!s.is_empty());
-
-                if cfg!(debug_assertions) {
-                    println!("parse_coeff = {}", str::from_utf8(s).unwrap());
-                }
 
                 /// Parses digits from `s` and adds them to `x`,
                 /// stopping at the first non-digit.
@@ -98,12 +87,6 @@ macro_rules! impl_atod {
 
                 // `rest` should not start with a digit.
                 debug_assert!(!matches!(rest.first(), Some(&(b'0'..=b'9'))));
-
-                if cfg!(debug_assertions) {
-                    println!(" pre = {pre:?} {}", str::from_utf8(pre).unwrap());
-                    println!("post = {post:?} {}", str::from_utf8(post).unwrap());
-                    println!("rest = {rest:?} {}", str::from_utf8(rest).unwrap());
-                }
 
                 // Number of significant digits. Make sure to
                 // collect this before we start trimming zeros.
@@ -151,7 +134,7 @@ macro_rules! impl_atod {
             ///
             /// The coefficient does not have any leading zeros.
             #[cold]
-            fn parse_large_coeff<'a>(pre: &'a [u8], mut post: &'a [u8]) -> ($ucoeff, usize) {
+            const fn parse_large_coeff<'a>(pre: &'a [u8], mut post: &'a [u8]) -> ($ucoeff, usize) {
                 debug_assert!(pre.len() + post.len() > Self::DIGITS as usize);
                 util::debug_assert_all_digits(pre);
                 util::debug_assert_all_digits(post);
@@ -173,9 +156,6 @@ macro_rules! impl_atod {
                     };
                 }
                 debug_assert!(pre.len() + post.len() == MAX_DIGITS);
-                if cfg!(debug_assertions) {
-                    println!("pre={} post={} dropped={dropped}", pre.len(), post.len());
-                }
 
                 let mut coeff = 0;
                 while let Some((&c, rest)) = pre.split_first() {

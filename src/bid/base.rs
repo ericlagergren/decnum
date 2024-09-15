@@ -148,8 +148,6 @@ macro_rules! impl_dec_internal {
             /// The number of bits required to represent
             /// [`MAX_COEFF`][Self::MAX_COEFF].
             const MAX_COEFF_BITS: u32 = super::$arith::bitlen(Self::MAX_COEFF as $ucoeff);
-            /// Masks the bits used by the maximum coefficient.
-            const MAX_COEFF_MASK: $ucoeff = (1 << Self::MAX_COEFF_BITS) - 1;
 
             /// The number of bits in the trailing significand.
             const COEFF_BITS: u32 = Self::T;
@@ -198,15 +196,8 @@ macro_rules! impl_dec_internal {
 
             /// Returns the top six bits in the combination
             /// field.
-            ///
-            /// - sNaN: 2^6
-            /// - qNaN: 2^5
-            /// - inf: 2^4
-            ///
-            /// Finite values have values less than 2^4.
-            const fn special_bits(self) -> u8 {
-                let bits = self.0 & Self::COMB_TOP6;
-                (bits >> (Self::SIGN_SHIFT - 6)) as u8
+            const fn special_bits(self) -> $ucoeff {
+                self.0 & Self::COMB_TOP6
             }
 
             /// Returns the biased exponment.
@@ -320,6 +311,7 @@ macro_rules! impl_dec_internal {
             /// TODO: keep this?
             const fn with_unbiased_exp(self, exp: $unbiased) -> Self {
                 // TODO(eric): debug assertions
+                #[allow(clippy::cast_sign_loss, reason = "TODO")]
                 self.with_biased_exp((exp + Self::BIAS) as $biased)
             }
 
@@ -490,8 +482,22 @@ macro_rules! impl_dec_internal {
                 #[allow(clippy::cast_sign_loss)]
                 let biased = (exp + Self::BIAS) as $biased;
 
+                // Do we need to encode the coefficient using
+                // form two?
+                //
+                // Form one is 3+T bits with an implicit leading 0b0.
+                // Form two is 4+T bits with an implicit leading 0b100.
+                let need_form2 = if Self::MAX_COEFF_BITS <= Self::FORM1_COEFF_BITS {
+                    // The max coefficient fits in 3+T bits, so
+                    // we don't need form 2.
+                    false
+                } else {
+                    // Is the MSB set (implying we need bit 4)?
+                    (coeff >> (Self::MAX_COEFF_BITS - 1)) & 0x1 != 0
+                };
+
                 let mut bits = 0;
-                if Self::need_form2(coeff) {
+                if need_form2 {
                     // s 1100eeeeee (100)t tttttttttt tttttttttt
                     // s 1101eeeeee (100)t tttttttttt tttttttttt
                     // s 1110eeeeee (100)t tttttttttt tttttttttt
@@ -510,21 +516,39 @@ macro_rules! impl_dec_internal {
                 Self::from_bits(bits)
             }
 
-            // Do we need to encode the coefficient using form
-            // two?
-            const fn need_form2(coeff: $ucoeff) -> bool {
-                debug_assert!(coeff <= Self::MAX_COEFF as $ucoeff);
+            /// Creates an infinity.
+            pub(crate) const fn inf(sign: bool) -> Self {
+                let mut bits = 0;
+                bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
+                bits |= Self::COMB_TOP4;
+                Self::from_bits(bits)
+            }
 
-                // Form one is 3+T bits with an implicit leading 0b0.
-                // Form two is 4+T bits with an implicit leading 0b100.
-                if Self::MAX_COEFF_BITS <= Self::FORM1_COEFF_BITS {
-                    // The max coefficient fits in 3+T bits, so
-                    // we don't need form 2.
-                    false
-                } else {
-                    // Is the MSB set (implying we need bit 4)?
-                    (coeff >> (Self::MAX_COEFF_BITS - 1)) & 0x1 != 0
-                }
+            /// Creates a quiet NaN.
+            pub(crate) const fn nan(sign: bool, payload: $ucoeff) -> Self {
+                debug_assert!(payload <= Self::PAYLOAD_MAX);
+
+                let mut bits = 0;
+                bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
+                bits |= Self::COMB_TOP5;
+                bits |= payload;
+                Self::from_bits(bits)
+            }
+
+            /// Creates a signaling NaN.
+            pub(crate) const fn snan(sign: bool, payload: $ucoeff) -> Self {
+                debug_assert!(payload <= Self::PAYLOAD_MAX);
+
+                let mut bits = 0;
+                bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
+                bits |= Self::COMB_TOP6;
+                bits |= payload;
+                Self::from_bits(bits)
+            }
+
+            /// Creates a zero.
+            const fn zero() -> Self {
+                Self::new(0, 0)
             }
 
             /// Creates a NaN from either `lhs` or `rhs` per
@@ -647,10 +671,7 @@ macro_rules! impl_dec_arith {
             /// - +0.0 and -0.0 are considered equal.
             ///
             /// This is a const version of [`PartialEq`].
-            pub fn const_eq(self, other: Self) -> bool {
-                if cfg!(debug_assertions) {
-                    println!("const_eq({self:?}, {other:?})");
-                }
+            pub const fn const_eq(self, other: Self) -> bool {
                 if self.is_nan() || other.is_nan() {
                     // NaN != NaN
                     return false;
@@ -663,36 +684,26 @@ macro_rules! impl_dec_arith {
                 }
                 // Bits differ.
 
-                if self.signbit() ^ other.signbit() {
-                    // +0 == -0
-                    // -0 == +0
-                    // +x != -y
-                    // -x != +y
+                if self.signbit() != other.signbit() {
+                    // ±x == ±y
                     return self.is_zero() && other.is_zero();
                 }
                 // Signs are the same.
                 debug_assert!(self.signbit() == other.signbit());
 
                 if self.is_infinite() || other.is_infinite() {
-                    // +inf == +inf
-                    // -inf == -inf
+                    // ±inf == ±inf
                     return self.is_finite() == other.is_finite();
                 }
                 // Both are finite.
                 debug_assert!(self.is_finite() && other.is_finite());
 
                 if self.is_zero() || other.is_zero() {
-                    // +0 == -0
-                    // -0 == +0
+                    // ±0 == ±0
                     return self.is_zero() && other.is_zero();
                 }
                 // Both are non-zero.
                 debug_assert!(!self.is_zero() && !other.is_zero());
-
-                if cfg!(debug_assertions) {
-                    println!("lhs = {self}");
-                    println!("rhs = {other}");
-                }
 
                 // Bias doesn't matter for this comparison.
                 let shift = self.biased_exp().abs_diff(other.biased_exp()) as u32;
@@ -703,24 +714,6 @@ macro_rules! impl_dec_arith {
                     return false;
                 }
                 // `shift` is in [0, DIGITS].
-
-                // Align the coefficients. For example:
-                //
-                // 123.40 // coeff = 12340, exp = -2
-                // 123.4  // coeff = 1234, exp = -1
-                //
-                // 12340 // coeff = 12340, exp = 0
-                // 1234  // coeff = 1234, exp = 1
-
-                if cfg!(debug_assertions) {
-                    println!(
-                        "shift = {}",
-                        self.biased_exp() as i16 - other.biased_exp() as i16,
-                    );
-
-                    println!("lhs = {self}");
-                    println!("rhs = {other}");
-                }
 
                 if shift == 0 {
                     return self.coeff() == other.coeff();
@@ -740,11 +733,7 @@ macro_rules! impl_dec_arith {
             /// - +0.0 and -0.0 are considered equal.
             ///
             /// This is a const version of [`PartialOrd`].
-            pub fn const_partial_cmp(self, other: Self) -> Option<Ordering> {
-                if cfg!(debug_assertions) {
-                    println!("partial_cmp({self}, {other})");
-                }
-
+            pub const fn const_partial_cmp(self, other: Self) -> Option<Ordering> {
                 if self.is_nan() || other.is_nan() {
                     // NaN != NaN
                     return None;
@@ -753,13 +742,8 @@ macro_rules! impl_dec_arith {
                 debug_assert!(!self.is_nan() && !other.is_nan());
 
                 if self.signbit() != other.signbit() {
-                    if cfg!(debug_assertions) {
-                        println!("self is zero = {}", self.is_zero());
-                        println!(" rhs is zero = {}", other.is_zero());
-                    }
                     return if self.is_zero() && other.is_zero() {
-                        // +0 == -0
-                        // -0 == +0
+                        // ±0 == ±0
                         Some(Ordering::Equal)
                     } else if self.signbit() {
                         // -x < +x
@@ -772,12 +756,25 @@ macro_rules! impl_dec_arith {
                 // Signs are the same.
                 debug_assert!(self.signbit() == other.signbit());
 
+                let ord = self.partial_cmp_abs(other);
+                if self.signbit() {
+                    Some(ord.reverse())
+                } else {
+                    Some(ord)
+                }
+            }
+
+            const fn partial_cmp_abs(self, other: Self) -> Ordering {
+                debug_assert!(self.signbit() == other.signbit());
+
+                if self.to_bits() == other.to_bits() {
+                    // Obvious case: same bits.
+                    return Ordering::Equal;
+                }
+                // Bits differ.
+
                 if self.is_infinite() || other.is_infinite() {
-                    if cfg!(debug_assertions) {
-                        println!("lhs is inf = {}", self.is_infinite());
-                        println!("rhs is inf = {}", other.is_infinite());
-                    }
-                    let ord = if !self.is_infinite() {
+                    return if !self.is_infinite() {
                         // x cmp inf
                         Ordering::Less
                     } else if !other.is_infinite() {
@@ -787,21 +784,12 @@ macro_rules! impl_dec_arith {
                         // inf cmp inf
                         Ordering::Equal
                     };
-                    return if self.signbit() {
-                        Some(ord.reverse())
-                    } else {
-                        Some(ord)
-                    };
                 }
                 // Both are finite.
                 debug_assert!(self.is_finite() && other.is_finite());
 
                 if self.is_zero() || other.is_zero() {
-                    if cfg!(debug_assertions) {
-                        println!("lhs is zero = {}", self.is_zero());
-                        println!("rhs is zero = {}", other.is_zero());
-                    }
-                    let ord = if !self.is_zero() {
+                    return if !self.is_zero() {
                         // x > 0
                         Ordering::Greater
                     } else if !other.is_zero() {
@@ -812,11 +800,6 @@ macro_rules! impl_dec_arith {
                         // -0 == -0
                         Ordering::Equal
                     };
-                    return if self.signbit() {
-                        Some(ord.reverse())
-                    } else {
-                        Some(ord)
-                    };
                 }
                 // Both are non-zero.
                 debug_assert!(!self.is_zero() && !other.is_zero());
@@ -824,45 +807,24 @@ macro_rules! impl_dec_arith {
                 // Bias doesn't matter for this comparison.
                 let shift = self.biased_exp().abs_diff(other.biased_exp()) as u32;
                 if shift >= Self::DIGITS {
-                    if cfg!(debug_assertions) {
-                        println!("hi");
-                    }
                     // The shift is larger than the maximum
                     // precision, so the coefficients do not
                     // overlap. Therefore, the larger exponent is
                     // the larger number.
-                    let ord = if self.biased_exp() < other.biased_exp() {
+                    return if self.biased_exp() < other.biased_exp() {
                         Ordering::Less
                     } else {
                         Ordering::Greater
                     };
-                    return if self.signbit() {
-                        Some(ord.reverse())
-                    } else {
-                        Some(ord)
-                    };
                 }
                 // `shift` is in [0, DIGITS].
 
-                if cfg!(debug_assertions) {
-                    println!("lhs coeff = {}", self.coeff());
-                    println!("rhs coeff = {}", other.coeff());
-                    println!("lhs exp = {}", self.biased_exp());
-                    println!("rhs exp = {}", other.biased_exp());
-                    println!("shift = {shift}");
-                }
-
-                let ord = if shift == 0 {
+                if shift == 0 {
                     $arith::const_cmp(self.coeff(), other.coeff())
                 } else if self.biased_exp() > other.biased_exp() {
                     $arith::const_cmp_shifted(self.coeff(), other.coeff(), shift)
                 } else {
                     $arith::const_cmp_shifted(other.coeff(), self.coeff(), shift).reverse()
-                };
-                if self.signbit() {
-                    Some(ord.reverse())
-                } else {
-                    Some(ord)
                 }
             }
 
@@ -876,6 +838,18 @@ macro_rules! impl_dec_arith {
                     Some(Equal) => Self::from_parts(false, 0, 0),
                     None => Self::select_nan(self, rhs),
                 }
+            }
+
+            /// Only used by dectest.
+            #[cfg(test)]
+            pub(crate) fn compare_sig(mut self, mut rhs: Self) -> Self {
+                if self.is_nan() {
+                    self = Self::from_bits(self.to_bits() | Self::COMB_TOP6)
+                }
+                if rhs.is_nan() {
+                    rhs = Self::from_bits(rhs.to_bits() | Self::COMB_TOP6)
+                }
+                self.compare(rhs)
             }
 
             /// Only used by dectest.
@@ -1084,7 +1058,7 @@ macro_rules! impl_dec_misc {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn canonical(self) -> Self {
-                if self.is_nan() && Self::CANONICAL_NAN != 0 {
+                let d = if self.is_nan() && Self::CANONICAL_NAN != 0 {
                     Self::from_bits(self.0 & !Self::CANONICAL_NAN)
                 } else if self.is_infinite() && Self::CANONICAL_INF != 0 {
                     Self::from_bits(self.0 & !Self::CANONICAL_INF)
@@ -1092,7 +1066,9 @@ macro_rules! impl_dec_misc {
                     Self::from_bits(self.0 & !Self::COEFF_MASK)
                 } else {
                     self
-                }
+                };
+                debug_assert!(d.is_canonical());
+                d
             }
 
             #[cfg(test)]
@@ -1152,6 +1128,13 @@ macro_rules! impl_dec_misc {
                 } else {
                     FpCategory::Subnormal
                 }
+            }
+
+            /// TODO
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn const_not(self) -> Self {
+                todo!()
             }
 
             /// Returns `self` with the same sign as `rhs`.
@@ -1397,8 +1380,8 @@ macro_rules! impl_dec_misc {
                             // NaN > rhs
                             Ordering::Greater
                         } else if self.special_bits() == rhs.special_bits() {
-                            // Both are the same type of NaN. Compare
-                            // the payloads.
+                            // Both are the same type of NaN.
+                            // Compare the payloads.
                             let lhs_pl = self.payload();
                             let rhs_pl = rhs.payload();
                             $arith::const_cmp(lhs_pl, rhs_pl)
@@ -1519,14 +1502,13 @@ macro_rules! impl_dec_misc2 {
             ///
             /// The result will always be in [1,
             /// [`DIGITS`][Self::DIGITS]].
-            ///
-            /// TODO: NaN should return the number of digits in
-            /// the payload.
             pub const fn digits(self) -> u32 {
                 if self.is_finite() {
                     $arith::digits(self.coeff())
+                } else if self.is_nan() {
+                    $arith::digits(self.payload())
                 } else {
-                    1
+                    1 // infinite
                 }
             }
 

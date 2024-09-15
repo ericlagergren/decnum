@@ -42,33 +42,6 @@ impl_dec! {
 
 // To/from reprs.
 impl Bid32 {
-    /// Creates an infinity.
-    const fn inf(sign: bool) -> Self {
-        let bits = signbit(sign) | comb(0x1e00);
-        Self::from_bits(bits)
-    }
-
-    /// Creates a quiet NaN.
-    const fn nan(sign: bool, payload: u32) -> Self {
-        debug_assert!(payload <= Self::PAYLOAD_MAX);
-
-        let bits = signbit(sign) | comb(0x1f0);
-        Self::from_bits(bits)
-    }
-
-    /// Creates a signaling NaN.
-    const fn snan(sign: bool, payload: u32) -> Self {
-        debug_assert!(payload <= Self::PAYLOAD_MAX);
-
-        let bits = signbit(sign) | comb(0x1f8);
-        Self::from_bits(bits)
-    }
-
-    /// Creates a zero.
-    const fn zero() -> Self {
-        Self::from_u32(0)
-    }
-
     /// Creates a `Bid32` from `coeff` and an exponent of zero.
     ///
     /// The result is always exact.
@@ -91,11 +64,6 @@ impl Bid32 {
     // TODO(eric): Change this to `to_dpd64`.
     pub const fn to_dpd128(self) -> Dpd128 {
         Dpd128::from_parts_bin(self.signbit(), self.unbiased_exp(), self.coeff() as u128)
-    }
-
-    /// TODO
-    const fn rounded2(sign: bool, exp: i16, coeff: u32) -> Self {
-        Self::rounded(sign, exp, coeff)
     }
 }
 
@@ -170,21 +138,9 @@ const fn signbit(sign: bool) -> u32 {
     (sign as u32) << Bid32::SIGN_SHIFT
 }
 
-const fn comb(bits: u16) -> u32 {
-    debug_assert!(bits & !((1 << Bid32::COMB_BITS) - 1) == 0);
-
-    (bits as u32) << Bid32::COMB_SHIFT
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    impl Bid32 {
-        const SNAN: Self = Self::snan(false, 0);
-        const NEG_NAN: Self = Self::nan(true, 0);
-        const NEG_SNAN: Self = Self::snan(true, 0);
-    }
 
     #[test]
     fn test_exp() {

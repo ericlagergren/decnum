@@ -34,7 +34,6 @@ impl Dpd128 {
     const ECON_SHIFT: u32 = 128 - 1 - 5 - 12;
     const ECON_MASK: u128 = 0xfff << Self::ECON_SHIFT;
 
-    const COEFF_BITS: u32 = 110;
     const COEFF_MASK: u128 = (1 << 110) - 1;
 
     const PAYLOAD_MASK: u128 = Self::COEFF_MASK;
@@ -128,22 +127,6 @@ impl Dpd128 {
         exp
     }
 
-    /// Returns the adjusted exponent.
-    ///
-    /// This is `exp + digits - 1`.
-    const fn adjusted_exp(self) -> i16 {
-        const_assert!(Dpd128::DIGITS <= i16::MAX as u32);
-
-        debug_assert!(self.is_finite());
-
-        // `self.digits() as i16` does not wrap because it is in
-        // [1, DIGITS], and `DIGITS <= i16::MAX`.
-        #[allow(clippy::cast_possible_wrap)]
-        let digits = self.digits() as i16;
-
-        self.unbiased_exp() + digits - 1
-    }
-
     /// Returns the coefficient, less the MSD, as a DPD.
     const fn coeff(self) -> u128 {
         debug_assert!(self.is_finite());
@@ -233,26 +216,11 @@ impl Dpd128 {
     /// The largest allowed coefficient.
     const MAX_COEFF: i128 = 10i128.pow(34) - 1;
 
-    /// The smallestallowed coefficient.
-    const MIN_COEFF: i128 = -Self::MAX_COEFF;
-
     /// The maximum allowed exponent.
     const MAX_EXP: i16 = Self::EMAX - Self::MAX_PREC + 1;
 
     /// The smallest allowed exponent.
     const MIN_EXP: i16 = Self::EMIN - Self::MAX_PREC + 1;
-
-    /// The number of base 10 significant digits.
-    const DIGITS: u32 = 34;
-
-    /// Not a Number (NaN).
-    const NAN: Self = Self::nan(false, 0);
-
-    /// Infinity (∞).
-    const INFINITY: Self = Self::inf(false);
-
-    /// Negative infinity (−∞).
-    const NEG_INFINITY: Self = Self::inf(true);
 
     /// Reports whether the number is neither infinite nor NaN.
     const fn is_finite(self) -> bool {
@@ -265,46 +233,9 @@ impl Dpd128 {
         self.comb().is_infinite()
     }
 
-    /// Reports whether the number is neither zero, infinite,
-    /// subnormal, or NaN.
-    const fn is_normal(self) -> bool {
-        if self.is_special() || self.is_zero() {
-            return false;
-        }
-        debug_assert!(self.is_finite());
-
-        self.adjusted_exp() > Self::EMIN
-    }
-
-    /// Reports whether the number is subnormal.
-    const fn is_subnormal(self) -> bool {
-        if self.is_special() || self.is_zero() {
-            return false;
-        }
-        debug_assert!(self.is_finite());
-
-        self.adjusted_exp() <= Self::EMIN
-    }
-
-    /// Reports whether the number is `-0.0` or `+0.0`.
-    const fn is_zero(self) -> bool {
-        // Covers the coefficient and MSD <= 7.
-        const MASK1: u128 = (0x7 << Dpd128::COMB_SHIFT) | Dpd128::COEFF_MASK;
-        // Covers MSD > 7 and specials.
-        const MASK2: u128 = 0x18 << Dpd128::COMB_SHIFT;
-        (self.0 & MASK1) == 0 && (self.0 & MASK2) != MASK2
-    }
-
     /// Reports whether the number is a NaN.
     const fn is_nan(self) -> bool {
         self.comb().is_nan()
-    }
-
-    /// Reports whether the number is a quiet NaN.
-    const fn is_qnan(self) -> bool {
-        // When the number is a NaN, the first exponent
-        // continuation bit signals whether the NaN is signaling.
-        self.is_nan() && self.econ() >> (Self::ECON_BITS - 1) == 0
     }
 
     /// Reports whether the number is a signaling NaN.
@@ -312,34 +243,6 @@ impl Dpd128 {
         // When the number is a NaN, the first exponent
         // continuation bit signals whether the NaN is signaling.
         self.is_nan() && self.econ() >> (Self::ECON_BITS - 1) == 1
-    }
-
-    /// Reports whether the number is positive, including `+0.0`.
-    const fn is_sign_positive(self) -> bool {
-        !self.is_sign_negative()
-    }
-
-    /// Reports whether the number is negative, including `-0.0`.
-    const fn is_sign_negative(self) -> bool {
-        self.signbit()
-    }
-
-    /// Reports whether the number is infinite or NaN.
-    const fn is_special(self) -> bool {
-        self.comb().is_special()
-    }
-
-    /// Returns the number of significant digits in the number.
-    ///
-    /// If the number is infinity or zero, it returns 1.
-    ///
-    /// The result will always be in [1,
-    /// [`DIGITS`][Self::DIGITS]].
-    ///
-    /// TODO: NaN should return the number of digits in the
-    /// payload.
-    const fn digits(self) -> u32 {
-        self.to_bid128().digits()
     }
 }
 

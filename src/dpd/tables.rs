@@ -1,7 +1,4 @@
-use super::{
-    bcd::{self, Str3},
-    encoding as dpd,
-};
+use super::{bcd, encoding as dpd};
 
 /// Maps 12-bit BCDs to 10-bit DPDs.
 #[allow(clippy::indexing_slicing)]
@@ -56,23 +53,6 @@ pub(super) const DPD_TO_BIN: [u16; 1 << 10] = {
         let bcd = dpd::unpack_via_bits(dpd);
         let bin = bcd::to_bin(bcd);
         t[i] = bin;
-        i += 1;
-    }
-    t
-};
-
-/// Converts a 10-bit DPD to a three-byte string.
-///
-/// The high octet contains the number of significant digits in
-/// the DPD.
-#[allow(clippy::indexing_slicing)]
-pub(super) const DPD_TO_STR: [Str3; 1 << 10] = {
-    let mut t = [Str3::zero(); 1 << 10];
-    let mut i = 0;
-    while i < t.len() {
-        let dpd = i as u16;
-        let s = dpd::unpack_to_str_via_bits(dpd);
-        t[i] = s;
         i += 1;
     }
     t

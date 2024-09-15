@@ -3,48 +3,13 @@
 use core::hint;
 
 use super::{
-    bcd::{self, Pattern, Str3},
-    tables::{BCD_TO_DPD, BIN_TO_DPD, DPD_TO_BCD, DPD_TO_BIN, DPD_TO_STR},
+    bcd::{self, Pattern},
+    tables::{BCD_TO_DPD, BIN_TO_DPD, DPD_TO_BCD, DPD_TO_BIN},
 };
 use crate::util::assume;
 
-/// Reports whether the 10-bit DPD is valid.
-pub const fn is_valid(dpd: u16) -> bool {
-    if dpd > 1 << 10 {
-        return false;
-    }
-
-    !matches!(
-        dpd,
-        0x16e
-            | 0x16f
-            | 0x17e
-            | 0x17f
-            | 0x1ee
-            | 0x1ef
-            | 0x1fe
-            | 0x1ff
-            | 0x26e
-            | 0x26f
-            | 0x27e
-            | 0x27f
-            | 0x2ee
-            | 0x2ef
-            | 0x2fe
-            | 0x2ff
-            | 0x36e
-            | 0x36f
-            | 0x37e
-            | 0x37f
-            | 0x3ee
-            | 0x3ef
-            | 0x3fe
-            | 0x3ff,
-    )
-}
-
 /// Classifies a 10-bit DPD for unpacking into a 12-bit BCD.
-pub const fn classify(dpd: u16) -> Pattern {
+pub(super) const fn classify(dpd: u16) -> Pattern {
     use Pattern::*;
 
     // Match bit `v`.
@@ -78,7 +43,7 @@ pub const fn classify(dpd: u16) -> Pattern {
 ///
 /// This function might panic if `dpd-tables` is enabled and
 /// `bcd` is greater than 0x999.
-pub const fn pack(bcd: u16) -> u16 {
+pub(super) const fn pack(bcd: u16) -> u16 {
     if cfg!(feature = "dpd-tables") {
         #[allow(clippy::indexing_slicing)]
         BCD_TO_DPD[bcd as usize]
@@ -238,7 +203,7 @@ pub(super) const fn pack_via_bits_obvious(mut bcd: u16) -> u16 {
 ///
 /// This function might panic if `dpd-tables` is enabled and
 /// `dpd` is greater than 1023.
-pub const fn unpack(dpd: u16) -> u16 {
+pub(super) const fn unpack(dpd: u16) -> u16 {
     if cfg!(feature = "dpd-tables") {
         #[allow(clippy::indexing_slicing)]
         DPD_TO_BCD[dpd as usize]
@@ -308,51 +273,6 @@ pub(super) const fn unpack_via_bits(mut dpd: u16) -> u16 {
             ((dpd & 0x80) << 1) | (dpd & 0x11) | 0x888
         }
     }
-}
-
-impl Str3 {
-    /// Unpacks the 10-bit DPD into a three-byte string.
-    ///
-    /// The high octet contains the number of significant digits
-    /// in the DPD.
-    ///
-    /// # Panics
-    ///
-    /// This function might panic if `dpd-tables` is enabled and
-    /// `dpd` is greater than 1023.
-    pub const fn from_dpd(dpd: u16) -> Self {
-        if cfg!(feature = "dpd-tables") {
-            #[allow(clippy::indexing_slicing)]
-            DPD_TO_STR[dpd as usize]
-        } else {
-            unpack_to_str_via_bits(dpd)
-        }
-    }
-
-    /// Packs the three-byte string into a 10-bit DPD.
-    pub const fn to_dpd(self) -> u16 {
-        pack(self.to_bcd())
-    }
-}
-
-pub(super) const fn unpack_to_str_via_bits(dpd: u16) -> Str3 {
-    Str3::from_bcd(unpack(dpd))
-}
-
-/// Packs a 32-bit binary number into a 40-bit DPD.
-///
-/// The most significant 10 bits will always be in [0,4].
-pub const fn pack_bin_u32(mut bin: u32) -> u64 {
-    let mut dpd = 0;
-    let mut i = 0;
-    while i < 3 {
-        let d = (bin % 1000) as u16;
-        dpd |= (bin_to_dpd(d) as u64) << (i * 10);
-        bin /= 1000;
-        i += 1;
-    }
-    dpd |= (bin_to_dpd((bin % 10) as u16) as u64) << (i * 10);
-    dpd
 }
 
 /// Packs a 113-bit binary number into a 120-bit DPD.
@@ -488,97 +408,6 @@ const fn dpd_to_bin(dpd: u16) -> u16 {
     } else {
         bcd::to_bin(unpack(dpd))
     }
-}
-
-/// Returns the number of significant digits in the 10-bit DPD.
-pub(super) const fn sig_digits(dpd: u16) -> u32 {
-    let bcd = unpack(dpd);
-    let nlz = bcd.leading_zeros();
-    let mut sd = ((16 - nlz) + 3) / 4;
-    sd |= (bcd == 0) as u32;
-    sd
-}
-
-macro_rules! bit {
-    ($x:ident, $idx:literal) => {{
-        (($x >> $idx) & 1) == 1
-    }};
-}
-
-pub(crate) const fn dpd2bcd(arg: u16) -> u16 {
-    let p = bit!(arg, 9);
-    let q = bit!(arg, 8);
-    let r = bit!(arg, 7);
-    let s = bit!(arg, 6);
-    let t = bit!(arg, 5);
-    let u = bit!(arg, 4);
-    let v = bit!(arg, 3);
-    let w = bit!(arg, 2);
-    let x = bit!(arg, 1);
-    let y = bit!(arg, 0);
-
-    let a = (v & w) & (!s | t | !x);
-    let b = p & (!v | !w | (s & !t & x));
-    let c = q & (!v | !w | (s & !t & x));
-    let d = r;
-    let e = v & ((!w & x) | (!t & x) | (s & x));
-    let f = (s & (!v | !x)) | (p & !s & t & v & w & x);
-    let g = (t & (!v | !x)) | (q & !s & t & w);
-    let h = u;
-    let i = v & ((!w & !x) | (w & x & (s | t)));
-    let j = (!v & w) | (s & v & !w & x) | (p & w & (!x | (!s & !t)));
-    let k = (!v & x) | (t & !w & x) | (q & v & w & (!x | (!s & !t)));
-    let m = y;
-
-    (m as u16)
-        | ((k as u16) << 1)
-        | ((j as u16) << 2)
-        | ((i as u16) << 3)
-        | ((h as u16) << 4)
-        | ((g as u16) << 5)
-        | ((f as u16) << 6)
-        | ((e as u16) << 7)
-        | ((d as u16) << 8)
-        | ((c as u16) << 9)
-        | ((b as u16) << 10)
-        | ((a as u16) << 11)
-}
-
-pub(crate) const fn bcd2dpd(arg: u16) -> u16 {
-    let a = bit!(arg, 11);
-    let b = bit!(arg, 10);
-    let c = bit!(arg, 9);
-    let d = bit!(arg, 8);
-    let e = bit!(arg, 7);
-    let f = bit!(arg, 6);
-    let g = bit!(arg, 5);
-    let h = bit!(arg, 4);
-    let i = bit!(arg, 3);
-    let j = bit!(arg, 2);
-    let k = bit!(arg, 1);
-    let m = bit!(arg, 0);
-
-    let p = b | (a & j) | (a & f & i);
-    let q = c | (a & k) | (a & g & i);
-    let r = d;
-    let s = (f & (!a | !i)) | (!a & e & j) | (e & i);
-    let t = g | (!a & e & k) | (a & i);
-    let u = h;
-    let v = a | e | i;
-    let w = a | (e & i) | (!e & j);
-    let x = e | (a & i) | (!a & k);
-    let y = m;
-
-    (y as u16)
-        | ((x as u16) << 1)
-        | ((w as u16) << 2)
-        | ((v as u16) << 3)
-        | ((u as u16) << 4)
-        | ((t as u16) << 5)
-        | ((s as u16) << 6)
-        | ((r as u16) << 7)
-        | ((q as u16) << 8)
-        | ((p as u16) << 9)
 }
 
 #[cfg(test)]
@@ -752,29 +581,6 @@ mod tests {
             let got = unpack(got);
             assert_eq!(got, bcd, "#{i} ({bin}): {} != {}", Bcd(got), Bcd(bcd));
         }
-    }
-
-    #[test]
-    fn test_pack_bin_u32() {
-        // TODO(eric): test the rest of the digits.
-        for bin in 0..=999 {
-            let got = pack_bin_u32(bin);
-            let want = bin2dpd(bin as u16) as u64;
-            assert_eq!(got, want, "#{bin}");
-        }
-
-        // Test `u32::MAX`.
-        let want = {
-            // pack(0x4_294_967_295)
-            let mut dpd = 0;
-            dpd |= pack(0x295) as u64;
-            dpd |= (pack(0x967) as u64) << 10;
-            dpd |= (pack(0x294) as u64) << 20;
-            dpd |= (pack(0x004) as u64) << 30;
-            dpd
-        };
-        let got = pack_bin_u32(u32::MAX);
-        assert_eq!(got, want);
     }
 
     #[test]

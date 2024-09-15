@@ -52,127 +52,6 @@ impl_dec! {
 
 // To/from reprs.
 impl Bid128 {
-    /// Creates a `Bid128` from its coefficient and exponent.
-    pub fn new2(coeff: i128, exp: i16) -> Self {
-        let sign = coeff < 0;
-        let coeff = coeff.unsigned_abs();
-        if !Self::need_round(coeff, exp) {
-            Self::from_parts(sign, exp, coeff)
-        } else {
-            Self::rounded2(sign, exp, coeff)
-        }
-    }
-
-    fn rounded2(sign: bool, mut exp: i16, mut coeff: u128) -> Self {
-        println!("rounded2: sign={sign} exp={exp} coeff={coeff}");
-
-        // This method also works if we don't need to
-        // round, but for performance reasons we always
-        // check first.
-        debug_assert!(Self::need_round(coeff, exp));
-
-        let mut digits = arith128::digits(coeff) as i16;
-        println!("digits={digits}");
-
-        let mut drop = core::cmp::max(digits - Self::DIGITS as i16, Self::ETINY - exp);
-        println!("drop={drop}");
-        if drop > 0 {
-            exp += drop;
-
-            let mut d = 0;
-            while drop > 0 {
-                d = coeff % 10;
-                coeff /= 10;
-                digits -= 1;
-                drop -= 1;
-            }
-
-            // Round half even: up if d > 5 or the new LSD is
-            // odd.
-            if d > 5 || (d == 5 && (coeff % 10) != 0) {
-                // NB: This is where we'd mark inexact.
-                coeff += 1;
-                if coeff > Self::MAX_COEFF as u128 {
-                    // We went from 999... to 100..., so chop off
-                    // a trailing digit.
-                    coeff /= 10;
-                    digits -= 1;
-                    exp += 1;
-                }
-            }
-        }
-
-        println!("digits={digits}");
-        let adj = exp + (digits - 1);
-        println!("exp = {exp}");
-        println!("adj = {adj}");
-        if exp < Self::EMIN && adj < Self::EMIN {
-            // NB: This is where we'd mark underflow.
-            if adj < Self::ETINY {
-                // Subnormal < ETINY, so exp = ETINY and the coeff is
-                // rounded.
-                //
-                // TODO(eric): Round to 0, don't hard code 0.
-                return Self::from_parts(sign, Self::ETINY, 0);
-            }
-            debug_assert!(adj >= Self::ETINY);
-        }
-        debug_assert!(exp >= Self::EMIN);
-        debug_assert!(adj >= Self::EMIN);
-
-        if exp > Self::EMAX_LESS_PREC {
-            if coeff == 0 {
-                println!("clamped to zero");
-                exp = Self::EMAX_LESS_PREC; // clamped
-            } else if adj > Self::EMAX {
-                println!("inf");
-                // NB: This is where we'd mark overflow.
-                return Self::inf(sign);
-            } else {
-                let shift = exp - (Self::EMAX - (Self::MAX_PREC - 1) as i16);
-                println!("shift = {shift}");
-                if shift > 0 {
-                    coeff *= 10u128.pow(shift as u32);
-                    exp -= shift;
-                }
-            }
-        }
-        debug_assert!(exp <= Self::EMAX);
-
-        println!("exp={exp}");
-
-        // adj is in [ETINY, EMAX].
-
-        Self::from_parts(sign, exp, coeff)
-    }
-
-    /// Creates an infinity.
-    pub(crate) const fn inf(sign: bool) -> Self {
-        let bits = signbit(sign) | comb(0x1e000);
-        Self::from_bits(bits)
-    }
-
-    /// Creates a quiet NaN.
-    pub(crate) const fn nan(sign: bool, payload: u128) -> Self {
-        debug_assert!(payload <= Self::PAYLOAD_MAX);
-
-        let bits = signbit(sign) | comb(0x1f000) | payload;
-        Self::from_bits(bits)
-    }
-
-    /// Creates a signaling NaN.
-    pub(crate) const fn snan(sign: bool, payload: u128) -> Self {
-        debug_assert!(payload <= Self::PAYLOAD_MAX);
-
-        let bits = signbit(sign) | comb(0x1f800) | payload;
-        Self::from_bits(bits)
-    }
-
-    /// Creates a zero.
-    const fn zero() -> Self {
-        Self::from_u64(0)
-    }
-
     /// Creates a `Bid128` from `coeff` and an exponent of zero.
     ///
     /// The result is always exact.
@@ -487,7 +366,7 @@ macro_rules! from_unsigned_impl {
         impl From<$ty> for Bid128 {
             #[inline]
             fn from(coeff: $ty) -> Self {
-                Self::from_u128(coeff as u128)
+                Self::from_u128(u128::from(coeff))
             }
         }
     )*)
@@ -499,7 +378,7 @@ macro_rules! from_signed_impl {
         impl From<$ty> for Bid128 {
             #[inline]
             fn from(coeff: $ty) -> Self {
-                Self::from_i128(coeff as i128)
+                Self::from_i128(i128::from(coeff))
             }
         }
     )*)
@@ -508,12 +387,6 @@ from_signed_impl!(i8 i16 i32 i64 i128);
 
 const fn signbit(sign: bool) -> u128 {
     (sign as u128) << Bid128::SIGN_SHIFT
-}
-
-const fn comb(bits: u32) -> u128 {
-    debug_assert!(bits & !((1 << Bid128::COMB_BITS) - 1) == 0);
-
-    (bits as u128) << Bid128::COMB_SHIFT
 }
 
 impl Bid128 {
@@ -538,19 +411,18 @@ impl Bid128 {
             let exp = self.unbiased_exp();
             let coeff = self.coeff();
             Unpacked::Finite { sign, exp, coeff }
+        } else if self.is_snan() {
+            Unpacked::SNaN { sign }
+        } else if self.is_qnan() {
+            Unpacked::QNaN { sign }
         } else {
-            if self.is_snan() {
-                Unpacked::SNaN { sign }
-            } else if self.is_qnan() {
-                Unpacked::QNaN { sign }
-            } else {
-                Unpacked::Infinite { sign }
-            }
+            Unpacked::Infinite { sign }
         }
     }
 }
 
 /// TODO
+#[allow(dead_code, reason = "TODO")]
 enum Unpacked {
     QNaN { sign: bool },
     SNaN { sign: bool },
@@ -564,12 +436,6 @@ mod tests {
 
     mod dectest {
         crate::dectest::dectests!(d128);
-    }
-
-    impl Bid128 {
-        const SNAN: Self = Self::snan(false, 0);
-        const NEG_NAN: Self = Self::nan(true, 0);
-        const NEG_SNAN: Self = Self::snan(true, 0);
     }
 
     #[test]
@@ -591,12 +457,12 @@ mod tests {
                 want = Bid128::EMAX_LESS_PREC;
             }
 
-            let d = Bid128::new2(0, want);
+            let d = Bid128::new(0, want);
             let got = d.unbiased_exp();
             assert_eq!(got, want, "(1) d={:024b}", d.to_bits() >> (128 - 24));
             assert_eq!(d.coeff(), 0, "#{want}");
 
-            let d = Bid128::new2(Bid128::MAX_COEFF, want);
+            let d = Bid128::new(Bid128::MAX_COEFF, want);
             let got = d.unbiased_exp();
             assert_eq!(got, want, "(2) d={:024b}", d.to_bits() >> (128 - 24));
             assert_eq!(d.coeff(), Bid128::MAX_COEFF as u128, "#{want}");

@@ -89,6 +89,7 @@ impl Test<'_> {
             Op::Canonical { input } => unary!(input, canonical),
             Op::Class { input } => unary!(@str input, class),
             Op::Compare { lhs, rhs } => binary!((lhs, rhs), compare),
+            Op::CompareSig { lhs, rhs } => binary!((lhs, rhs), comparesig),
             Op::CompareTotal { lhs, rhs } => binary!((lhs, rhs), comparetotal),
             Op::Copy { input } => unary!(input, copy),
             Op::CopyAbs { input } => unary!(input, copyabs),
@@ -210,6 +211,7 @@ pub trait Backend {
     fn canonical(&self, x: Self::Dec) -> Self::Dec;
     fn class(&self, x: Self::Dec) -> &'static str;
     fn compare(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+    fn comparesig(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn comparetotal(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn copy(&self, x: Self::Dec) -> Self::Dec {
         x
@@ -262,6 +264,10 @@ impl Backend for Dec128 {
 
     fn compare(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
         lhs.compare(rhs)
+    }
+
+    fn comparesig(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+        lhs.compare_sig(rhs)
     }
 
     fn comparetotal(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {

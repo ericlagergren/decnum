@@ -1,4 +1,4 @@
-/// A string of length [1,4].
+/// A string of length [1, 4].
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct Str4(u32);
 
