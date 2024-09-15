@@ -102,7 +102,12 @@ impl Dpd128 {
     /// [[`MIN_EXP`][Self::MIN_EXP], [`MAX_EXP`][Self::MAX_EXP]].
     const fn unbiased_exp(self) -> i16 {
         const_assert!(Dpd128::LIMIT < i16::MAX as u16);
-        const_assert!(i16::MAX - (Dpd128::LIMIT as i16) > Dpd128::BIAS);
+        const_assert!(
+            #[allow(clippy::cast_possible_wrap, reason = "TODO")]
+            i16::MAX
+                - (Dpd128::LIMIT as i16)
+                > Dpd128::BIAS
+        );
 
         // The exponent only has meaning for finite numbers.
         debug_assert!(self.is_finite());

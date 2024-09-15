@@ -1,9 +1,16 @@
 use core::{hint, mem::MaybeUninit};
 
 macro_rules! const_assert {
+    (
+        #[$meta:meta]
+        $($tt:tt)*
+    ) => {
+        #[$meta]
+        const _: () = ::core::assert!($($tt)*);
+    };
     ($($tt:tt)*) => {
         const _: () = ::core::assert!($($tt)*);
-    }
+    };
 }
 pub(crate) use const_assert;
 
@@ -34,16 +41,6 @@ pub(crate) const fn debug_assert_all_digits(s: &[u8]) {
         debug_assert!(s[i].is_ascii_digit());
         i += 1;
     }
-}
-
-/// Expands, e.g., 0x7f into 0x7f7f7f...
-pub(crate) const fn mask32(x: u32) -> u32 {
-    x * 0x01010101
-}
-
-/// Expands, e.g., 0x7f into 0x7f7f7f...
-pub(crate) const fn mask64(x: u64) -> u64 {
-    x * 0x0101010101010101
 }
 
 /// See [`MaybeUninit::copy_from_slice`].

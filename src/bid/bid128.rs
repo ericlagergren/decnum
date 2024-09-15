@@ -133,88 +133,82 @@ impl Bid128 {
     #[must_use = "this returns the result of the operation \
                       without modifying the original"]
     pub const fn const_add(self, rhs: Self) -> Self {
-        if self.is_finite() && rhs.is_finite() {
-            if self.biased_exp() == rhs.biased_exp() {
-                // Fast path: exponents are the same, so we don't
-                // need to rescale either operand.
-                let exp = self.unbiased_exp();
+        if self.is_special() || rhs.is_special() {
+            if self.is_nan() || rhs.is_nan() {
+                // ±NaN + rhs
+                // self + ±NaN
+                // ±NaN + ±NaN
+                return Self::select_nan(self, rhs);
+            }
 
-                if self.signbit() == rhs.signbit() {
-                    // Exponents and signs are the same, so add
-                    // straight across. The result cannot be
-                    // zero.
-                    let sign = self.signbit();
-                    let sum = self.coeff() + rhs.coeff();
-                    return Self::maybe_rounded(sign, exp, sum);
+            if self.is_infinite() {
+                if rhs.is_infinite() && self.signbit() ^ rhs.signbit() {
+                    // +inf + -inf
+                    // -inf + +inf
+                    return Self::nan(false, 0);
                 }
-
-                // X + (-Y) == X - Y == -(Y - X)
-                // (-X) + Y == Y - X == -(X - Y)
-                let diff = self.coeff().abs_diff(rhs.coeff());
-                if diff > 0 {
-                    let mut sign = self.signbit();
-                    if self.coeff() < rhs.coeff() {
-                        sign = !sign;
-                    }
-                    return Self::maybe_rounded(sign, exp, diff);
-                }
-
-                // The sign of a zero is also zero unless both
-                // operands are negative or the signs differ and
-                // the rounding mode is `ToNegativeInf`.
-                let sign = self.signbit() && rhs.signbit();
-                return Self::maybe_rounded(sign, exp, 0);
+                // ±inf + rhs
+                // +inf + +inf
+                // -inf + -inf
+                return Self::inf(self.signbit());
             }
-            debug_assert!(self.biased_exp() != rhs.biased_exp());
+            debug_assert!(rhs.is_infinite());
 
-            // The exponents differ, so one operand needs to be
-            // rescaled.
+            // self + ±inf
+            return Self::inf(rhs.signbit());
+        };
 
-            let mut lhs = self;
-            let mut rhs = rhs;
-            if lhs.biased_exp() < rhs.biased_exp() {
-                lhs = rhs;
-                rhs = self;
-            }
-            debug_assert!(rhs.biased_exp() < lhs.biased_exp());
+        // Both are now finite.
+        debug_assert!(self.is_finite() && rhs.is_finite());
 
-            if lhs.is_zero() {
-                // ±0 + rhs
-                let mut sum = rhs.canonical();
-                if lhs.signbit() ^ rhs.signbit() && sum.is_zero() {
-                    // If the signs differ and the result is
-                    // exactly zero, the result is positive
-                    // unless the rounding mode is to
-                    // `ToNegativeInf`.
-                    sum = sum.abs();
-                }
-                return sum;
-            }
-            debug_assert!(!lhs.is_zero());
+        if self.biased_exp() == rhs.biased_exp() {
+            // Fast path: exponents are the same, so we don't
+            // need to rescale either operand.
+            let exp = self.unbiased_exp();
 
-            todo!()
+            let lhs = self.signed_coeff();
+            let rhs = rhs.signed_coeff();
+
+            let sum = lhs + rhs;
+            let sign = if sum == 0 {
+                // The sign of a zero is also zero unless
+                // both operands are negative or the signs
+                // differ and the rounding mode is
+                // `ToNegativeInf`.
+                lhs < 0 && rhs < 0
+            } else {
+                sum < 0
+            };
+            return Self::maybe_rounded(sign, exp, sum.unsigned_abs());
         }
+        debug_assert!(self.biased_exp() != rhs.biased_exp());
 
-        if self.is_nan() || rhs.is_nan() {
-            // ±NaN + rhs
-            // self + ±NaN
-            // ±NaN + ±NaN
-            return Self::select_nan(self, rhs);
+        // The exponents differ, so one operand needs to be
+        // rescaled.
+
+        let mut lhs = self;
+        let mut rhs = rhs;
+        if lhs.biased_exp() < rhs.biased_exp() {
+            lhs = rhs;
+            rhs = self;
         }
+        debug_assert!(rhs.biased_exp() < lhs.biased_exp());
 
-        if self.is_infinite() {
-            if rhs.is_infinite() && self.signbit() ^ rhs.signbit() {
-                // +inf + -inf
-                // -inf + +inf
-                return Self::nan(false, 0);
+        if lhs.is_zero() {
+            // ±0 + rhs
+            let mut sum = rhs.canonical();
+            if lhs.signbit() ^ rhs.signbit() && sum.is_zero() {
+                // If the signs differ and the result is
+                // exactly zero, the result is positive
+                // unless the rounding mode is to
+                // `ToNegativeInf`.
+                sum = sum.abs();
             }
-            // ±inf + rhs
-            // +inf + +inf
-            // -inf + -inf
-            return Self::inf(self.signbit());
+            return sum;
         }
-        // self + ±inf
-        Self::inf(rhs.signbit())
+        debug_assert!(!lhs.is_zero());
+
+        todo!()
     }
 
     /// Returns `self / other`.
@@ -418,6 +412,39 @@ impl Bid128 {
         } else {
             Unpacked::Infinite { sign }
         }
+    }
+
+    #[no_mangle]
+    const fn coeff2(self) -> u128 {
+        self.coeff()
+    }
+    #[no_mangle]
+    const fn signed_coeff2(self) -> i128 {
+        self.signed_coeff()
+    }
+    #[no_mangle]
+    const fn plus2(self) -> Self {
+        if self.is_nan() {
+            // ±0 + ±NaN
+            Self::nan(self.signbit(), self.payload())
+        } else if self.is_infinite() {
+            // ±0 + ±inf
+            Self::inf(self.signbit())
+        } else if self.is_zero() {
+            // ±0 + ±0
+            self.copy_abs()
+        } else {
+            // ±0 + self
+            self
+        }
+    }
+    #[no_mangle]
+    const fn neg2(self) -> Self {
+        self.const_neg()
+    }
+    #[no_mangle]
+    const fn canonical2(self) -> Self {
+        self.canonical()
     }
 }
 

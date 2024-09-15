@@ -161,14 +161,14 @@ macro_rules! impl_dec_internal {
             /// The maximum allowed NaN payload.
             const PAYLOAD_MAX: $ucoeff = Self::PAYLOAD_MASK;
 
-            /// A mask for bits [G6:Gw+4] which must be zero for
-            /// a canonical NaN.
-            const CANONICAL_NAN: $ucoeff = !Self::COMB_TOP6 & Self::COMB_MASK;
+            /// A mask for the bits (all except [G6:Gw+4]) that
+            /// are allowed to be set for a canonical NaN.
+            const CANONICAL_NAN: $ucoeff = Self::SIGN_MASK | Self::COMB_TOP6 | Self::PAYLOAD_MASK;
 
-            /// A mask for bits [G5:Gw+4] as well as the trailing
-            /// significand field which must be zero for
-            /// a canonical infinity.
-            const CANONICAL_INF: $ucoeff = !Self::COMB_TOP5 & Self::COMB_MASK | Self::COEFF_MASK;
+            /// A mask for the bits (all except [G5:Gw+4]) as
+            /// well as the trailing significand field which must
+            /// be zero for a canonical infinity.
+            const CANONICAL_INF: $ucoeff = Self::SIGN_MASK | Self::COMB_TOP4;
 
             const MAX_SCALEB_N: u32 = 2 * (Self::EMAX as u32 + Self::MAX_PREC);
 
@@ -300,6 +300,21 @@ macro_rules! impl_dec_internal {
                 }
             }
 
+            /// Returns the signed coefficient.
+            #[allow(dead_code)]
+            const fn signed_coeff(self) -> $icoeff {
+                // The coefficient only has meaning for finite
+                // numbers.
+                debug_assert!(self.is_finite());
+
+                let coeff = self.coeff();
+                if self.signbit() {
+                    -(coeff as $icoeff)
+                } else {
+                    coeff as $icoeff
+                }
+            }
+
             /// Returns a NaN's diagnostic information.
             const fn payload(self) -> $ucoeff {
                 // The coefficient only has meaning for NaNs.
@@ -413,13 +428,6 @@ macro_rules! impl_dec_internal {
                 Self::from_parts(sign, exp, coeff)
             }
 
-            /// Does `(coeff, exp)` need to be rounded?
-            const fn need_round(coeff: $ucoeff, exp: $unbiased) -> bool {
-                coeff > Self::MAX_COEFF as $ucoeff
-                    || exp < Self::EMIN_LESS_PREC
-                    || exp > Self::EMAX_LESS_PREC
-            }
-
             /// Calls [`from_parts`][Self::from_parts] or
             /// [`rounded`][Self::rounded], depending whether or
             /// not rounding is needed.
@@ -467,8 +475,15 @@ macro_rules! impl_dec_internal {
                 }
             }
 
-            /// Creates a finite number from the sign, unbiased
-            /// exponent, an coefficient.
+            /// Does `(coeff, exp)` need to be rounded?
+            const fn need_round(coeff: $ucoeff, exp: $unbiased) -> bool {
+                coeff > Self::MAX_COEFF as $ucoeff
+                    || exp < Self::EMIN_LESS_PREC
+                    || exp > Self::EMAX_LESS_PREC
+            }
+
+            /// Creates a canonical finite number from the sign,
+            /// unbiased exponent, an coefficient.
             ///
             /// The result is exact and unrounded.
             pub(crate) const fn from_parts(sign: bool, exp: $unbiased, coeff: $ucoeff) -> Self {
@@ -516,7 +531,7 @@ macro_rules! impl_dec_internal {
                 Self::from_bits(bits)
             }
 
-            /// Creates an infinity.
+            /// Creates a canonical infinity.
             pub(crate) const fn inf(sign: bool) -> Self {
                 let mut bits = 0;
                 bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
@@ -524,7 +539,7 @@ macro_rules! impl_dec_internal {
                 Self::from_bits(bits)
             }
 
-            /// Creates a quiet NaN.
+            /// Creates a canonical quiet NaN.
             pub(crate) const fn nan(sign: bool, payload: $ucoeff) -> Self {
                 debug_assert!(payload <= Self::PAYLOAD_MAX);
 
@@ -535,7 +550,7 @@ macro_rules! impl_dec_internal {
                 Self::from_bits(bits)
             }
 
-            /// Creates a signaling NaN.
+            /// Creates a canonical signaling NaN.
             pub(crate) const fn snan(sign: bool, payload: $ucoeff) -> Self {
                 debug_assert!(payload <= Self::PAYLOAD_MAX);
 
@@ -662,7 +677,11 @@ macro_rules! impl_dec_arith {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn abs(self) -> Self {
-                Self::from_bits(self.0 & !Self::SIGN_MASK)
+                if self.is_nan() {
+                    Self::select_nan(self, self)
+                } else {
+                    self.copy_abs()
+                }
             }
 
             /// Reports whether `self == other`.
@@ -868,18 +887,27 @@ macro_rules! impl_dec_arith {
 
             /// Returns `-self`.
             ///
-            /// This is the same as [`Neg`][core::ops::Neg], but can be
-            /// used in a const context.
+            /// This is the same as [`Neg`][core::ops::Neg], but
+            /// can be used in a const context.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn const_neg(self) -> Self {
-                Self(self.0 ^ Self::SIGN_MASK)
+                if self.is_nan() {
+                    // ±0 - ±NaN
+                    Self::nan(self.signbit(), self.payload())
+                } else if self.is_zero() {
+                    // ±0 - ±0
+                    self.copy_abs()
+                } else {
+                    // ±0 - self
+                    self.copy_neg()
+                }
             }
 
             /// Returns `self - other`.
             ///
-            /// This is the same as [`Sub`][core::ops::Sub], but can be
-            /// used in a const context.
+            /// This is the same as [`Sub`][core::ops::Sub], but
+            /// can be used in a const context.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn const_sub(self, rhs: Self) -> Self {
@@ -1058,10 +1086,10 @@ macro_rules! impl_dec_misc {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn canonical(self) -> Self {
-                let d = if self.is_nan() && Self::CANONICAL_NAN != 0 {
-                    Self::from_bits(self.0 & !Self::CANONICAL_NAN)
-                } else if self.is_infinite() && Self::CANONICAL_INF != 0 {
-                    Self::from_bits(self.0 & !Self::CANONICAL_INF)
+                let d = if self.is_nan() {
+                    Self::from_bits(self.0 & Self::CANONICAL_NAN)
+                } else if self.is_infinite() {
+                    Self::inf(self.signbit())
                 } else if self.raw_coeff() > Self::MAX_COEFF as $ucoeff {
                     Self::from_bits(self.0 & !Self::COEFF_MASK)
                 } else {
@@ -1137,6 +1165,24 @@ macro_rules! impl_dec_misc {
                 todo!()
             }
 
+            /// Returns the absolute value of `self`.
+            ///
+            /// TODO: unlike [`abs`][Self::abs], ...
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn copy_abs(self) -> Self {
+                Self::from_bits(self.0 & !Self::SIGN_MASK)
+            }
+
+            /// Returns `-self`.
+            ///
+            /// TODO: unlike [`neg`][core::ops::Neg], ...
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn copy_neg(self) -> Self {
+                Self::from_bits(self.0 ^ Self::SIGN_MASK)
+            }
+
             /// Returns `self` with the same sign as `rhs`.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
@@ -1151,9 +1197,9 @@ macro_rules! impl_dec_misc {
             /// format.
             pub const fn is_canonical(self) -> bool {
                 if self.is_nan() {
-                    self.0 & Self::CANONICAL_NAN == 0
+                    self.0 & !Self::CANONICAL_NAN == 0
                 } else if self.is_infinite() {
-                    self.0 & Self::CANONICAL_INF == 0
+                    self.0 & !Self::CANONICAL_INF == 0
                 } else {
                     self.raw_coeff() <= Self::MAX_COEFF as $ucoeff
                 }
@@ -1268,6 +1314,25 @@ macro_rules! impl_dec_misc {
                               without modifying the original"]
             pub const fn or(self, _rhs: Self) -> Self {
                 todo!()
+            }
+
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            #[cfg(test)]
+            pub(crate) fn plus(self) -> Self {
+                if self.is_nan() {
+                    // ±0 + ±NaN
+                    Self::nan(self.signbit(), self.payload())
+                } else if self.is_infinite() {
+                    // ±0 + ±inf
+                    Self::inf(self.signbit())
+                } else if self.is_zero() {
+                    // ±0 + ±0
+                    self.copy_abs()
+                } else {
+                    // ±0 + self
+                    self
+                }
             }
 
             /// Returns the base in which arithmetic is effected.

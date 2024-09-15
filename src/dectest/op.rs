@@ -5,7 +5,7 @@ use std::fmt;
 pub enum Op<'a> {
     Abs { input: &'a str },
     Add { lhs: &'a str, rhs: &'a str },
-    And,
+    And { lhs: &'a str, rhs: &'a str },
     Apply { input: &'a str },
     Canonical { input: &'a str },
     Class { input: &'a str },
@@ -17,10 +17,10 @@ pub enum Op<'a> {
     CopyAbs { input: &'a str },
     CopyNegate { input: &'a str },
     CopySign { lhs: &'a str, rhs: &'a str },
-    Divide,
+    Divide { lhs: &'a str, rhs: &'a str },
     DivideInt,
     Exp,
-    Fma,
+    Fma { a: &'a str, b: &'a str, c: &'a str },
     Invert,
     Ln,
     Log10,
@@ -29,13 +29,13 @@ pub enum Op<'a> {
     Min { lhs: &'a str, rhs: &'a str },
     MaxMag,
     MinMag,
-    Minus,
+    Minus { input: &'a str },
     Multiply { lhs: &'a str, rhs: &'a str },
     NextMinus,
     NextPlus,
     NextToward,
     Or,
-    Plus,
+    Plus { input: &'a str },
     Power,
     Quantize { lhs: &'a str, rhs: &'a str },
     Reduce,
@@ -101,8 +101,14 @@ impl fmt::Display for Op<'_> {
             Self::Min { lhs, rhs } => {
                 write!(f, "min {lhs} {rhs}")
             }
+            Self::Minus { input } => {
+                write!(f, "minus {input}")
+            }
             Self::Multiply { lhs, rhs } => {
                 write!(f, "multiply {lhs} {rhs}")
+            }
+            Self::Plus { input } => {
+                write!(f, "plus {input}")
             }
             Self::Quantize { lhs, rhs } => {
                 write!(f, "quantize {lhs} {rhs}")
@@ -113,7 +119,7 @@ impl fmt::Display for Op<'_> {
             Self::ToIntegralX { input } => {
                 write!(f, "tointegralx {input}")
             }
-            _ => write!(f, "other op"),
+            _ => write!(f, "other op: {self:?}"),
         }
     }
 }

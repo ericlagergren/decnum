@@ -53,6 +53,7 @@ impl RoundingMode {
             "floor" => Self::ToNegativeInf,
             "ceiling" => Self::ToPositiveInf,
             "half_down" => Self::ToNearestTowardZero,
+            "up" => Self::AwayFromZero,
             _ => return None,
         };
         Some(mode)

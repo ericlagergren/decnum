@@ -79,8 +79,9 @@ impl Test<'_> {
         }
 
         match &self.op {
+            Op::Abs { input } => unary!(input, abs),
             Op::Add { .. } => {
-                // binary!((lhs, rhs), add)
+                //binary!((lhs, rhs), add)
             }
             Op::Apply { input } => {
                 let got = parse_input(backend, input)?;
@@ -97,11 +98,13 @@ impl Test<'_> {
             Op::CopySign { lhs, rhs } => binary!((lhs, rhs), copysign),
             Op::Max { lhs, rhs } => binary!((lhs, rhs), max),
             Op::Min { lhs, rhs } => binary!((lhs, rhs), min),
+            Op::Minus { input } => unary!(input, minus),
             Op::Multiply { .. } => {
                 // binary!((lhs, rhs), multiply)
             }
+            Op::Plus { input } => unary!(input, plus),
             Op::Subtract { .. } => {
-                // binary!((lhs, rhs), subtract)
+                //binary!((lhs, rhs), subtract)
             }
             Op::ToIntegralX { .. } => {
                 // unary!(...)
@@ -208,20 +211,22 @@ pub trait Backend {
     /// Converts the decimal to its bit representation.
     fn to_bits(&self, dec: Self::Dec) -> Self::Bits;
 
+    fn abs(&self, x: Self::Dec) -> Self::Dec;
+    fn add(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn canonical(&self, x: Self::Dec) -> Self::Dec;
     fn class(&self, x: Self::Dec) -> &'static str;
     fn compare(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn comparesig(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn comparetotal(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
-    fn copy(&self, x: Self::Dec) -> Self::Dec {
-        x
-    }
+    fn copy(&self, x: Self::Dec) -> Self::Dec;
     fn copyabs(&self, x: Self::Dec) -> Self::Dec;
     fn copynegate(&self, x: Self::Dec) -> Self::Dec;
     fn copysign(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn max(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn min(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+    fn minus(&self, x: Self::Dec) -> Self::Dec;
     fn multiply(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+    fn plus(&self, x: Self::Dec) -> Self::Dec;
     fn quantize(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn subtract(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn tointegralx(&self, x: Self::Dec) -> Self::Dec;
@@ -254,6 +259,14 @@ impl Backend for Dec128 {
         Bid128::parse(s)
     }
 
+    fn abs(&self, x: Self::Dec) -> Self::Dec {
+        x.abs()
+    }
+
+    fn add(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+        lhs + rhs
+    }
+
     fn canonical(&self, x: Self::Dec) -> Self::Dec {
         x.canonical()
     }
@@ -274,12 +287,16 @@ impl Backend for Dec128 {
         lhs.compare_total(rhs)
     }
 
+    fn copy(&self, x: Self::Dec) -> Self::Dec {
+        x
+    }
+
     fn copyabs(&self, x: Self::Dec) -> Self::Dec {
-        x.abs()
+        x.copy_abs()
     }
 
     fn copynegate(&self, x: Self::Dec) -> Self::Dec {
-        x.const_neg()
+        x.copy_neg()
     }
 
     fn copysign(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
@@ -294,8 +311,16 @@ impl Backend for Dec128 {
         lhs.min(rhs)
     }
 
+    fn minus(&self, x: Self::Dec) -> Self::Dec {
+        -x
+    }
+
     fn multiply(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
         lhs * rhs
+    }
+
+    fn plus(&self, x: Self::Dec) -> Self::Dec {
+        x.plus()
     }
 
     fn quantize(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
@@ -338,13 +363,21 @@ macro_rules! dectests {
     };
     ($backend:ty, $prefix:literal) => {
         $crate::dectest::dectests!($backend, $prefix,
+            test_abs => "Abs",
+            test_add => "Add",
             test_canonical => "Canonical",
             test_class => "Class",
             test_compare => "Compare",
             test_compare_total => "CompareTotal",
+            test_copy => "Copy",
+            test_copy_abs => "CopyAbs",
+            test_copy_neg => "CopyNegate",
             test_encode => "Encode",
             test_max => "Max",
             test_min => "Min",
+            test_minus => "Minus",
+            test_plus => "Plus",
+            test_sub => "Subtract",
         );
     };
     ($backend:ty, $prefix:literal, $($name:ident => $test:expr),+ $(,)?) => {

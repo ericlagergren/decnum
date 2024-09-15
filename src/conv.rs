@@ -1,3 +1,5 @@
+#![allow(dead_code, reason = "TODO")]
+
 use core::{fmt, mem::MaybeUninit, str};
 
 use super::bid::{Bid128, Bid32, Bid64};
