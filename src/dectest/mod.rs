@@ -13,10 +13,6 @@ use op::Op;
 pub use parse::parse;
 
 use super::{conv::ParseError, ctx::RoundingMode};
-use crate::{
-    bid::{Bid128, Bid64},
-    dpd::Dpd128,
-};
 
 macro_rules! failure {
     ($msg:literal $(,)?) => {
@@ -236,17 +232,17 @@ pub trait Backend {
 }
 
 macro_rules! impl_backend {
-    ($name:ty, $dec:ty, $bits:ty) => {
+    ($name:ty, $dec:ty, $dpd:ty, $bits:ty) => {
         impl $crate::dectest::Backend for $name {
             type Dec = $dec;
             type Bits = $bits;
 
             fn to_bits(&self, dec: Self::Dec) -> Self::Bits {
-                dec.to_dpd128().to_bits()
+                dec.to_dpd().to_bits()
             }
 
             fn from_bytes(&self, bytes: &[u8]) -> Self::Dec {
-                $crate::dpd::Dpd128::from_be_bytes(bytes.try_into().unwrap()).to_bid128()
+                <$dpd>::from_be_bytes(bytes.try_into().unwrap()).to_bid()
             }
 
             fn parse(&self, s: &str) -> Result<Self::Dec, $crate::conv::ParseError> {
@@ -344,26 +340,28 @@ impl<T> Default<T> {
 }
 
 /// An integer like `u32`, `u128`, etc.
-pub trait Bits: Copy + Eq + PartialEq + fmt::Debug + fmt::LowerHex + Sized {
-    /// Parses itself from bytes.
-    fn from_bytes(bytes: &[u8]) -> Result<Self>;
-}
+pub trait Bits: Copy + Eq + PartialEq + fmt::Debug + fmt::LowerHex + Sized {}
 
 macro_rules! impl_bits {
     ($($ty:ty),*) => {
         $(
-            impl Bits for $ty {
-                fn from_bytes(bytes: &[u8]) -> Result<Self> {
-                    Ok(Self::from_le_bytes(bytes.try_into()?))
-                }
-            }
+            impl Bits for $ty {}
         )*
     }
 }
 impl_bits!(u32, u64, u128);
 
 macro_rules! dectests {
-    ($backend:ty, $prefix:literal) => {
+    (d32 $backend:ty, $prefix:literal) => {
+        $crate::dectest::dectests!($backend, $prefix,
+            test_base => "Base",
+            test_encode => "Encode",
+        );
+    };
+    (d64 $backend:ty, $prefix:literal) => {
+        $crate::dectest::dectests!(d128 $backend, $prefix);
+    };
+    (d128 $backend:ty, $prefix:literal) => {
         $crate::dectest::dectests!($backend, $prefix,
             test_abs => "Abs",
             test_add => "Add",

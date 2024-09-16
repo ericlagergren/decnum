@@ -3,7 +3,6 @@ use core::{cmp::Ordering, fmt, mem::size_of, num::FpCategory, str};
 use super::{arith64, base::impl_dec};
 use crate::{
     conv::{self, ParseError},
-    dpd::Dpd128,
     util::{self, const_assert},
 };
 
@@ -38,6 +37,7 @@ impl_dec! {
     unbiased_exp = i16,
     comb = u16,
     arith = arith64,
+    dpd = crate::dpd::Dpd64,
     prefix = "dd",
 }
 
@@ -77,12 +77,6 @@ impl Bid64 {
         } else {
             Self::rounded(false, 0, coeff)
         }
-    }
-
-    /// Converts the `Bid64` to a `Dpd128`.
-    // TODO(eric): Change this to `to_dpd64`.
-    pub const fn to_dpd128(self) -> Dpd128 {
-        Dpd128::from_parts_bin(self.signbit(), self.unbiased_exp(), self.coeff() as u128)
     }
 }
 
@@ -153,13 +147,20 @@ macro_rules! from_signed_impl {
 }
 from_signed_impl!(i8 i16 i32 i64);
 
-const fn signbit(sign: bool) -> u64 {
-    (sign as u64) << Bid64::SIGN_SHIFT
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod dectests {
+        use super::*;
+        use crate::{
+            dectest::{self, Default},
+            dpd::Dpd64,
+        };
+
+        dectest::impl_backend!(Default<Bid64>, Bid64, Dpd64, u64);
+        dectest::dectests!(d64 Default<Bid64>, "dd");
+    }
 
     #[test]
     fn test_exp() {

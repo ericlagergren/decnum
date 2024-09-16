@@ -109,27 +109,13 @@ impl PartialEq<Dpd128> for Quad {
 
 impl PartialEq<Quad> for Bid128 {
     fn eq(&self, other: &Quad) -> bool {
-        self.to_dpd128() == *other
+        self.to_dpd() == *other
     }
 }
 
 impl PartialEq<Bid128> for Quad {
     fn eq(&self, other: &Bid128) -> bool {
-        other.to_dpd128() == *self
-    }
-}
-
-// TODO: remove
-impl PartialEq<Quad> for Bid64 {
-    fn eq(&self, other: &Quad) -> bool {
-        self.to_dpd128() == *other
-    }
-}
-
-// TODO: remove
-impl PartialEq<Bid64> for Quad {
-    fn eq(&self, other: &Bid64) -> bool {
-        other.to_dpd128() == *self
+        other.to_dpd() == *self
     }
 }
 

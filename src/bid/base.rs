@@ -7,6 +7,7 @@ macro_rules! impl_dec {
         unbiased_exp = $unbiased:ty,
         comb = $comb:ty,
         arith = $arith:ident,
+        dpd = $dpd:ty,
         prefix = $prefix:literal $(,)?
     ) => {
         $crate::bid::base::impl_dec_internal!(
@@ -16,7 +17,7 @@ macro_rules! impl_dec {
             $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
         );
         $crate::bid::base::impl_dec_to_from_repr!(
-            $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
+            $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith, $dpd,
         );
         $crate::bid::base::impl_dec_arith!(
             $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
@@ -30,7 +31,6 @@ macro_rules! impl_dec {
         $crate::bid::base::impl_dec_impls!($name);
         $crate::bid::dtoa::impl_dtoa!($name, $arith);
         $crate::bid::atod::impl_atod!($name, $ucoeff, $unbiased, $arith);
-        $crate::bid::base::impl_tests!($name, $ucoeff, $prefix);
     };
 }
 pub(crate) use impl_dec;
@@ -48,11 +48,11 @@ macro_rules! impl_dec_internal {
         // Internal stuff.
         impl $name {
             /// The storage width in bits.
-            const K: u32 = (size_of::<$name>() * 8) as u32;
+            pub(crate) const K: u32 = (size_of::<$name>() * 8) as u32;
             /// The size of the sign bit in bits.
             const S: u32 = 1;
             /// The width of the exponent in bits.
-            const W: u32 = Self::K / 16 + 4;
+            pub(crate) const W: u32 = Self::K / 16 + 4;
             /// The width of the combination field in bits.
             #[allow(dead_code, reason = "For documentation purposes")]
             const G: u32 = Self::W + 5;
@@ -62,7 +62,7 @@ macro_rules! impl_dec_internal {
             const P: u32 = 9 * (Self::K / 32) - 2;
 
             /// The storage width in bytes.
-            const BYTES: usize = (Self::K / 8) as usize;
+            pub(crate) const BYTES: usize = (Self::K / 8) as usize;
 
             /// The bias added to the encoded exponent in order
             /// to convert it to the "actual" exponent.
@@ -81,37 +81,39 @@ macro_rules! impl_dec_internal {
 
             /// The minimum unbiased exponent for a subnormal
             /// value.
-            const ETINY: $unbiased = Self::EMIN - ((Self::P as $unbiased) - 1);
+            pub(crate) const ETINY: $unbiased = Self::EMIN - ((Self::P as $unbiased) - 1);
 
             /// The maximum adjusted exponent for a full-length
             /// coefficient.
-            const EMAX_LESS_PREC: $unbiased = Self::MAX_EXP - ((Self::MAX_PREC as $unbiased) - 1);
+            pub(crate) const EMAX_LESS_PREC: $unbiased =
+                Self::MAX_EXP - ((Self::MAX_PREC as $unbiased) - 1);
 
             /// The minimum adjusted exponent for a full-length
             /// coefficient.
-            const EMIN_LESS_PREC: $unbiased = Self::MIN_EXP - ((Self::MAX_PREC as $unbiased) - 1);
+            pub(crate) const EMIN_LESS_PREC: $unbiased =
+                Self::MIN_EXP - ((Self::MAX_PREC as $unbiased) - 1);
 
             /// The number of digits of precision.
-            const MAX_PREC: u32 = Self::P;
+            pub(crate) const MAX_PREC: u32 = Self::P;
 
             /// The shift needed to set the sign bit.
-            const SIGN_SHIFT: u32 = Self::K - Self::S;
+            pub(crate) const SIGN_SHIFT: u32 = Self::K - Self::S;
             /// Masks just the sign bit.
             const SIGN_MASK: $ucoeff = 1 << Self::SIGN_SHIFT;
 
             // Top N bits of the combination field.
-            const COMB_TOP2: $ucoeff = 0x3 << (Self::SIGN_SHIFT - 2);
-            const COMB_TOP4: $ucoeff = 0xf << (Self::SIGN_SHIFT - 4);
-            const COMB_TOP5: $ucoeff = 0x1f << (Self::SIGN_SHIFT - 5);
-            const COMB_TOP6: $ucoeff = 0x3f << (Self::SIGN_SHIFT - 6);
+            pub(crate) const COMB_TOP2: $ucoeff = 0x3 << (Self::SIGN_SHIFT - 2);
+            pub(crate) const COMB_TOP4: $ucoeff = 0xf << (Self::SIGN_SHIFT - 4);
+            pub(crate) const COMB_TOP5: $ucoeff = 0x1f << (Self::SIGN_SHIFT - 5);
+            pub(crate) const COMB_TOP6: $ucoeff = 0x3f << (Self::SIGN_SHIFT - 6);
 
             /// The number of bits in the exponent.
-            const EXP_BITS: u32 = Self::W + 2;
+            pub(crate) const EXP_BITS: u32 = Self::W + 2;
             /// Masks only the used bits in an exponent.
             ///
             /// NB: This does *not* mask bits in the combination
             /// field.
-            const EXP_MASK: $biased = (1 << Self::EXP_BITS) - 1;
+            pub(crate) const EXP_MASK: $biased = (1 << Self::EXP_BITS) - 1;
 
             /// Masks the exponent in the combination field for
             /// a form one number.
@@ -144,12 +146,12 @@ macro_rules! impl_dec_internal {
             const MAX_COEFF_BITS: u32 = super::$arith::bitlen(Self::MAX_COEFF as $ucoeff);
 
             /// The number of bits in the trailing significand.
-            const COEFF_BITS: u32 = Self::T;
+            pub(crate) const COEFF_BITS: u32 = Self::T;
             /// MAsks the trailing significand field.
-            const COEFF_MASK: $ucoeff = (1 << Self::COEFF_BITS) - 1;
+            pub(crate) const COEFF_MASK: $ucoeff = (1 << Self::COEFF_BITS) - 1;
 
             /// Masks a NaN's payload.
-            const PAYLOAD_MASK: $ucoeff = Self::COEFF_MASK;
+            pub(crate) const PAYLOAD_MASK: $ucoeff = Self::COEFF_MASK;
             /// The maximum number of digits in a NaN's payload.
             const PAYLOAD_DIGITS: u32 = $arith::digits(Self::PAYLOAD_MASK);
             /// The maximum allowed NaN payload.
@@ -233,8 +235,8 @@ macro_rules! impl_dec_internal {
                 debug_assert!(self.is_finite());
 
                 // `self.biased_exp()` is in [0, LIMIT] and
-                // `LIMIT <= <$unbiased>::MAX`, so the cast cannot
-                // wrap.
+                // `LIMIT <= <$unbiased>::MAX`, so the cast
+                // cannot wrap.
                 //
                 // The subtraction cannot wrap since
                 //    LIMIT + BIAS <= <$unbiased>::MAX
@@ -515,7 +517,7 @@ macro_rules! impl_dec_internal {
                     // s 1100eeeeee (100)t tttttttttt tttttttttt
                     // s 1101eeeeee (100)t tttttttttt tttttttttt
                     // s 1110eeeeee (100)t tttttttttt tttttttttt
-                    bits |= signbit(sign);
+                    bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
                     bits |= Self::COMB_TOP2;
                     bits |= (biased as $ucoeff) << Self::FORM2_EXP_SHIFT;
                     bits |= coeff & Self::FORM2_COEFF_MASK;
@@ -523,11 +525,12 @@ macro_rules! impl_dec_internal {
                     // s 00eeeeee   (0)ttt tttttttttt tttttttttt
                     // s 01eeeeee   (0)ttt tttttttttt tttttttttt
                     // s 10eeeeee   (0)ttt tttttttttt tttttttttt
-                    bits |= signbit(sign);
+                    bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
                     bits |= (biased as $ucoeff) << Self::FORM1_EXP_SHIFT;
                     bits |= coeff & Self::FORM1_COEFF_MASK;
                 }
-                $crate::bid::canonical!(bits)
+                // TODO: $crate::bid::canonical!(bits)
+                Self(bits)
             }
 
             /// Creates a canonical infinity.
@@ -1182,7 +1185,7 @@ macro_rules! impl_dec_misc {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn copy_abs(self) -> Self {
-                $crate::bid::canonical!(self.0 & !Self::SIGN_MASK)
+                Self(self.0 & !Self::SIGN_MASK)
             }
 
             /// Returns `-self`.
@@ -1193,7 +1196,7 @@ macro_rules! impl_dec_misc {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn copy_neg(self) -> Self {
-                $crate::bid::canonical!(self.0 ^ Self::SIGN_MASK)
+                Self(self.0 ^ Self::SIGN_MASK)
             }
 
             /// Returns `self` with the same sign as `rhs`.
@@ -1206,7 +1209,7 @@ macro_rules! impl_dec_misc {
                 let mut bits = self.0;
                 bits &= !Self::SIGN_MASK;
                 bits |= (rhs.0 & Self::SIGN_MASK);
-                $crate::bid::canonical!(bits)
+                Self(bits)
             }
 
             /// Reports whether the number is in its canonical
@@ -1617,7 +1620,8 @@ macro_rules! impl_dec_to_from_repr {
         $biased:ty,
         $unbiased:ty,
         $comb:ty,
-        $arith:ident $(,)?
+        $arith:ident,
+        $dpd:ty $(,)?
     ) => {
         // To/from repr.
         impl $name {
@@ -1642,23 +1646,60 @@ macro_rules! impl_dec_to_from_repr {
 
             /// Creates a number from a little-endian byte array.
             pub const fn from_le_bytes(bytes: [u8; Self::BYTES]) -> Self {
-                $crate::bid::canonical!(<$ucoeff>::from_le_bytes(bytes))
+                Self(<$ucoeff>::from_le_bytes(bytes))
             }
 
             /// Creates a number from a big-endian byte array.
             pub const fn from_be_bytes(bytes: [u8; Self::BYTES]) -> Self {
-                $crate::bid::canonical!(<$ucoeff>::from_be_bytes(bytes))
+                Self(<$ucoeff>::from_be_bytes(bytes))
             }
 
             /// Creates a number from a native-endian byte array.
             pub const fn from_ne_bytes(bytes: [u8; Self::BYTES]) -> Self {
-                $crate::bid::canonical!(<$ucoeff>::from_ne_bytes(bytes))
+                Self(<$ucoeff>::from_ne_bytes(bytes))
             }
 
             /// Raw transmutation to the number's raw bit
             /// representation.
             pub const fn to_bits(self) -> $ucoeff {
                 self.0
+            }
+
+            /// Converts the number to a densely packed decimal.
+            pub const fn to_dpd(self) -> $dpd {
+                if self.is_nan() {
+                    let payload = <$dpd>::pack_bin(self.payload());
+                    if self.is_snan() {
+                        <$dpd>::snan(self.signbit(), payload)
+                    } else {
+                        <$dpd>::nan(self.signbit(), payload)
+                    }
+                } else if self.is_infinite() {
+                    <$dpd>::inf(self.signbit())
+                } else {
+                    <$dpd>::from_parts_bin(self.signbit(), self.unbiased_exp(), self.coeff())
+                }
+            }
+
+            /// Converts the DPD to a number.
+            pub const fn from_dpd(dpd: $dpd) -> Self {
+                if dpd.is_nan() {
+                    if dpd.is_snan() {
+                        Self::snan(dpd.signbit(), dpd.payload_bin())
+                    } else {
+                        Self::nan(dpd.signbit(), dpd.payload_bin())
+                    }
+                } else if dpd.is_infinite() {
+                    Self::inf(dpd.signbit())
+                } else {
+                    Self::from_parts(dpd.signbit(), dpd.unbiased_exp(), dpd.full_coeff_bin())
+                }
+            }
+        }
+
+        impl From<$dpd> for $name {
+            fn from(dpd: $dpd) -> Self {
+                Self::from_dpd(dpd)
             }
         }
     };
@@ -1703,15 +1744,3 @@ macro_rules! impl_dec_impls {
     };
 }
 pub(crate) use impl_dec_impls;
-
-macro_rules! impl_tests {
-    ($name:ty, $ucoeff:ty, $prefix:literal) => {
-        #[cfg(test)]
-        mod dectests {
-            type T = $crate::dectest::Default<$name>;
-            $crate::dectest::impl_backend!(T, $name, $ucoeff);
-            $crate::dectest::dectests!(T, $prefix);
-        }
-    };
-}
-pub(crate) use impl_tests;

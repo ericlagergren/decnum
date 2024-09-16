@@ -3,7 +3,6 @@ use core::{cmp::Ordering, fmt, mem::size_of, num::FpCategory, str};
 use super::{arith128, base::impl_dec};
 use crate::{
     conv::{self, ParseError},
-    dpd::{self, Dpd128},
     util::{self, const_assert},
 };
 
@@ -48,6 +47,7 @@ impl_dec! {
     unbiased_exp = i16,
     comb = u32,
     arith = arith128,
+    dpd = crate::dpd::Dpd128,
     prefix = "dq",
 }
 
@@ -101,27 +101,6 @@ impl Bid128 {
         } else {
             Self::rounded(false, 0, coeff)
         }
-    }
-
-    /// Converts the `Bid128` to a `Dpd128`.
-    pub const fn to_dpd128(self) -> Dpd128 {
-        if self.is_nan() {
-            let payload = dpd::pack_bin_u113(self.payload());
-            if self.is_snan() {
-                Dpd128::snan(self.signbit(), payload)
-            } else {
-                Dpd128::nan(self.signbit(), payload)
-            }
-        } else if self.is_infinite() {
-            Dpd128::inf(self.signbit())
-        } else {
-            Dpd128::from_parts_bin(self.signbit(), self.unbiased_exp(), self.coeff())
-        }
-    }
-
-    /// Converts the `Dpd128` to a `Bid128`.
-    pub const fn from_dpd128(dpd: Dpd128) -> Self {
-        dpd.to_bid128()
     }
 }
 
@@ -380,10 +359,6 @@ macro_rules! from_signed_impl {
 }
 from_signed_impl!(i8 i16 i32 i64 i128);
 
-const fn signbit(sign: bool) -> u128 {
-    (sign as u128) << Bid128::SIGN_SHIFT
-}
-
 impl Bid128 {
     /// TODO
     #[no_mangle]
@@ -466,15 +441,26 @@ enum Unpacked {
 mod tests {
     use super::*;
 
+    mod dectests {
+        use super::*;
+        use crate::{
+            dectest::{self, Default},
+            dpd::Dpd128,
+        };
+
+        dectest::impl_backend!(Default<Bid128>, Bid128, Dpd128, u128);
+        dectest::dectests!(d128 Default<Bid128>, "dq");
+    }
+
     #[test]
     fn test_idk() {
-        let x = Bid128::parse("1.00000000000000000000000000000000E-6143").unwrap();
-        println!("x = {x}");
-        println!("x = {}", x.class());
-        println!("special = {}", x.is_special());
-        println!("zero = {}", x.is_zero());
-        println!("adj = {}", x.adjusted_exp());
-        println!("min = {}", Bid128::MIN_EXP);
+        let x = Bid128::parse("9.999999999999999999999999999999999E+6144").unwrap();
+        let y = x.to_dpd();
+        println!("x {:0128b}", x);
+        println!("y {:0128b}", y);
+        println!("x = {} {:016b} {x:?}", x.biased_exp(), x.biased_exp());
+        println!("y = {} {:016b} {y:?}", y.biased_exp(), y.biased_exp());
+        //println!("z = {:?}", y.to_bid());
         assert!(false);
     }
 

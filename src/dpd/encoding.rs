@@ -275,6 +275,54 @@ pub(super) const fn unpack_via_bits(mut dpd: u16) -> u16 {
     }
 }
 
+/// Packs a 23-bit binary number into a 30-bit DPD.
+///
+/// The most significant 10 bits will always be either `0` or
+/// `9`.
+///
+/// `bin` must be in the range `[0, (10^7)-1]`
+pub(crate) const fn pack_bin_u23(mut bin: u32) -> u32 {
+    const MASK: u32 = !(((1 << 9) - 1) << 23);
+    bin &= MASK;
+
+    let mut dpd = 0;
+    let mut i = 0;
+    while i < 2 {
+        let q = bin / 1000;
+        let r = (bin % 1000) as u16;
+        dpd |= (bin_to_dpd(r) as u32) << (i * 10);
+        i += 1;
+        bin = q;
+    }
+    dpd |= (bin_to_dpd((bin % 10) as u16) as u32) << (i * 10);
+    debug_assert!(dpd & !((1 << 30) - 1) == 0);
+    dpd
+}
+
+/// Packs a 53-bit binary number into a 60-bit DPD.
+///
+/// The most significant 10 bits will always be either `0` or
+/// `9`.
+///
+/// `bin` must be in the range `[0, (10^16)-1]`
+pub(crate) const fn pack_bin_u53(mut bin: u64) -> u64 {
+    const MASK: u64 = !(((1 << 11) - 1) << 53);
+    bin &= MASK;
+
+    let mut dpd = 0;
+    let mut i = 0;
+    while i < 5 {
+        let q = bin / 1000;
+        let r = (bin % 1000) as u16;
+        dpd |= (bin_to_dpd(r) as u64) << (i * 10);
+        i += 1;
+        bin = q;
+    }
+    dpd |= (bin_to_dpd((bin % 10) as u16) as u64) << (i * 10);
+    debug_assert!(dpd & !((1 << 60) - 1) == 0);
+    dpd
+}
+
 /// Packs a 113-bit binary number into a 120-bit DPD.
 ///
 /// The most significant 10 bits will always be either `0` or
@@ -294,7 +342,7 @@ pub(crate) const fn pack_bin_u113(mut bin: u128) -> u128 {
         bin = q;
     }
     dpd |= (bin_to_dpd((bin % 10) as u16) as u128) << (i * 10);
-    debug_assert!(dpd & !((1 << 120) - 1) == 0,);
+    debug_assert!(dpd & !((1 << 120) - 1) == 0);
     dpd
 }
 
@@ -385,6 +433,34 @@ const fn bin_to_dpd(bin: u16) -> u16 {
     } else {
         pack(bcd::from_bin(bin))
     }
+}
+
+/// Unpacks a 30-bit DPD into a 23-bit binary number.
+pub(crate) const fn unpack_bin_u23(dpd: u32) -> u32 {
+    let mut bin = 0;
+    let mut i = 0;
+    while i < 3 {
+        let shift = 20 - (i * 10);
+        let declet = ((dpd >> shift) & 0x3ff) as u16;
+        bin *= 1000;
+        bin += dpd_to_bin(declet) as u32;
+        i += 1;
+    }
+    bin
+}
+
+/// Unpacks a 60-bit DPD into a 53-bit binary number.
+pub(crate) const fn unpack_bin_u53(dpd: u64) -> u64 {
+    let mut bin = 0;
+    let mut i = 0;
+    while i < 6 {
+        let shift = 50 - (i * 10);
+        let declet = ((dpd >> shift) & 0x3ff) as u16;
+        bin *= 1000;
+        bin += dpd_to_bin(declet) as u64;
+        i += 1;
+    }
+    bin
 }
 
 /// Unpacks a 120-bit DPD into a 113-bit binary number.

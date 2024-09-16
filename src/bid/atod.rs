@@ -40,11 +40,7 @@ macro_rules! impl_atod {
                     Err(err) => return Err(err),
                 };
 
-                if !Self::need_round(coeff, exp) {
-                    Ok(Self::from_parts(sign, exp, coeff))
-                } else {
-                    Ok(Self::rounded(sign, exp, coeff))
-                }
+                Ok(Self::maybe_rounded(sign, exp, coeff))
             }
 
             /// Parses the coefficient.
