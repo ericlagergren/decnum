@@ -65,6 +65,16 @@ impl Test<'_> {
         }
 
         macro_rules! binary {
+            (@bool ($lhs:expr, $rhs:expr), $f:ident) => {
+                match ($lhs, $rhs) {
+                    (lhs, rhs) => {
+                        let lhs = parse_input(backend, lhs)?;
+                        let rhs = parse_input(backend, rhs)?;
+                        let got = backend.$f(lhs, rhs);
+                        Self::check_bool(got, self.result)?;
+                    }
+                }
+            };
             (($lhs:expr, $rhs:expr), $f:ident) => {
                 match ($lhs, $rhs) {
                     (lhs, rhs) => {
@@ -77,38 +87,44 @@ impl Test<'_> {
             };
         }
 
+        use Op::*;
         match &self.op {
-            Op::Abs { input } => unary!(input, abs),
-            Op::Add { .. } => {
+            Abs { input } => unary!(input, abs),
+            Add { .. } => {
                 //binary!((lhs, rhs), add)
             }
-            Op::Apply { input } => {
+            Apply { input } => {
                 let got = parse_input(backend, input)?;
                 Self::check(backend, got, self.result)?;
             }
-            Op::Canonical { input } => unary!(input, canonical),
-            Op::Class { input } => unary!(@str input, class),
-            Op::Compare { lhs, rhs } => binary!((lhs, rhs), compare),
-            Op::CompareSig { lhs, rhs } => binary!((lhs, rhs), comparesig),
-            Op::CompareTotal { lhs, rhs } => binary!((lhs, rhs), comparetotal),
-            Op::Copy { input } => unary!(input, copy),
-            Op::CopyAbs { input } => unary!(input, copyabs),
-            Op::CopyNegate { input } => unary!(input, copynegate),
-            Op::CopySign { lhs, rhs } => binary!((lhs, rhs), copysign),
-            Op::Max { lhs, rhs } => binary!((lhs, rhs), max),
-            Op::Min { lhs, rhs } => binary!((lhs, rhs), min),
-            Op::Minus { input } => unary!(input, minus),
-            Op::Multiply { .. } => {
+            Canonical { input } => unary!(input, canonical),
+            Class { input } => unary!(@str input, class),
+            Compare { lhs, rhs } => binary!((lhs, rhs), compare),
+            CompareSig { lhs, rhs } => binary!((lhs, rhs), comparesig),
+            CompareTotal { lhs, rhs } => binary!((lhs, rhs), comparetotal),
+            Copy { input } => unary!(input, copy),
+            CopyAbs { input } => unary!(input, copyabs),
+            CopyNegate { input } => unary!(input, copynegate),
+            CopySign { lhs, rhs } => binary!((lhs, rhs), copysign),
+            Max { lhs, rhs } => binary!((lhs, rhs), max),
+            Min { lhs, rhs } => binary!((lhs, rhs), min),
+            MaxMag { lhs, rhs } => binary!((lhs, rhs), maxmag),
+            MinMag { lhs, rhs } => binary!((lhs, rhs), minmag),
+            Minus { input } => unary!(input, minus),
+            Multiply { .. } => {
                 // binary!((lhs, rhs), multiply)
             }
-            Op::Plus { input } => unary!(input, plus),
-            Op::Subtract { .. } => {
+            NextMinus { input } => unary!(input, nextminus),
+            NextPlus { input } => unary!(input, nextplus),
+            Plus { input } => unary!(input, plus),
+            SameQuantum { lhs, rhs } => binary!(@bool (lhs, rhs), samequantum),
+            Subtract { .. } => {
                 //binary!((lhs, rhs), subtract)
             }
-            Op::ToIntegralX { .. } => {
+            ToIntegralX { .. } => {
                 // unary!(...)
             }
-            Op::Quantize { .. } => {
+            Quantize { .. } => {
                 // unary!(...)
             }
             _ => return Err(Error::Unimplemented),
@@ -132,6 +148,17 @@ impl Test<'_> {
         }
 
         Self::check_str(&got.to_string(), want)
+    }
+
+    fn check_bool(got: bool, want: &str) -> Result<(), Error> {
+        debug_assert!(want == "0" || want == "1");
+
+        let want = want == "1";
+        if got != want {
+            failure!("got `\"{got}\"`, expected `\"{want}\"`")
+        } else {
+            Ok(())
+        }
     }
 
     fn check_str(got: &str, want: &str) -> Result<(), Error> {
@@ -223,10 +250,15 @@ pub trait Backend {
     fn copysign(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn max(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn min(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+    fn maxmag(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+    fn minmag(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn minus(&self, x: Self::Dec) -> Self::Dec;
     fn multiply(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+    fn nextminus(&self, x: Self::Dec) -> Self::Dec;
+    fn nextplus(&self, x: Self::Dec) -> Self::Dec;
     fn plus(&self, x: Self::Dec) -> Self::Dec;
     fn quantize(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
+    fn samequantum(&self, lhs: Self::Dec, rhs: Self::Dec) -> bool;
     fn subtract(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn tointegralx(&self, x: Self::Dec) -> Self::Dec;
 }
@@ -301,6 +333,14 @@ macro_rules! impl_backend {
                 lhs.min(rhs)
             }
 
+            fn maxmag(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+                lhs.max_mag(rhs)
+            }
+
+            fn minmag(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
+                lhs.min_mag(rhs)
+            }
+
             fn minus(&self, x: Self::Dec) -> Self::Dec {
                 -x
             }
@@ -309,12 +349,24 @@ macro_rules! impl_backend {
                 lhs * rhs
             }
 
+            fn nextminus(&self, x: Self::Dec) -> Self::Dec {
+                x.next_minus()
+            }
+
+            fn nextplus(&self, x: Self::Dec) -> Self::Dec {
+                x.next_plus()
+            }
+
             fn plus(&self, x: Self::Dec) -> Self::Dec {
                 x.plus()
             }
 
             fn quantize(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
                 lhs.quantize(rhs)
+            }
+
+            fn samequantum(&self, lhs: Self::Dec, rhs: Self::Dec) -> bool {
+                lhs.same_quantum(rhs)
             }
 
             fn subtract(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
@@ -375,8 +427,13 @@ macro_rules! dectests {
             test_encode => "Encode",
             test_max => "Max",
             test_min => "Min",
+            test_max_mag => "MaxMag",
+            test_min_mag => "MinMag",
             test_minus => "Minus",
+            test_next_minus => "NextMinus",
+            test_next_plus => "NextPlus",
             test_plus => "Plus",
+            test_same_quantum => "SameQuantum",
             test_sub => "Subtract",
         );
     };

@@ -18,6 +18,7 @@ mod bid32;
 mod bid64;
 mod dtoa;
 mod uint256;
+mod util;
 
 pub use bid128::Bid128;
 pub use bid32::Bid32;

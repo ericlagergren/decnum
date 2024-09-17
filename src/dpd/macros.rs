@@ -19,20 +19,29 @@ macro_rules! impl_dpd {
         // Internal stuff.
         impl $name {
             const SIGN_SHIFT: u32 = <$bid>::SIGN_SHIFT;
-            const SIGN_MASK: $ucoeff = 1 << Self::SIGN_SHIFT;
 
-            const COMB_BITS: u32 = 5;
+            /// The shift needed to the five-bit combination
+            /// field.
             const COMB_SHIFT: u32 = <$bid>::K - 1 - 5;
-            const COMB_MASK: $ucoeff = ((1 << Self::COMB_BITS) - 1) << Self::COMB_SHIFT;
 
             // Exponent continuation field bits.
             const ECON_BITS: u32 = <$bid>::W;
             const ECON_SHIFT: u32 = <$bid>::K - 1 - 5 - Self::ECON_BITS;
-            const ECON_MASK: $ucoeff =
-                (((1 << Self::ECON_BITS) - 1) as $ucoeff) << Self::ECON_SHIFT;
 
             pub(crate) const fn signbit(self) -> bool {
-                (self.0 & Self::SIGN_MASK) != 0
+                const MASK: $ucoeff = 1 << $name::SIGN_SHIFT;
+                (self.0 & MASK) != 0
+            }
+
+            /// Returns the five-bit combination field.
+            const fn comb(self) -> u8 {
+                ((self.0 >> Self::COMB_SHIFT) & 0x1f) as u8
+            }
+
+            /// Returns the exponent continuation field.
+            const fn econ(self) -> $biased {
+                const MASK: $ucoeff = (1 << $name::ECON_BITS) - 1;
+                ((self.0 >> Self::ECON_SHIFT) & MASK) as $biased
             }
 
             /// Returns the biased exponment.
@@ -47,9 +56,7 @@ macro_rules! impl_dpd {
                 const AB: u8 = 0b11000;
                 const CD: u8 = 0b00110;
 
-                let econ = ((self.0 & Self::ECON_MASK)
-                        >> Self::ECON_SHIFT) as $biased;
-                let comb = ((self.0 & Self::COMB_MASK) >> Self::COMB_SHIFT) as u8;
+                let comb = self.comb();
                 let msb = match comb & AB {
                     // If bits `ab` are both set, then the MSBs
                     // are encoded in bits `cd`. Otherwise, the
@@ -58,10 +65,11 @@ macro_rules! impl_dpd {
                     b => b >> 3,
                 };
                 debug_assert!(msb <= 2);
-                let exp = ((msb as $biased) << <$bid>::EXP_BITS) | econ;
 
-                // debug_assert!(exp & !<$bid>::EXP_MASK == 0);
-                // debug_assert!(exp <= <$bid>::LIMIT);
+                let exp = ((msb as $biased) << Self::ECON_BITS) | self.econ();
+
+                debug_assert!(exp & !<$bid>::EXP_MASK == 0);
+                debug_assert!(exp <= <$bid>::LIMIT);
 
                 exp
             }
@@ -109,7 +117,7 @@ macro_rules! impl_dpd {
                 const CD: u8 = 0b00110;
                 const E_: u8 = 0b00001;
 
-                let comb = ((self.0 & Self::COMB_MASK) >> Self::COMB_SHIFT) as u8;
+                let comb = self.comb();
                 let msd = match comb & AB {
                     AB => 0x8 | (comb & E_), // 100e
                     _ => comb & (CD | E_), // 0cde
@@ -169,7 +177,9 @@ macro_rules! impl_dpd {
                         0x18 | (msb << 1) | msd
                     }
                 };
-                let econ = biased & ((1 << (<$bid>::EXP_BITS - 2)) - 1) as $biased;
+
+                const LSB: $biased = (1 << (<$bid>::EXP_BITS - 2)) - 1;
+                let econ = biased & LSB;
                 let coeff = dpd & <$bid>::COEFF_MASK;
 
                 let mut bits = 0;

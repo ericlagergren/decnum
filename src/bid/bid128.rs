@@ -321,18 +321,6 @@ impl Bid128 {
     pub const fn set_exponent(self, _n: i16) -> Self {
         todo!()
     }
-
-    /// TODO
-    #[no_mangle]
-    pub const fn test1(self, rhs: Self) -> bool {
-        self.is_nan() || rhs.is_nan()
-    }
-
-    /// TODO
-    #[no_mangle]
-    pub const fn test2(self, rhs: Self) -> bool {
-        (self.0 & rhs.0) & Self::COMB_TOP5 == Self::COMB_TOP5
-    }
 }
 
 macro_rules! from_unsigned_impl {
@@ -425,6 +413,84 @@ impl Bid128 {
     #[no_mangle]
     const fn canonical2(self) -> Self {
         self.canonical()
+    }
+
+    #[no_mangle]
+    const fn same_quantum2(self, rhs: Self) -> bool {
+        self.same_quantum(rhs)
+    }
+
+    #[no_mangle]
+    const fn test_inf3(self, rhs: Self) -> Ordering {
+        crate::bid::util::const_cmp_u8(self.special_bits() >> 2, rhs.special_bits() >> 2)
+    }
+
+    #[no_mangle]
+    const fn test_inf0(self, rhs: Self) -> Ordering {
+        match (self.is_infinite(), rhs.is_infinite()) {
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            _ => Ordering::Equal,
+        }
+    }
+
+    #[no_mangle]
+    const fn test_inf1(self, rhs: Self) -> Ordering {
+        if !self.is_infinite() {
+            // x < inf
+            Ordering::Less
+        } else if !rhs.is_infinite() {
+            // inf > x
+            Ordering::Greater
+        } else {
+            Ordering::Equal
+        }
+    }
+
+    #[no_mangle]
+    const fn test0(self, rhs: Self) -> Option<Ordering> {
+        const QNAN: u8 = 0x1f;
+        const SNAN: u8 = 0x3f;
+        let ord = match (self.special_bits(), rhs.special_bits()) {
+            (QNAN, QNAN) | (SNAN, SNAN) => {
+                let lhs_pl = self.payload();
+                let rhs_pl = rhs.payload();
+                arith128::const_cmp(lhs_pl, rhs_pl)
+            }
+            (SNAN, QNAN) => Ordering::Less,
+            (QNAN, SNAN) => Ordering::Greater,
+            (QNAN | SNAN, _) => Ordering::Greater,
+            (_, QNAN | SNAN) => Ordering::Less,
+            _ => return None,
+        };
+        Some(ord)
+    }
+
+    #[no_mangle]
+    const fn test1(self, rhs: Self) -> Option<Ordering> {
+        if self.is_nan() || rhs.is_nan() {
+            Some(if !self.is_nan() {
+                // x < NaN
+                Ordering::Less
+            } else if !rhs.is_nan() {
+                // NaN > rhs
+                Ordering::Greater
+            } else if self.special_bits() == rhs.special_bits() {
+                // Both are the same type of NaN.
+                // Compare the payloads.
+                let lhs_pl = self.payload();
+                let rhs_pl = rhs.payload();
+                arith128::const_cmp(lhs_pl, rhs_pl)
+            } else if self.is_snan() {
+                // sNaN < qNaN
+                Ordering::Less
+            } else {
+                // qNaN > sNaN
+                Ordering::Greater
+            })
+        } else {
+            None
+        }
     }
 }
 
@@ -550,40 +616,73 @@ mod tests {
         let inf = Bid128::inf(false);
         let max = Bid128::MAX;
         let min = Bid128::MIN;
+        let mid = Bid128::new(Bid128::MAX_COEFF / 2, Bid128::EMAX_LESS_PREC / 2);
         let zero = Bid128::zero();
 
-        impl Bid128 {
-            const fn sign_mag(self) -> i128 {
-                let mut left = self.to_bits() as i128;
-                left ^= (((left >> 127) as u128) >> 1) as i128;
-                left
-            }
-        }
+        // impl Bid128 {
+        //     const fn sign_mag(self) -> i128 {
+        //         let mut left = self.to_bits() as i128;
+        //         left ^= (((left >> 127) as u128) >> 1) as i128;
+        //         left
+        //     }
+        // }
+
+        let got = crate::bid::util::const_cmp_u8(snan.special_ord(), qnan.special_ord());
+        println!("got = {got:?}");
+
+        println!("qNaN = {:08b}", qnan.special_bits());
+        println!("sNaN = {:08b}", snan.special_bits());
+        println!(" inf = {:08b}", inf.special_bits());
+        println!(" max = {:08b}", max.special_bits());
+        println!(" min = {:08b}", min.special_bits());
+        println!(" mid = {:08b}", mid.special_bits());
+        println!("zero = {:08b}", zero.special_bits());
+
+        println!("");
 
         println!("qNaN = {:>3}", qnan.special_bits());
         println!("sNaN = {:>3}", snan.special_bits());
         println!(" inf = {:>3}", inf.special_bits());
         println!(" max = {:>3}", max.special_bits());
         println!(" min = {:>3}", min.special_bits());
+        println!(" mid = {:>3}", mid.special_bits());
         println!("zero = {:>3}", zero.special_bits());
 
         println!("");
 
-        println!("qNaN = {:>39}", qnan.to_bits());
-        println!("sNaN = {:>39}", snan.to_bits());
-        println!(" inf = {:>39}", inf.to_bits());
-        println!(" max = {:>39}", max.to_bits());
-        println!(" min = {:>39}", min.to_bits());
-        println!("zero = {:>39}", zero.to_bits());
+        println!("qNaN = {:08b}", qnan.special_ord());
+        println!("sNaN = {:08b}", snan.special_ord());
+        println!(" inf = {:08b}", inf.special_ord());
+        println!(" max = {:08b}", max.special_ord());
+        println!(" min = {:08b}", min.special_ord());
+        println!(" mid = {:08b}", mid.special_ord());
+        println!("zero = {:08b}", zero.special_ord());
 
         println!("");
 
-        println!("qNaN = {:>39}", qnan.sign_mag());
-        println!("sNaN = {:>39}", snan.sign_mag());
-        println!(" inf = {:>39}", inf.sign_mag());
-        println!(" max = {:>39}", max.sign_mag());
-        println!(" min = {:>39}", min.sign_mag());
-        println!("zero = {:>39}", zero.sign_mag());
+        println!("qNaN = {:>3}", qnan.special_ord());
+        println!("sNaN = {:>3}", snan.special_ord());
+        println!(" inf = {:>3}", inf.special_ord());
+        println!(" max = {:>3}", max.special_ord());
+        println!(" min = {:>3}", min.special_ord());
+        println!(" mid = {:>3}", mid.special_ord());
+        println!("zero = {:>3}", zero.special_ord());
+
+        // println!("qNaN = {:>39}", qnan.to_bits());
+        // println!("sNaN = {:>39}", snan.to_bits());
+        // println!(" inf = {:>39}", inf.to_bits());
+        // println!(" max = {:>39}", max.to_bits());
+        // println!(" min = {:>39}", min.to_bits());
+        // println!("zero = {:>39}", zero.to_bits());
+
+        // println!("");
+
+        // println!("qNaN = {:>39}", qnan.sign_mag());
+        // println!("sNaN = {:>39}", snan.sign_mag());
+        // println!(" inf = {:>39}", inf.sign_mag());
+        // println!(" max = {:>39}", max.sign_mag());
+        // println!(" min = {:>39}", min.sign_mag());
+        // println!("zero = {:>39}", zero.sign_mag());
 
         assert!(false);
     }
