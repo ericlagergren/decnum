@@ -7,7 +7,7 @@ use crate::util::assume;
 pub(super) const fn shl(x: u128, n: u32) -> u256 {
     debug_assert!(n <= 34);
 
-    widening_mul(x, 10u128.pow(n))
+    widening_mul(x, pow10(n))
 }
 
 /// Shift `x` to the right by `n` digits.
@@ -62,8 +62,7 @@ pub(super) const fn digits(mut x: u128) -> u32 {
 
     let r = ((bitlen(x) + 1) * 1233) / 4096;
     // `r` is in [0, 38], so it cannot panic.
-    #[allow(clippy::indexing_slicing)]
-    let p = POW10[r as usize];
+    let p = pow10(r);
     r + (x >= p) as u32
 }
 
@@ -72,6 +71,15 @@ pub(super) const fn digits(mut x: u128) -> u32 {
 /// It returns 0 for `x == 0`.
 pub(super) const fn bitlen(x: u128) -> u32 {
     u128::BITS - x.leading_zeros()
+}
+
+/// Returns 10^n.
+const fn pow10(n: u32) -> u128 {
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "Calling code always checks that `n <= 38`"
+    )]
+    POW10[n as usize] // or 10u128.pow(n)
 }
 
 /// All 128-bit powers of 10.
@@ -114,7 +122,7 @@ const fn quorem1e3(n: u128) -> (u128, u16) {
         const REC: u128 = 8166776806102523123120990578362437075;
 
         // t1 = muluh(m', n)
-        let t1 = muluh(REC, n);
+        let t1 = widening_mul(REC, n).hi;
 
         // sh1 = min(l, 1)
         // sh2 = max(l-1, 0)
@@ -148,32 +156,34 @@ const fn quorem1e3(n: u128) -> (u128, u16) {
     (q, r as u16)
 }
 
-const fn muluh(x: u128, y: u128) -> u128 {
-    const MASK: u128 = (1 << 64) - 1;
-    let x0 = x & MASK;
-    let x1 = x >> 64;
-    let y0 = y & MASK;
-    let y1 = y >> 64;
-    let w0 = x0 * y0;
-    let t = x1 * y0 + (w0 >> 64);
-    let w1 = (t & MASK) + x0 * y1;
-    let w2 = t >> 64;
-    x1 * y1 + w2 + (w1 >> 64)
-}
-
 const fn widening_mul(x: u128, y: u128) -> u256 {
-    const MASK: u128 = (1 << 64) - 1;
-    let x0 = x & MASK;
-    let x1 = x >> 64;
-    let y0 = y & MASK;
-    let y1 = y >> 64;
-    let w0 = x0 * y0;
-    let t = x1 * y0 + (w0 >> 64);
-    let w1 = (t & MASK) + x0 * y1;
-    let w2 = t >> 64;
-    let hi = x1 * y1 + w2 + (w1 >> 64);
-    let lo = x.wrapping_mul(y);
-    u256::from_parts(hi, lo)
+    let x1 = (x >> 64) as u64;
+    let x0 = x as u64;
+    let y1 = (y >> 64) as u64;
+    let y0 = y as u64;
+
+    /// Returns `lhs * rhs + carry`.
+    const fn carrying_mul(lhs: u64, rhs: u64, carry: u64) -> (u64, u64) {
+        // SAFETY: The result is contained in the larger type.
+        let wide = unsafe {
+            (lhs as u128)
+                .unchecked_mul(rhs as u128)
+                .unchecked_add(carry as u128)
+        };
+        (wide as u64, (wide >> 64) as u64)
+    }
+
+    let (p1, p2) = carrying_mul(x0, y0, 0);
+    let (p2, p31) = carrying_mul(x0, y1, p2);
+    let (p2, p32) = carrying_mul(x1, y0, p2);
+    let (p3, p4o) = p31.overflowing_add(p32);
+    let (p3, p4) = carrying_mul(x1, y1, p3);
+    let p4 = p4.wrapping_add(p4o as u64);
+
+    u256::from_parts(
+        p3 as u128 | (p4 as u128) << 64, // hi
+        p1 as u128 | (p2 as u128) << 64, // lo
+    )
 }
 
 #[cfg(test)]
@@ -220,5 +230,16 @@ mod tests {
             let want = buf.format(x).len() as u32;
             assert_eq!(got, want, "{x}");
         }
+    }
+
+    #[test]
+    fn test_foo() {
+        let got = shl(10u128.pow(34) - 1, 34);
+        println!("got = {got:?}");
+
+        let got = shl(10u128.pow(34), 34);
+        println!("got = {got:?}");
+
+        assert!(false);
     }
 }

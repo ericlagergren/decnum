@@ -337,7 +337,7 @@ macro_rules! impl_dec_internal {
             }
 
             /// Returns the signed coefficient.
-            #[allow(dead_code)]
+            #[allow(dead_code)] // TODO
             const fn signed_coeff(self) -> $icoeff {
                 // The coefficient only has meaning for finite
                 // numbers.
@@ -772,11 +772,8 @@ macro_rules! impl_dec_arith {
                 // `shift` is in [0, DIGITS].
 
                 if shift == 0 {
-                    return self.coeff() == other.coeff();
-                }
-                debug_assert!(self.biased_exp() != other.biased_exp());
-
-                if self.biased_exp() > other.biased_exp() {
+                    self.coeff() == other.coeff()
+                } else if self.biased_exp() > other.biased_exp() {
                     $arith::const_eq_shifted(self.coeff(), other.coeff(), shift)
                 } else {
                     $arith::const_eq_shifted(other.coeff(), self.coeff(), shift)
@@ -836,16 +833,7 @@ macro_rules! impl_dec_arith {
                 // Bits differ.
 
                 if self.is_infinite() || rhs.is_infinite() {
-                    return if !self.is_infinite() {
-                        // x cmp inf
-                        Ordering::Less
-                    } else if !rhs.is_infinite() {
-                        // inf cmp x
-                        Ordering::Greater
-                    } else {
-                        // inf cmp inf
-                        Ordering::Equal
-                    };
+                    return $crate::bid::util::const_cmp_u8(self.special_ord(), rhs.special_ord());
                 }
                 // Both are finite.
                 debug_assert!(self.is_finite() && rhs.is_finite());
@@ -1202,10 +1190,35 @@ macro_rules! impl_dec_arith {
                 todo!()
             }
 
-            /// TODO
+            /// Returns a number equal (before rounding) to
+            /// `self` and with the same sign as `self`, but with
+            /// the exponent of `rhs`.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
-            pub const fn quantize(self, _rhs: Self) -> Self {
+            pub const fn quantize(self, rhs: Self) -> Self {
+                if self.is_special() || rhs.is_special() {
+                    return if self.is_nan() || rhs.is_nan() {
+                        Self::select_nan(self, rhs)
+                    } else if self.is_infinite() && rhs.is_infinite() {
+                        Self::nan(false, 0)
+                    } else {
+                        Self::inf(self.signbit())
+                    };
+                }
+
+                // Already have the same exponent.
+                if self.biased_exp() == rhs.biased_exp() {
+                    return self.canonical();
+                }
+
+                let diff = self.biased_exp().abs_diff(rhs.biased_exp());
+                if self.biased_exp() > rhs.biased_exp() {
+                    // Need to pad.
+                    if diff > Self::DIGITS - 1 {
+                        // if !is_zero ...
+                    }
+                } else {
+                }
                 todo!()
             }
 
@@ -1669,7 +1682,6 @@ macro_rules! impl_dec_misc {
             }
 
             /// `totalOrder`, but without comparing signs.
-            #[inline(always)]
             const fn total_cmp_abs(self, rhs: Self) -> Ordering {
                 debug_assert!(self.signbit() == rhs.signbit());
 
@@ -1697,20 +1709,15 @@ macro_rules! impl_dec_misc {
                 debug_assert!(self.is_finite() && rhs.is_finite());
 
                 match self.total_cmp_abs_finite(rhs) {
-                    Ordering::Equal => {
-                        if self.biased_exp() > rhs.biased_exp() {
-                            Ordering::Greater
-                        } else if self.biased_exp() < rhs.biased_exp() {
-                            Ordering::Less
-                        } else {
-                            Ordering::Equal
-                        }
-                    }
+                    Ordering::Equal => match self.biased_exp().checked_sub(rhs.biased_exp()) {
+                        Some(0) => Ordering::Equal,
+                        Some(_) => Ordering::Greater,
+                        None => Ordering::Less,
+                    },
                     ord => ord,
                 }
             }
 
-            #[inline(always)]
             const fn total_cmp_abs_finite(self, rhs: Self) -> Ordering {
                 debug_assert!(self.is_finite() && rhs.is_finite());
 

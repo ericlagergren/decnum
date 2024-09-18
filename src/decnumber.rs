@@ -203,15 +203,3 @@ impl PartialEq<Double> for Quad {
         true // TODO
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_foo() {
-        let d1 = Quad::parse("9999999999999999999999999999999999").set_exponent(36);
-        println!("d1 = {d1}");
-        assert!(false);
-    }
-}

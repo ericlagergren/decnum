@@ -379,117 +379,22 @@ impl Bid128 {
     }
 
     #[no_mangle]
-    const fn coeff2(self) -> u128 {
-        self.coeff()
-    }
-
-    #[no_mangle]
-    const fn signed_coeff2(self) -> i128 {
-        self.signed_coeff()
-    }
-
-    #[no_mangle]
-    const fn plus2(self) -> Self {
-        if self.is_nan() {
-            // ±0 + ±NaN
-            Self::nan(self.signbit(), self.payload())
-        } else if self.is_infinite() {
-            // ±0 + ±inf
-            Self::inf(self.signbit())
-        } else if self.is_zero() {
-            // ±0 + ±0
-            self.copy_abs()
-        } else {
-            // ±0 + self
-            self
+    const fn biased_exp2(self) -> u16 {
+        let mut exp = self.0 >> Self::FORM1_EXP_SHIFT;
+        if self.is_form2() {
+            exp >>= 2;
         }
+        (exp as u16) & Self::EXP_MASK
     }
 
     #[no_mangle]
-    const fn neg2(self) -> Self {
-        self.const_neg()
-    }
-
-    #[no_mangle]
-    const fn canonical2(self) -> Self {
-        self.canonical()
-    }
-
-    #[no_mangle]
-    const fn same_quantum2(self, rhs: Self) -> bool {
-        self.same_quantum(rhs)
-    }
-
-    #[no_mangle]
-    const fn test_inf3(self, rhs: Self) -> Ordering {
-        crate::bid::util::const_cmp_u8(self.special_bits() >> 2, rhs.special_bits() >> 2)
-    }
-
-    #[no_mangle]
-    const fn test_inf0(self, rhs: Self) -> Ordering {
-        match (self.is_infinite(), rhs.is_infinite()) {
-            (true, false) => Ordering::Greater,
-            (false, true) => Ordering::Less,
-            _ => Ordering::Equal,
-        }
-    }
-
-    #[no_mangle]
-    const fn test_inf1(self, rhs: Self) -> Ordering {
-        if !self.is_infinite() {
-            // x < inf
-            Ordering::Less
-        } else if !rhs.is_infinite() {
-            // inf > x
-            Ordering::Greater
+    const fn biased_exp3(self) -> u16 {
+        if self.is_form1() {
+            // exp = G[0:w+1]
+            ((self.0 & Self::FORM1_EXP_MASK) >> Self::FORM1_EXP_SHIFT) as u16
         } else {
-            Ordering::Equal
-        }
-    }
-
-    #[no_mangle]
-    const fn test0(self, rhs: Self) -> Option<Ordering> {
-        const QNAN: u8 = 0x1f;
-        const SNAN: u8 = 0x3f;
-        let ord = match (self.special_bits(), rhs.special_bits()) {
-            (QNAN, QNAN) | (SNAN, SNAN) => {
-                let lhs_pl = self.payload();
-                let rhs_pl = rhs.payload();
-                arith128::const_cmp(lhs_pl, rhs_pl)
-            }
-            (SNAN, QNAN) => Ordering::Less,
-            (QNAN, SNAN) => Ordering::Greater,
-            (QNAN | SNAN, _) => Ordering::Greater,
-            (_, QNAN | SNAN) => Ordering::Less,
-            _ => return None,
-        };
-        Some(ord)
-    }
-
-    #[no_mangle]
-    const fn test1(self, rhs: Self) -> Option<Ordering> {
-        if self.is_nan() || rhs.is_nan() {
-            Some(if !self.is_nan() {
-                // x < NaN
-                Ordering::Less
-            } else if !rhs.is_nan() {
-                // NaN > rhs
-                Ordering::Greater
-            } else if self.special_bits() == rhs.special_bits() {
-                // Both are the same type of NaN.
-                // Compare the payloads.
-                let lhs_pl = self.payload();
-                let rhs_pl = rhs.payload();
-                arith128::const_cmp(lhs_pl, rhs_pl)
-            } else if self.is_snan() {
-                // sNaN < qNaN
-                Ordering::Less
-            } else {
-                // qNaN > sNaN
-                Ordering::Greater
-            })
-        } else {
-            None
+            // exp = G[2:w+3]
+            ((self.0 & Self::FORM2_EXP_MASK) >> Self::FORM2_EXP_SHIFT) as u16
         }
     }
 }

@@ -7,8 +7,8 @@ use super::arith128;
 #[derive(Copy, Clone, Debug)]
 #[allow(non_camel_case_types)]
 pub(super) struct u256 {
-    lo: u128,
-    hi: u128,
+    pub lo: u128,
+    pub hi: u128,
 }
 
 impl u256 {
@@ -47,5 +47,9 @@ impl u256 {
     /// Reports whether `self == other`.
     pub const fn const_eq128(self, other: u128) -> bool {
         self.hi == 0 && self.lo == other
+    }
+
+    pub const fn bitlen(self) -> u32 {
+        arith128::bitlen(self.hi) + arith128::bitlen(self.lo)
     }
 }
