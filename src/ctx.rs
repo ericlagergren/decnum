@@ -47,12 +47,12 @@ impl RoundingMode {
     #[cfg(test)]
     pub(super) fn try_from_str(s: &str) -> Option<Self> {
         let mode = match s {
-            "half_even" => Self::ToNearestEven,
-            "half_up" => Self::ToNearestAway,
+            "ceiling" => Self::ToPositiveInf,
             "down" => Self::ToZero,
             "floor" => Self::ToNegativeInf,
-            "ceiling" => Self::ToPositiveInf,
             "half_down" => Self::ToNearestTowardZero,
+            "half_even" => Self::ToNearestEven,
+            "half_up" | "05up" => Self::ToNearestAway,
             "up" => Self::AwayFromZero,
             _ => return None,
         };

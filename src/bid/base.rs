@@ -147,7 +147,7 @@ macro_rules! impl_dec_internal {
 
             /// The number of bits required to represent
             /// [`MAX_COEFF`][Self::MAX_COEFF].
-            const MAX_COEFF_BITS: u32 = super::$arith::bitlen(Self::MAX_COEFF as $ucoeff);
+            const MAX_COEFF_BITS: u32 = $arith::bitlen(Self::MAX_COEFF as $ucoeff);
 
             /// The number of bits in the trailing significand.
             pub(crate) const COEFF_BITS: u32 = Self::T;
@@ -381,49 +381,9 @@ macro_rules! impl_dec_internal {
 
             /// Creates a rounded number from its sign, unbiased
             /// exponent, and coefficient.
-            const fn rounded(sign: bool, mut exp: $unbiased, mut coeff: $ucoeff) -> Self {
-                // This method also works if we don't need to
-                // round, but for performance reasons we always
-                // check first.
-                debug_assert!(Self::need_round(coeff, exp));
-
-                const fn max(x: $unbiased, y: $unbiased) -> $unbiased {
-                    if x < y {
-                        y
-                    } else {
-                        x
-                    }
-                }
-
-                let mut digits = $arith::digits(coeff) as $unbiased;
-                let mut drop = max(digits - Self::DIGITS as $unbiased, Self::ETINY - exp);
-                if drop > 0 {
-                    exp += drop;
-
-                    let mut d = 0;
-                    while drop > 0 {
-                        d = coeff % 10;
-                        coeff /= 10;
-                        digits -= 1;
-                        drop -= 1;
-                    }
-
-                    // Round half even: up if d > 5 or the new
-                    // LSD is odd.
-                    if d > 5 || (d == 5 && (coeff % 10) != 0) {
-                        // NB: This is where we'd mark inexact.
-                        coeff += 1;
-                        if coeff > Self::MAX_COEFF as $ucoeff {
-                            // We went from 999... to 100..., so
-                            // chop off a trailing digit.
-                            coeff /= 10;
-                            digits -= 1;
-                            exp += 1;
-                        }
-                    }
-                }
-
-                let adj = exp + (digits - 1);
+            const fn rounded(sign: bool, exp: $unbiased, coeff: $ucoeff) -> Self {
+                let (mut coeff, mut exp, digits) = Self::round(coeff, exp);
+                let adj = exp + (digits as $unbiased - 1);
                 if exp < Self::EMIN && adj < Self::EMIN {
                     // NB: This is where we'd mark underflow.
                     if adj < Self::ETINY {
@@ -464,58 +424,96 @@ macro_rules! impl_dec_internal {
                 Self::from_parts(sign, exp, coeff)
             }
 
+            /// Rounds `(coeff, exp)`.
+            const fn round(mut coeff: $ucoeff, mut exp: $unbiased) -> ($ucoeff, $unbiased, u32) {
+                // This method also works if we don't need to
+                // round, but for performance reasons we always
+                // check first.
+                debug_assert!(Self::need_round(coeff, exp));
+
+                const fn max(x: $unbiased, y: $unbiased) -> $unbiased {
+                    if x < y {
+                        y
+                    } else {
+                        x
+                    }
+                }
+
+                let mut digits = $arith::digits(coeff);
+                // Figure out how many digits we need to drop.
+                let mut drop = max(
+                    digits as $unbiased - Self::DIGITS as $unbiased,
+                    Self::ETINY - exp,
+                );
+                if false && drop > 0 {
+                    exp += drop;
+                    let rem;
+                    (coeff, rem) = $arith::shr(coeff, drop as u32);
+                    digits -= drop as u32;
+                    if rem > 0 {}
+                } else if drop > 0 {
+                    exp += drop;
+
+                    let mut d = 0;
+                    while drop > 0 {
+                        d = coeff % 10;
+                        coeff /= 10;
+                        digits -= 1;
+                        drop -= 1;
+                    }
+
+                    // Round half even: up if d > 5 or the new
+                    // LSD is odd.
+                    if d > 5 || (d == 5 && (coeff % 10) != 0) {
+                        // NB: This is where we'd mark inexact.
+                        coeff += 1;
+                        if coeff > Self::MAX_COEFF as $ucoeff {
+                            // We went from 999... to 100..., so
+                            // chop off a trailing digit.
+                            coeff /= 10;
+                            digits -= 1;
+                            exp += 1;
+                        }
+                    }
+                }
+                (coeff, exp, digits)
+            }
+
             /// Calls [`from_parts`][Self::from_parts] or
             /// [`rounded`][Self::rounded], depending whether or
             /// not rounding is needed.
             const fn maybe_rounded(sign: bool, exp: $unbiased, coeff: $ucoeff) -> Self {
-                if !Self::need_round(coeff, exp) {
+                if !Self::need_round_fast(coeff, exp) {
                     // Fast path: `coeff` and `exp` are obviously
                     // valid.
                     Self::from_parts(sign, exp, coeff)
                 } else {
-                    // Slow path: we have to round.
-                    //
-                    // Prevent the compiler from inlining
-                    // `Self::rounded`. Otherwise, `Self::new`
-                    // becomes too large and prevents other
-                    // methods that call `Self::new` from being
-                    // properly optimized. For example, compare
-                    // `Bid128::from_i64` if the compiler inlines
-                    // `Self::rounded` into `Self::new`
-                    //
-                    // ```text
-                    // rdfp::bid::bid128::Bid128::from_i64:
-                    // Lfunc_begin13:
-                    // 	asr x1, x0, #63
-                    // 	mov w2, #0
-                    // 	b rdfp::bid::bid128::Bid128::new
-                    // ```
-                    //
-                    // and if it doesn't
-                    //
-                    // ```text
-                    // rdfp::bid::bid128::Bid128::from_i64:
-                    // Lfunc_begin13:
-                    // 	mov x1, x0
-                    // 	cmp x0, #0
-                    // 	cneg x0, x0, mi
-                    // 	mov x8, #3476778912330022912
-                    // 	bfxil x1, x8, #0, #63
-                    // 	ret
-                    // ```
-                    #[inline(never)]
-                    const fn rounded(sign: bool, exp: $unbiased, coeff: $ucoeff) -> $name {
-                        $name::rounded(sign, exp, coeff)
-                    }
-                    rounded(sign, exp, coeff)
+                    // Slow path: we (probably) have to round.
+                    Self::rounded(sign, exp, coeff)
                 }
+            }
+
+            /// Does `(coeff, exp)` definintely need to be
+            /// rounded?
+            const fn need_round_fast(coeff: $ucoeff, exp: $unbiased) -> bool {
+                coeff > Self::MAX_COEFF as $ucoeff
+                    || exp < Self::EMIN_LESS_PREC
+                    || exp > Self::EMAX_LESS_PREC
             }
 
             /// Does `(coeff, exp)` need to be rounded?
             const fn need_round(coeff: $ucoeff, exp: $unbiased) -> bool {
-                coeff > Self::MAX_COEFF as $ucoeff
-                    || exp < Self::EMIN_LESS_PREC
-                    || exp > Self::EMAX_LESS_PREC
+                let digits = $arith::digits(coeff);
+                if digits > Self::DIGITS {
+                    // Too many digits.
+                    return true;
+                }
+                if exp < Self::ETINY {
+                    // `exp` is too small.
+                    return true;
+                }
+                let _adj = exp + (digits as $unbiased - 1);
+                false
             }
 
             /// Creates a canonical finite number from the sign,
@@ -1195,7 +1193,7 @@ macro_rules! impl_dec_arith {
             /// the exponent of `rhs`.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
-            pub const fn quantize(self, rhs: Self) -> Self {
+            pub fn quantize(self, rhs: Self) -> Self {
                 if self.is_special() || rhs.is_special() {
                     return if self.is_nan() || rhs.is_nan() {
                         Self::select_nan(self, rhs)
@@ -1206,27 +1204,54 @@ macro_rules! impl_dec_arith {
                     };
                 }
 
-                // Already have the same exponent.
                 if self.biased_exp() == rhs.biased_exp() {
+                    // Already have the same exponent, so nothing
+                    // to do.
                     return self.canonical();
                 }
 
-                let diff = self.biased_exp().abs_diff(rhs.biased_exp());
-                if self.biased_exp() > rhs.biased_exp() {
-                    // Need to pad.
-                    if diff > Self::DIGITS - 1 {
-                        // if !is_zero ...
-                    }
-                } else {
+                if self.is_zero() {
+                    return Self::new(0, rhs.unbiased_exp());
                 }
-                todo!()
+
+                let diff = self.biased_exp().abs_diff(rhs.biased_exp()) as u32;
+                debug_assert!(diff != 0);
+
+                if cfg!(debug_assertions) {
+                    println!("lhs = {} {}", self.biased_exp(), self.unbiased_exp());
+                    println!("rhs = {} {}", rhs.biased_exp(), rhs.unbiased_exp());
+                    println!("diff = {diff}");
+                    println!("coeff = {} ({})", self.coeff(), self.digits());
+                }
+
+                if diff > Self::DIGITS {
+                    // Too many digits.
+                    return Self::nan(false, 0);
+                }
+                if self.biased_exp() < rhs.biased_exp() && self.digits() < diff {
+                    return Self::new(0, rhs.unbiased_exp());
+                }
+
+                let coeff = if self.biased_exp() > rhs.biased_exp() {
+                    if cfg!(debug_assertions) {
+                        println!("{:?}", $arith::shl(self.coeff(), diff as u32));
+                    }
+                    $arith::shl(self.coeff(), diff).0
+                } else {
+                    $arith::shr(self.coeff(), diff).0
+                };
+                if cfg!(debug_assertions) {
+                    println!("coeff = {coeff}");
+                    println!("exp = {}", rhs.unbiased_exp());
+                }
+                Self::maybe_rounded(self.signbit(), rhs.unbiased_exp(), coeff)
             }
 
             /// TODO
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             #[cfg(test)]
-            pub(crate) const fn round_to_integral_exact(self) -> Self {
+            pub(crate) fn round_to_integral_exact(self) -> Self {
                 if self.is_nan() {
                     Self::select_nan(self, self)
                 } else if self.is_infinite() || self.unbiased_exp() >= 0 {
@@ -1793,6 +1818,8 @@ macro_rules! impl_dec_misc2 {
             /// number.
             ///
             /// If the number is infinity or zero, it returns 1.
+            /// If the number is NaN, it returns the number of
+            /// digits in the payload.
             ///
             /// The result will always be in [1,
             /// [`DIGITS`][Self::DIGITS]].

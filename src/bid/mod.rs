@@ -8,16 +8,13 @@
 //!   is smaller than every finite number.
 //! - If any operand is NaN... TODO.
 
-mod arith128;
-mod arith32;
-mod arith64;
+mod arith;
 mod atod;
 mod base;
 mod bid128;
 mod bid32;
 mod bid64;
 mod dtoa;
-mod uint256;
 mod util;
 
 pub use bid128::Bid128;

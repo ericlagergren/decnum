@@ -6,7 +6,7 @@ use super::arith128;
 
 #[derive(Copy, Clone, Debug)]
 #[allow(non_camel_case_types)]
-pub(super) struct u256 {
+pub struct u256 {
     pub lo: u128,
     pub hi: u128,
 }

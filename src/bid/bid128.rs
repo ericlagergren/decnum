@@ -1,6 +1,6 @@
 use core::{cmp::Ordering, fmt, mem::size_of, num::FpCategory, str};
 
-use super::{arith128, base::impl_dec};
+use super::{arith::arith128, base::impl_dec};
 use crate::{
     conv::{self, ParseError},
     util::{self, const_assert},
@@ -396,6 +396,21 @@ impl Bid128 {
             // exp = G[2:w+3]
             ((self.0 & Self::FORM2_EXP_MASK) >> Self::FORM2_EXP_SHIFT) as u16
         }
+    }
+
+    #[no_mangle]
+    const fn test_quantize(self, rhs: Self) -> Self {
+        Self::new(0, rhs.unbiased_exp())
+    }
+
+    #[no_mangle]
+    const fn test_from_u64(x: u64) -> Self {
+        Self::from_u64(x)
+    }
+
+    #[no_mangle]
+    const fn test_from_i64(x: i64) -> Self {
+        Self::from_i64(x)
     }
 }
 

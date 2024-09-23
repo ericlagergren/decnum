@@ -1,6 +1,6 @@
 use core::{cmp::Ordering, fmt, mem::size_of, num::FpCategory, str};
 
-use super::{arith32, base::impl_dec};
+use super::{arith::arith32, base::impl_dec};
 use crate::{
     conv::{self, ParseError},
     util::{self, const_assert},

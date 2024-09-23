@@ -124,9 +124,7 @@ impl Test<'_> {
             ToIntegralX { .. } => {
                 // unary!(...)
             }
-            Quantize { .. } => {
-                // unary!(...)
-            }
+            Quantize { lhs, rhs } => binary!((lhs, rhs), quantize),
             _ => return Err(Error::Unimplemented),
         };
         Ok(())
@@ -185,7 +183,11 @@ fn parse_input<B: Backend>(backend: &B, s: &str) -> Result<B::Dec, Error> {
 
 impl fmt::Display for Test<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {}", self.id, self.op,)
+        write!(
+            f,
+            "{} {} -> {} ({:?})",
+            self.id, self.op, self.result, self.rounding
+        )
     }
 }
 
@@ -426,13 +428,14 @@ macro_rules! dectests {
             test_copy_neg => "CopyNegate",
             test_encode => "Encode",
             test_max => "Max",
-            test_min => "Min",
             test_max_mag => "MaxMag",
+            test_min => "Min",
             test_min_mag => "MinMag",
             test_minus => "Minus",
             test_next_minus => "NextMinus",
             test_next_plus => "NextPlus",
             test_plus => "Plus",
+            test_quantize => "Quantize",
             test_same_quantum => "SameQuantum",
             test_sub => "Subtract",
         );
