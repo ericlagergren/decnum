@@ -17,6 +17,8 @@ mod bid64;
 mod dtoa;
 mod util;
 
+#[cfg(feature = "bench")]
+pub use arith::*;
 pub use bid128::Bid128;
 pub use bid32::Bid32;
 pub use bid64::Bid64;

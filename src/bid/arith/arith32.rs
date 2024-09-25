@@ -1,4 +1,4 @@
-super::impl_basic!(u32, 7);
+super::impl_basic!(u32, u16, 7);
 
 const fn widening_mul(lhs: u32, rhs: u32) -> (u32, u32) {
     // SAFETY: The result is contained in the larger type.

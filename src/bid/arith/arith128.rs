@@ -1,4 +1,39 @@
-super::impl_basic!(u128, 34);
+super::impl_basic!(u128, u64, 34);
+
+#[no_mangle]
+pub const fn shr2(x: u128, n: u32) -> (u128, u128) {
+    unsafe { crate::util::assume(n <= 34) }
+    shr(x, n)
+}
+
+const fn widening_mul(x: u128, y: u128) -> (u128, u128) {
+    let x1 = (x >> 64) as u64;
+    let x0 = x as u64;
+    let y1 = (y >> 64) as u64;
+    let y0 = y as u64;
+
+    /// Returns `lhs * rhs + carry`.
+    const fn carrying_mul(lhs: u64, rhs: u64, carry: u64) -> (u64, u64) {
+        // SAFETY: The result is contained in the larger type.
+        let wide = unsafe {
+            (lhs as u128)
+                .unchecked_mul(rhs as u128)
+                .unchecked_add(carry as u128)
+        };
+        (wide as u64, (wide >> 64) as u64)
+    }
+
+    let (p1, p2) = carrying_mul(x0, y0, 0);
+    let (p2, p31) = carrying_mul(x0, y1, p2);
+    let (p2, p32) = carrying_mul(x1, y0, p2);
+    let (p3, p4o) = p31.overflowing_add(p32);
+    let (p3, p4) = carrying_mul(x1, y1, p3);
+    let p4 = p4.wrapping_add(p4o as u64);
+
+    let hi = p3 as u128 | (p4 as u128) << 64; // hi
+    let lo = p1 as u128 | (p2 as u128) << 64; // lo
+    (lo, hi)
+}
 
 const RECIP10: [(u32, u32, u128); NUM_POW10 + 1] = [
     (0, 0, 0),                                         // 10^0
@@ -43,31 +78,61 @@ const RECIP10: [(u32, u32, u128); NUM_POW10 + 1] = [
     (0, 129, 231584178474632390847141970017375815707), // 10^39
 ];
 
-const fn widening_mul(x: u128, y: u128) -> (u128, u128) {
-    let x1 = (x >> 64) as u64;
-    let x0 = x as u64;
-    let y1 = (y >> 64) as u64;
-    let y0 = y as u64;
+#[allow(dead_code)]
+const fn div64(hi: u64, lo: u64, mut y: u64) -> (u64, u64) {
+    //assert!(y != 0);
+    //assert!(y > hi);
 
-    /// Returns `lhs * rhs + carry`.
-    const fn carrying_mul(lhs: u64, rhs: u64, carry: u64) -> (u64, u64) {
-        // SAFETY: The result is contained in the larger type.
-        let wide = unsafe {
-            (lhs as u128)
-                .unchecked_mul(rhs as u128)
-                .unchecked_add(carry as u128)
-        };
-        (wide as u64, (wide >> 64) as u64)
+    // If high part is zero, we can directly return the results.
+    if hi == 0 {
+        return (lo / y, lo % y);
     }
 
-    let (p1, p2) = carrying_mul(x0, y0, 0);
-    let (p2, p31) = carrying_mul(x0, y1, p2);
-    let (p2, p32) = carrying_mul(x1, y0, p2);
-    let (p3, p4o) = p31.overflowing_add(p32);
-    let (p3, p4) = carrying_mul(x1, y1, p3);
-    let p4 = p4.wrapping_add(p4o as u64);
+    let s = y.leading_zeros();
+    y <<= s;
 
-    let hi = p3 as u128 | (p4 as u128) << 64; // hi
-    let lo = p1 as u128 | (p2 as u128) << 64; // lo
-    (lo, hi)
+    const TWO32: u64 = 1 << 32;
+    const MASK32: u64 = TWO32 - 1;
+
+    let yn1 = y >> 32;
+    let yn0 = y & MASK32;
+    let un32 = (hi << s) | (lo >> (64 - s));
+    let un10 = lo << s;
+    let un1 = un10 >> 32;
+    let un0 = un10 & MASK32;
+    let mut q1 = un32 / yn1;
+    let mut rhat = un32.wrapping_sub(q1).wrapping_mul(yn1);
+
+    while q1 >= TWO32 || q1.wrapping_mul(yn0) > TWO32.wrapping_mul(rhat).wrapping_add(un1) {
+        q1 = q1.wrapping_sub(1);
+        rhat = rhat.wrapping_add(yn1);
+        if rhat >= TWO32 {
+            break;
+        }
+    }
+
+    let un21 = un32
+        .wrapping_mul(TWO32)
+        .wrapping_add(un1)
+        .wrapping_sub(q1)
+        .wrapping_mul(y);
+    let mut q0 = un21 / yn1;
+    rhat = un21.wrapping_sub(q0).wrapping_mul(yn1);
+
+    while q0 >= TWO32 || q0.wrapping_mul(yn0) > TWO32.wrapping_mul(rhat).wrapping_add(un0) {
+        q0 = q0.wrapping_sub(1);
+        rhat = rhat.wrapping_add(yn1);
+        if rhat >= TWO32 {
+            break;
+        }
+    }
+
+    let q = q1.wrapping_mul(TWO32).wrapping_add(q0);
+    let r = un21
+        .wrapping_mul(TWO32)
+        .wrapping_add(un0)
+        .wrapping_sub(q0)
+        .wrapping_mul(y)
+        >> s;
+    (q, r)
 }

@@ -31,6 +31,9 @@ default = [
 # Enable `alloc`.
 alloc = []
 
+# For internal use only.
+bench = []
+
 # Use lookup tables for DPD conversions.
 dpd-tables = []
 

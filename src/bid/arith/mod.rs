@@ -1,20 +1,23 @@
+#![cfg_attr(feature = "bench", allow(missing_docs))]
+
 pub mod arith128;
 pub mod arith32;
 pub mod arith64;
+pub mod idiv;
 pub mod uint256;
 
 macro_rules! impl_basic {
-    ($ty:ty, $max_shift:literal) => {
+    ($full:ty, $half:ty, $max_shift:literal) => {
         /// Returns the minimum number of bits required to
         /// represent `x`.
         ///
         /// It returns 0 for `x == 0`.
-        pub const fn bitlen(x: $ty) -> u32 {
-            <$ty>::BITS - x.leading_zeros()
+        pub const fn bitlen(x: $full) -> u32 {
+            <$full>::BITS - x.leading_zeros()
         }
 
         /// Compares `lhs` and `rhs`.
-        pub const fn const_cmp(lhs: $ty, rhs: $ty) -> ::core::cmp::Ordering {
+        pub const fn const_cmp(lhs: $full, rhs: $full) -> ::core::cmp::Ordering {
             use ::core::cmp::Ordering;
             match lhs.checked_sub(rhs) {
                 Some(0) => Ordering::Equal,
@@ -24,7 +27,11 @@ macro_rules! impl_basic {
         }
 
         /// Orders `(lhs * 10^shift)` and `rhs`.
-        pub const fn const_cmp_shifted(lhs: $ty, rhs: $ty, shift: u32) -> ::core::cmp::Ordering {
+        pub const fn const_cmp_shifted(
+            lhs: $full,
+            rhs: $full,
+            shift: u32,
+        ) -> ::core::cmp::Ordering {
             use ::core::cmp::Ordering;
 
             let (lo, hi) = shl(lhs, shift);
@@ -39,7 +46,7 @@ macro_rules! impl_basic {
         }
 
         /// Reports whether `(lhs * 10^shift) == rhs`.
-        pub const fn const_eq_shifted(lhs: $ty, rhs: $ty, shift: u32) -> bool {
+        pub const fn const_eq_shifted(lhs: $full, rhs: $full, shift: u32) -> bool {
             let (lo, hi) = shl(lhs, shift);
             hi == 0 && lo == rhs
         }
@@ -47,7 +54,7 @@ macro_rules! impl_basic {
         /// Returns the number of decimal digits in `x`.
         ///
         /// The result will be in [0, $max_shift].
-        pub const fn digits(mut x: $ty) -> u32 {
+        pub const fn digits(mut x: $full) -> u32 {
             // Ensure that `x` is non-zero so that `digits(0) ==
             // 1`.
             //
@@ -61,22 +68,22 @@ macro_rules! impl_basic {
             x |= 1;
 
             let r = ((bitlen(x) + 1) * 1233) / 4096;
-            // `r` is in [0, digits(<$ty>::MAX)], so it cannot
+            // `r` is in [0, digits(<$full>::MAX)], so it cannot
             // panic.
             let p = pow10(r);
             r + (x >= p) as u32
         }
 
         /// Returns 10^n.
-        const fn pow10(n: u32) -> $ty {
+        const fn pow10(n: u32) -> $full {
             /// All powers of 10.
             // This is a const initializer, so panicking is okay.
             #[allow(clippy::indexing_slicing)]
-            const POW10: [$ty; NUM_POW10] = {
+            const POW10: [$full; NUM_POW10] = {
                 let mut tab = [0; NUM_POW10];
                 let mut i = 0;
                 while i < tab.len() {
-                    tab[i] = (10 as $ty).pow(i as u32);
+                    tab[i] = (10 as $full).pow(i as u32);
                     i += 1;
                 }
                 tab
@@ -86,19 +93,27 @@ macro_rules! impl_basic {
                 clippy::indexing_slicing,
                 reason = "Calling code always checks that `n` is in range"
             )]
-            POW10[n as usize] // or (10 as $ty).pow(n)
+            POW10[n as usize] // or (10 as $full).pow(n)
         }
 
         const NUM_POW10: usize = {
             let mut n = 0;
-            while (10 as $ty).checked_pow(n).is_some() {
+            while (10 as $full).checked_pow(n).is_some() {
                 n += 1
             }
             n as usize
         };
 
+        // const HALF_NUM_POW10: usize = {
+        //     let mut n = 0;
+        //     while (10 as $half).checked_pow(n).is_some() {
+        //         n += 1
+        //     }
+        //     n as usize
+        // };
+
         /// Returns `x * 10^n`.
-        pub const fn shl(x: $ty, n: u32) -> ($ty, $ty) {
+        pub const fn shl(x: $full, n: u32) -> ($full, $full) {
             debug_assert!(n <= $max_shift);
 
             widening_mul(x, pow10(n))
@@ -110,13 +125,68 @@ macro_rules! impl_basic {
         /// q = x / (10^n)
         /// r = x % (10^n)
         /// ```
-        pub const fn shr(x: $ty, n: u32) -> ($ty, $ty) {
+        #[inline(always)]
+        pub const fn shr(x: $full, n: u32) -> ($full, $full) {
             debug_assert!(n <= $max_shift);
 
             if n == 0 {
                 // x / 10^0 = x/1 = x
                 return (x, 0);
             }
+
+            /*
+            if n < RECIP10_FASTISH.len() as u32 {
+                let u2 = 0;
+                let u1 = (x >> <$half>::BITS) as $half;
+                let u0 = x as $half;
+                let d = pow10(n);
+                let d1 = (d >> <$half>::BITS) as $half;
+                let d0 = d as $half;
+                #[allow(
+                    clippy::indexing_slicing,
+                    reason = "Calling code always checks that `n` is in range"
+                )]
+                let rec = RECIP10_FASTISH[n as usize];
+                // for u/v
+                // n = v
+                // m = u
+
+                let mut u = [u1, u0];
+                let mut v = [d1, d0];
+                let n = v.len();
+                let m = u.len() - n;
+                let vn1 = v[n - 1];
+                let mut j = m;
+                loop {
+                    let qhat = <$half>::MAX;
+                    let ujn = if j + n < u.len() { u[j + n] } else { 0 };
+
+                    if ujn != vn1 {}
+
+                    j -= 1;
+                }
+
+                // let (q1, r) = div3x2(u2, u1, u0, d1, d0, rec);
+                // let (q0, r) = div3x2(u2, u1, u0, d1, d0, rec);
+                // let q = ((q1 as $full) << <$half>::BITS) | (q0 as $full);
+                // return (q, r);
+            }
+
+            if n < RECIP10_FAST.len() as u32 {
+                let d = pow10(n) as $half;
+                #[allow(
+                    clippy::indexing_slicing,
+                    reason = "Calling code always checks that `n` is in range"
+                )]
+                let rec = RECIP10_FAST[n as usize];
+                let x1 = (x >> <$half>::BITS) as $half;
+                let x0 = x as $half;
+                let (q1, r) = div2x1(0, x1, d, rec);
+                let (q0, r) = div2x1(r, x0, d, rec);
+                let q = ((q1 as $full) << <$half>::BITS) | (q0 as $full);
+                return (q, r as $full);
+            }
+            */
 
             // Implement division via recpirocal via "Division by
             // Invariant Integers using Multiplication" by T.
@@ -152,6 +222,28 @@ macro_rules! impl_basic {
             (q, r)
         }
 
+        // const RECIP10_FAST: [$half; HALF_NUM_POW10] = {
+        //     let mut table = [0; HALF_NUM_POW10];
+        //     let mut i = 0;
+        //     while i < table.len() {
+        //         let d = <$half>::pow(10, i as u32);
+        //         table[i] = reciprocal_2x1(d);
+        //         i += 1;
+        //     }
+        //     table
+        // };
+
+        // const RECIP10_FASTISH: [$half; NUM_POW10] = {
+        //     let mut table = [0; NUM_POW10];
+        //     let mut i = 0;
+        //     while i < table.len() {
+        //         let d = <$full>::pow(10, i as u32);
+        //         table[i] = reciprocal_3x2(d);
+        //         i += 1;
+        //     }
+        //     table
+        // };
+
         #[cfg(test)]
         mod tests {
             use super::*;
@@ -161,7 +253,7 @@ macro_rules! impl_basic {
                 for n in 0..=$max_shift {
                     let x = 1;
                     let got = shl(x, n).0;
-                    let want = x * (10 as $ty).pow(n);
+                    let want = x * (10 as $full).pow(n);
                     assert_eq!(got, want, "{n}");
                 }
             }
@@ -169,11 +261,11 @@ macro_rules! impl_basic {
             #[test]
             fn test_shr() {
                 for n in 0..=$max_shift {
-                    let x = (10 as $ty).pow($max_shift) - 1;
+                    let x = (10 as $full).pow($max_shift) - 1;
                     let got = shr(x, n);
                     let want = {
-                        let q = x / (10 as $ty).pow(n);
-                        let r = x % (10 as $ty).pow(n);
+                        let q = x / (10 as $full).pow(n);
+                        let r = x % (10 as $full).pow(n);
                         (q, r)
                     };
                     assert_eq!(got, want, "{n}");
@@ -185,7 +277,7 @@ macro_rules! impl_basic {
             fn test_digits() {
                 let mut buf = itoa::Buffer::new();
                 for x in 0..u32::MAX {
-                    let got = digits(x as $ty);
+                    let got = digits(x as $full);
                     let want = buf.format(x).len() as u32;
                     assert_eq!(got, want, "{x}");
                 }
