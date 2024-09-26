@@ -1,50 +1,112 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rand::random;
+use rand::{prelude::*, random, thread_rng};
 use rdfp::{
-    bid::idiv::{div128x64, reciprocal2x1},
+    bid::{
+        arith128, arith64,
+        idiv::{Divisor128, Divisor64},
+    },
     d128,
 };
+
+fn bench_arith64(c: &mut Criterion) {
+    let mut group = c.benchmark_group("arith64");
+    group.bench_function("shr", |b| {
+        let mut vals = [(0, 0); 1 << 14];
+        for val in &mut vals {
+            *val = (random(), thread_rng().gen_range(0..=17))
+        }
+        let mut i = 0;
+        b.iter(|| {
+            let (x, n) = vals[i % vals.len()];
+            black_box(arith64::shr(black_box(x), black_box(n)));
+            i += 1;
+        });
+    });
+    group.finish();
+}
+
+fn bench_arith128(c: &mut Criterion) {
+    let mut group = c.benchmark_group("arith128");
+    group.bench_function("shr", |b| {
+        let mut vals = [(0, 0); 1 << 14];
+        for val in &mut vals {
+            *val = (random(), thread_rng().gen_range(0..=34))
+        }
+        let mut i = 0;
+        b.iter(|| {
+            let (x, n) = vals[i % vals.len()];
+            black_box(arith128::shr(black_box(x), black_box(n)));
+            i += 1;
+        });
+    });
+    group.finish();
+}
 
 fn bench_div(c: &mut Criterion) {
     let mut group = c.benchmark_group("divide");
 
-    let mut operands = [(0, 0, 0, 0); 1 << 14];
+    let mut operands = [(0, 0, Divisor128::uninit()); 1 << 14];
     for val in &mut operands {
-        let u: u128 = random();
-        let v: u64 = loop {
-            let v = random();
-            if v != 0 {
-                break v;
-            }
-        };
-        let rec = reciprocal2x1(v);
-        *val = ((u >> 64) as u64, u as u64, v, rec);
+        let u = random();
+        let mut v = random();
+        if v == 0 {
+            v = 1;
+        }
+        let d = Divisor128::new(u);
+        *val = (u, v, d);
     }
 
-    group.bench_function("u128x64/baseline", |b| {
-        const fn quorem(u: u128, v: u64) -> (u128, u64) {
-            let q = u / (v as u128);
-            let r = u % (v as u128);
-            (q, r as u64)
+    group.bench_function("u128/baseline", |b| {
+        const fn quorem(u: u128, v: u128) -> (u128, u128) {
+            let q = u / v;
+            let r = u % v;
+            (q, r)
         }
         let mut i = 0;
         b.iter(|| {
-            let (u1, u0, v, rec) = operands[i % operands.len()];
-            let u = ((u1 as u128) << 64) | (u0 as u128);
+            let (u, v, _) = operands[i % operands.len()];
             black_box(quorem(black_box(u), black_box(v)));
             i += 1;
         });
     });
-    group.bench_function("u128x64/div128x64", |b| {
+    group.bench_function("u128/reciprocal", |b| {
         let mut i = 0;
         b.iter(|| {
-            let (u1, u0, v, rec) = operands[i % operands.len()];
-            black_box(div128x64(
-                black_box(u1),
-                black_box(u0),
-                black_box(v),
-                black_box(rec),
-            ));
+            let (u, _, d) = operands[i % operands.len()];
+            black_box(d.quorem(black_box(u)));
+            i += 1;
+        });
+    });
+
+    let mut operands = [(0, 0, Divisor64::uninit()); 1 << 14];
+    for val in &mut operands {
+        let u = random();
+        let mut v = random();
+        if v == 0 {
+            v = 1;
+        }
+        let d = Divisor64::new(u);
+        *val = (u, v, d);
+    }
+
+    group.bench_function("u64/baseline", |b| {
+        const fn quorem(u: u64, v: u64) -> (u64, u64) {
+            let q = u / v;
+            let r = u % v;
+            (q, r)
+        }
+        let mut i = 0;
+        b.iter(|| {
+            let (u, v, _) = operands[i % operands.len()];
+            black_box(quorem(black_box(u), black_box(v)));
+            i += 1;
+        });
+    });
+    group.bench_function("u64/reciprocal", |b| {
+        let mut i = 0;
+        b.iter(|| {
+            let (u, _, d) = operands[i % operands.len()];
+            black_box(d.quorem(black_box(u)));
             i += 1;
         });
     });
@@ -99,5 +161,5 @@ fn bench_cmp(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_cmp, bench_div);
+criterion_group!(benches, bench_arith128, bench_arith64, bench_cmp, bench_div);
 criterion_main!(benches);

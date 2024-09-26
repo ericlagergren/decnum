@@ -1,11 +1,20 @@
-use super::idiv::Reciprocals128;
+use super::idiv::Divisor128;
 
 super::impl_basic!(u128, u64, 34);
 
 #[no_mangle]
-pub const fn shr2(x: u128, n: u32) -> (u128, u128) {
+pub const fn shr128(x: u128, n: u32) -> (u128, u128) {
     unsafe { crate::util::assume(n <= 34) }
+    // if n == 0 {
+    //     return (x, 0);
+    // }
+    // let d = RECIP10_2[n as usize];
+    // Divisor128::quorem2(x, d)
     shr(x, n)
+}
+
+const fn umulh(x: u128, y: u128) -> u128 {
+    widening_mul(x, y).1
 }
 
 const fn widening_mul(x: u128, y: u128) -> (u128, u128) {
@@ -37,7 +46,7 @@ const fn widening_mul(x: u128, y: u128) -> (u128, u128) {
     (lo, hi)
 }
 
-const RECIP10: [(u32, u32, u128); NUM_POW10 + 1] = [
+const RECIP10: [(u32, u32, u128); NUM_POW10] = [
     (0, 0, 0),                                         // 10^0
     (0, 3, 272225893536750770770699685945414569165),   // 10^1
     (0, 4, 54445178707350154154139937189082913833),    // 10^2
@@ -77,19 +86,13 @@ const RECIP10: [(u32, u32, u128); NUM_POW10 + 1] = [
     (0, 118, 113078212145816597093331040047546785013), // 10^36
     (0, 122, 180925139433306555349329664076074856021), // 10^37
     (0, 125, 144740111546645244279463731260859884817), // 10^38
-    (0, 129, 231584178474632390847141970017375815707), // 10^39
 ];
 
-const RECIP10_2: [(u128, u128); NUM_POW10 + 1] = {
-    let mut table = [Reciprocals128::zero(); NUM_POW10 + 1];
+const RECIP10_2: [Divisor128; NUM_POW10] = {
+    let mut table = [Divisor128::uninit(); NUM_POW10];
     let mut i = 0;
     while i < table.len() {
-        let d = 10u128.pow(i as u32);
-        let d1 = (d >> 64) as u64;
-        let d0 = d as u64;
-
-        table[i] = Reciprocals128::new(d1, d0);
-
+        table[i] = Divisor128::new(pow10(i as u32));
         i += 1;
     }
     table

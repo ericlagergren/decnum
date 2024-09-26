@@ -76,14 +76,15 @@ macro_rules! impl_basic {
 
         /// Returns 10^n.
         const fn pow10(n: u32) -> $full {
-            /// All powers of 10.
-            // This is a const initializer, so panicking is okay.
-            #[allow(clippy::indexing_slicing)]
+            #[allow(
+                clippy::indexing_slicing,
+                reason = "This is a const initializer, so panicking is okay."
+            )]
             const POW10: [$full; NUM_POW10] = {
                 let mut tab = [0; NUM_POW10];
                 let mut i = 0;
                 while i < tab.len() {
-                    tab[i] = (10 as $full).pow(i as u32);
+                    tab[i] = <$full>::pow(10, i as u32);
                     i += 1;
                 }
                 tab
@@ -93,7 +94,14 @@ macro_rules! impl_basic {
                 clippy::indexing_slicing,
                 reason = "Calling code always checks that `n` is in range"
             )]
-            POW10[n as usize] // or (10 as $full).pow(n)
+            let p = POW10[n as usize]; // or (10 as $full).pow(n)
+
+            // SAFETY: `p` is a power of 10, so it cannot be
+            // zero. This line helps the compiler get rid of some
+            // panics.
+            unsafe { $crate::util::assume(p != 0) };
+
+            p
         }
 
         const NUM_POW10: usize = {
@@ -103,14 +111,6 @@ macro_rules! impl_basic {
             }
             n as usize
         };
-
-        // const HALF_NUM_POW10: usize = {
-        //     let mut n = 0;
-        //     while (10 as $half).checked_pow(n).is_some() {
-        //         n += 1
-        //     }
-        //     n as usize
-        // };
 
         /// Returns `x * 10^n`.
         pub const fn shl(x: $full, n: u32) -> ($full, $full) {
@@ -134,6 +134,34 @@ macro_rules! impl_basic {
                 return (x, 0);
             }
 
+            // Amazingly, the M1's integer division unit is
+            // better than our reciprocals for word-sized
+            // operands.
+            if false
+                && cfg!(all(target_vendor = "apple", target_arch = "aarch64"))
+                && <$full>::BITS <= 64
+            {
+                let d = pow10(n);
+                return (x / d, x % d);
+            }
+
+            // Implement division via recpirocal via "Improved
+            // division by invariant integers" by N. Möller
+            // and T. Granlund.
+            //
+            // https://gmplib.org/~tege/division-paper.pdf
+            //
+            // NB: This is only faster when using 128x128
+            // multiplication.
+            if <$full>::BITS == 128 {
+                #[allow(
+                    clippy::indexing_slicing,
+                    reason = "Calling code always checks that `n` is in range"
+                )]
+                let d = RECIP10_2[n as usize];
+                return d.quorem(x);
+            }
+
             // Implement division via recpirocal via "Division by
             // Invariant Integers using Multiplication" by T.
             // Granlund and P. Montgomery.
@@ -145,7 +173,7 @@ macro_rules! impl_basic {
                     reason = "Calling code always checks that `n` is in range"
                 )]
                 let (pre, post, m) = RECIP10[n as usize];
-                widening_mul(m, x >> pre).1 >> post
+                umulh(m, x >> pre) >> post
             };
 
             let d = pow10(n);
@@ -159,36 +187,14 @@ macro_rules! impl_basic {
             // Assert some invariants to help the compiler.
             // SAFETY: `r = n % (10^n)`.
             unsafe {
-                // NB: `r < d` must come first, otherwise the compiler
-                // doesn't use it.
+                // NB: `r < d` must come first, otherwise the
+                // compiler doesn't always use it.
                 $crate::util::assume(r < d);
                 $crate::util::assume(r == (x % d));
             }
 
             (q, r)
         }
-
-        // const RECIP10_FAST: [$half; HALF_NUM_POW10] = {
-        //     let mut table = [0; HALF_NUM_POW10];
-        //     let mut i = 0;
-        //     while i < table.len() {
-        //         let d = <$half>::pow(10, i as u32);
-        //         table[i] = reciprocal_2x1(d);
-        //         i += 1;
-        //     }
-        //     table
-        // };
-
-        // const RECIP10_FASTISH: [$half; NUM_POW10] = {
-        //     let mut table = [0; NUM_POW10];
-        //     let mut i = 0;
-        //     while i < table.len() {
-        //         let d = <$full>::pow(10, i as u32);
-        //         table[i] = reciprocal_3x2(d);
-        //         i += 1;
-        //     }
-        //     table
-        // };
 
         #[cfg(test)]
         mod tests {
