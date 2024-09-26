@@ -3,6 +3,7 @@
 //! [`rust-dec`]: https://github.com/MaterializeInc/rust-dec/tree/e33480a6915c4767c9e56e3c5d1394b0b89e5fbe/dectest
 
 #![cfg(test)]
+#![allow(dead_code)] // TODO
 
 mod op;
 mod parse;

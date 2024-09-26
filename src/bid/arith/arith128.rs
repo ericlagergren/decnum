@@ -1,3 +1,5 @@
+use super::idiv::Reciprocals128;
+
 super::impl_basic!(u128, u64, 34);
 
 #[no_mangle]
@@ -78,61 +80,17 @@ const RECIP10: [(u32, u32, u128); NUM_POW10 + 1] = [
     (0, 129, 231584178474632390847141970017375815707), // 10^39
 ];
 
-#[allow(dead_code)]
-const fn div64(hi: u64, lo: u64, mut y: u64) -> (u64, u64) {
-    //assert!(y != 0);
-    //assert!(y > hi);
+const RECIP10_2: [(u128, u128); NUM_POW10 + 1] = {
+    let mut table = [Reciprocals128::zero(); NUM_POW10 + 1];
+    let mut i = 0;
+    while i < table.len() {
+        let d = 10u128.pow(i as u32);
+        let d1 = (d >> 64) as u64;
+        let d0 = d as u64;
 
-    // If high part is zero, we can directly return the results.
-    if hi == 0 {
-        return (lo / y, lo % y);
+        table[i] = Reciprocals128::new(d1, d0);
+
+        i += 1;
     }
-
-    let s = y.leading_zeros();
-    y <<= s;
-
-    const TWO32: u64 = 1 << 32;
-    const MASK32: u64 = TWO32 - 1;
-
-    let yn1 = y >> 32;
-    let yn0 = y & MASK32;
-    let un32 = (hi << s) | (lo >> (64 - s));
-    let un10 = lo << s;
-    let un1 = un10 >> 32;
-    let un0 = un10 & MASK32;
-    let mut q1 = un32 / yn1;
-    let mut rhat = un32.wrapping_sub(q1).wrapping_mul(yn1);
-
-    while q1 >= TWO32 || q1.wrapping_mul(yn0) > TWO32.wrapping_mul(rhat).wrapping_add(un1) {
-        q1 = q1.wrapping_sub(1);
-        rhat = rhat.wrapping_add(yn1);
-        if rhat >= TWO32 {
-            break;
-        }
-    }
-
-    let un21 = un32
-        .wrapping_mul(TWO32)
-        .wrapping_add(un1)
-        .wrapping_sub(q1)
-        .wrapping_mul(y);
-    let mut q0 = un21 / yn1;
-    rhat = un21.wrapping_sub(q0).wrapping_mul(yn1);
-
-    while q0 >= TWO32 || q0.wrapping_mul(yn0) > TWO32.wrapping_mul(rhat).wrapping_add(un0) {
-        q0 = q0.wrapping_sub(1);
-        rhat = rhat.wrapping_add(yn1);
-        if rhat >= TWO32 {
-            break;
-        }
-    }
-
-    let q = q1.wrapping_mul(TWO32).wrapping_add(q0);
-    let r = un21
-        .wrapping_mul(TWO32)
-        .wrapping_add(un0)
-        .wrapping_sub(q0)
-        .wrapping_mul(y)
-        >> s;
-    (q, r)
-}
+    table
+};

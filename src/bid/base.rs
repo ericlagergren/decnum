@@ -878,6 +878,7 @@ macro_rules! impl_dec_arith {
 
             /// Only used by dectest.
             #[cfg(test)]
+            #[allow(dead_code, reason = "Not used by `Bid32`")]
             pub(crate) fn compare(self, rhs: Self) -> Self {
                 use Ordering::*;
                 match self.const_partial_cmp(rhs) {
@@ -890,6 +891,7 @@ macro_rules! impl_dec_arith {
 
             /// Only used by dectest.
             #[cfg(test)]
+            #[allow(dead_code, reason = "Not used by `Bid32`")]
             pub(crate) fn compare_sig(mut self, mut rhs: Self) -> Self {
                 /// The bits set for an sNaN.
                 const SNAN_MASK: $ucoeff = $name::COMB_TOP6;
@@ -904,6 +906,7 @@ macro_rules! impl_dec_arith {
 
             /// Only used by dectest.
             #[cfg(test)]
+            #[allow(dead_code, reason = "Not used by `Bid32`")]
             pub(crate) fn compare_total(self, rhs: Self) -> Self {
                 if cfg!(debug_assertions) {
                     println!("compare_total({self}, {rhs})");
@@ -1251,6 +1254,7 @@ macro_rules! impl_dec_arith {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             #[cfg(test)]
+            #[allow(dead_code, reason = "Not used by `Bid32`")]
             pub(crate) fn round_to_integral_exact(self) -> Self {
                 if self.is_nan() {
                     Self::select_nan(self, self)
@@ -1358,6 +1362,7 @@ macro_rules! impl_dec_misc {
             }
 
             #[cfg(test)]
+            #[allow(dead_code, reason = "Not used by `Bid32`")]
             pub(crate) const fn class(self) -> &'static str {
                 use FpCategory::*;
                 match self.classify() {
@@ -1584,6 +1589,7 @@ macro_rules! impl_dec_misc {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             #[cfg(test)]
+            #[allow(dead_code, reason = "Not used by `Bid32`")]
             pub(crate) fn plus(self) -> Self {
                 if self.is_nan() {
                     // ±0 + ±NaN

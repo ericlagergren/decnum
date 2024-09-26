@@ -134,60 +134,6 @@ macro_rules! impl_basic {
                 return (x, 0);
             }
 
-            /*
-            if n < RECIP10_FASTISH.len() as u32 {
-                let u2 = 0;
-                let u1 = (x >> <$half>::BITS) as $half;
-                let u0 = x as $half;
-                let d = pow10(n);
-                let d1 = (d >> <$half>::BITS) as $half;
-                let d0 = d as $half;
-                #[allow(
-                    clippy::indexing_slicing,
-                    reason = "Calling code always checks that `n` is in range"
-                )]
-                let rec = RECIP10_FASTISH[n as usize];
-                // for u/v
-                // n = v
-                // m = u
-
-                let mut u = [u1, u0];
-                let mut v = [d1, d0];
-                let n = v.len();
-                let m = u.len() - n;
-                let vn1 = v[n - 1];
-                let mut j = m;
-                loop {
-                    let qhat = <$half>::MAX;
-                    let ujn = if j + n < u.len() { u[j + n] } else { 0 };
-
-                    if ujn != vn1 {}
-
-                    j -= 1;
-                }
-
-                // let (q1, r) = div3x2(u2, u1, u0, d1, d0, rec);
-                // let (q0, r) = div3x2(u2, u1, u0, d1, d0, rec);
-                // let q = ((q1 as $full) << <$half>::BITS) | (q0 as $full);
-                // return (q, r);
-            }
-
-            if n < RECIP10_FAST.len() as u32 {
-                let d = pow10(n) as $half;
-                #[allow(
-                    clippy::indexing_slicing,
-                    reason = "Calling code always checks that `n` is in range"
-                )]
-                let rec = RECIP10_FAST[n as usize];
-                let x1 = (x >> <$half>::BITS) as $half;
-                let x0 = x as $half;
-                let (q1, r) = div2x1(0, x1, d, rec);
-                let (q0, r) = div2x1(r, x0, d, rec);
-                let q = ((q1 as $full) << <$half>::BITS) | (q0 as $full);
-                return (q, r as $full);
-            }
-            */
-
             // Implement division via recpirocal via "Division by
             // Invariant Integers using Multiplication" by T.
             // Granlund and P. Montgomery.

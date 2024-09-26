@@ -1,5 +1,23 @@
 use core::{hint, mem::MaybeUninit};
 
+/// Informs the compiler that `cond` is unlikely to occur.
+macro_rules! unlikely {
+    ($cond:expr) => {
+        // Some day this will be stabilized.
+        $cond
+    };
+}
+pub(crate) use unlikely;
+
+/// Informs the compiler that `cond` is unpredictable.
+macro_rules! unpredictable {
+    ($cond:expr) => {
+        // Some day this will be stabilized.
+        $cond
+    };
+}
+pub(crate) use unpredictable;
+
 macro_rules! const_assert {
     (
         #[$meta:meta]
