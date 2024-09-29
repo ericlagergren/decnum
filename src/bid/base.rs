@@ -219,8 +219,8 @@ macro_rules! impl_dec_internal {
             /// sNaN > qNaN > inf > finite
             /// ```
             const fn special_bits(self) -> u8 {
-                const SHIFT: u32 = $name::SIGN_SHIFT - 6;
-                const MASK: $ucoeff = $name::COMB_TOP6;
+                const SHIFT: u32 = <$name>::SIGN_SHIFT - 6;
+                const MASK: $ucoeff = <$name>::COMB_TOP6;
 
                 ((self.0 & MASK) >> SHIFT) as u8
             }
@@ -274,7 +274,7 @@ macro_rules! impl_dec_internal {
             /// If the number is finite, the result is in
             /// [[`ETINY`][Self::ETINY], [`EMAX`][Self::EMAX]].
             const fn unbiased_exp(self) -> $unbiased {
-                const_assert!($name::LIMIT.checked_add_signed($name::BIAS).is_some());
+                const_assert!(<$name>::LIMIT.checked_add_signed(<$name>::BIAS).is_some());
 
                 // The exponent only has meaning for finite
                 // numbers.
@@ -304,8 +304,8 @@ macro_rules! impl_dec_internal {
                 // numbers.
                 debug_assert!(self.is_finite());
 
-                const_assert!($name::DIGITS <= <$unbiased>::MAX as u32);
-                const_assert!(<$unbiased>::MAX - $name::DIGITS as $unbiased >= $name::EMAX);
+                const_assert!(<$name>::DIGITS <= <$unbiased>::MAX as u32);
+                const_assert!(<$unbiased>::MAX - <$name>::DIGITS as $unbiased >= <$name>::EMAX);
 
                 // `self.digits() as $unbiased` does not wrap
                 // because it is in [1, DIGITS], and `DIGITS <=
@@ -799,24 +799,24 @@ macro_rules! impl_dec_arith_ctx {
                         // ±NaN + rhs
                         // lhs + ±NaN
                         // ±NaN + ±NaN
-                        return $name::select_nan(lhs, rhs);
+                        return <$name>::select_nan(lhs, rhs);
                     }
 
                     if lhs.is_infinite() {
                         if rhs.is_infinite() && lhs.signbit() ^ rhs.signbit() {
                             // +inf + -inf
                             // -inf + +inf
-                            return $name::nan(false, 0);
+                            return <$name>::nan(false, 0);
                         }
                         // ±inf + rhs
                         // +inf + +inf
                         // -inf + -inf
-                        return $name::inf(lhs.signbit());
+                        return <$name>::inf(lhs.signbit());
                     }
                     debug_assert!(rhs.is_infinite());
 
                     // lhs + ±inf
-                    return $name::inf(rhs.signbit());
+                    return <$name>::inf(rhs.signbit());
                 };
 
                 // Both are now finite.
@@ -833,37 +833,47 @@ macro_rules! impl_dec_arith_ctx {
                     let sum = lhs + rhs;
                     let sign = if sum == 0 {
                         // The sign of a zero is also zero unless
-                        // both operands are negative or the signs
-                        // differ and the rounding mode is
+                        // both operands are negative or the
+                        // signs differ and the rounding mode is
                         // `ToNegativeInf`.
-                        lhs < 0 && rhs < 0
+                        (lhs < 0 && rhs < 0)
+                            || ((lhs < 0) != (rhs < 0)
+                                && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
                     } else {
                         sum < 0
                     };
-                    return $name::maybe_rounded(sign, exp, sum.unsigned_abs());
+                    return <$name>::maybe_rounded(sign, exp, sum.unsigned_abs());
                 }
                 debug_assert!(lhs.biased_exp() != rhs.biased_exp());
 
-                // The exponents differ, so one operand needs to be
-                // rescaled.
+                // The exponents differ, so one operand needs to
+                // be rescaled.
 
                 let mut lhs = lhs;
                 let mut rhs = rhs;
                 if lhs.biased_exp() < rhs.biased_exp() {
+                    let tmp = lhs;
                     lhs = rhs;
-                    rhs = lhs;
+                    rhs = tmp;
                 }
                 debug_assert!(rhs.biased_exp() < lhs.biased_exp());
 
                 if lhs.is_zero() {
                     // ±0 + rhs
                     let mut sum = rhs.canonical();
-                    if lhs.signbit() ^ rhs.signbit() && sum.is_zero() {
-                        // If the signs differ and the result is
-                        // exactly zero, the result is positive
-                        // unless the rounding mode is to
+                    if sum.is_zero() {
+                        // The sign of a zero is also zero unless
+                        // both operands are negative or the
+                        // signs differ and the rounding mode is
                         // `ToNegativeInf`.
-                        sum = sum.abs();
+                        if (lhs.signbit() && rhs.signbit())
+                            || (lhs.signbit() != rhs.signbit()
+                                && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
+                        {
+                            sum = $name(sum.0 | <$name>::SIGN_MASK);
+                        } else {
+                            sum = sum.copy_abs();
+                        }
                     }
                     return sum;
                 }
@@ -897,22 +907,22 @@ macro_rules! impl_dec_arith_ctx {
                     // ±NaN + rhs
                     // lhs + ±NaN
                     // ±NaN + ±NaN
-                    return $name::select_nan(lhs, rhs);
+                    return <$name>::select_nan(lhs, rhs);
                 }
 
                 if lhs.is_infinite() {
                     if rhs.is_infinite() && lhs.signbit() ^ rhs.signbit() {
                         // +inf + -inf
                         // -inf + +inf
-                        return $name::nan(false, 0);
+                        return <$name>::nan(false, 0);
                     }
                     // ±inf + rhs
                     // +inf + +inf
                     // -inf + -inf
-                    return $name::inf(lhs.signbit());
+                    return <$name>::inf(lhs.signbit());
                 }
                 // lhs + ±inf
-                $name::inf(rhs.signbit())
+                <$name>::inf(rhs.signbit())
             }
 
             /// Returns the quotient `q` and remainder `r` such
@@ -935,19 +945,19 @@ macro_rules! impl_dec_arith_ctx {
                     if lhs.is_zero() {
                         if rhs.is_zero() {
                             // 0 / 0
-                            let q = $name::nan(false, 0);
+                            let q = <$name>::nan(false, 0);
                             let r = q;
                             return (q, r);
                         }
                         // lhs / 0
-                        let q = $name::inf(sign);
-                        let r = $name::inf(lhs.signbit());
+                        let q = <$name>::inf(sign);
+                        let r = <$name>::inf(lhs.signbit());
                         return (q, r);
                     }
                     if rhs.is_zero() {
                         // 0 / rhs
-                        let q = $name::from_parts(sign, 0, 0);
-                        let r = $name::from_parts(
+                        let q = <$name>::from_parts(sign, 0, 0);
+                        let r = <$name>::from_parts(
                             lhs.signbit(),
                             rhs.unbiased_exp() - lhs.unbiased_exp(),
                             0,
@@ -963,7 +973,7 @@ macro_rules! impl_dec_arith_ctx {
                     // ±NaN / rhs
                     // lhs / ±NaN
                     // ±NaN / ±NaN
-                    let q = $name::select_nan(lhs, rhs);
+                    let q = <$name>::select_nan(lhs, rhs);
                     let r = q;
                     return (q, r);
                 }
@@ -971,18 +981,18 @@ macro_rules! impl_dec_arith_ctx {
                 if lhs.is_infinite() {
                     if rhs.is_infinite() {
                         // ±inf / ±inf
-                        let q = $name::nan(false, 0);
+                        let q = <$name>::nan(false, 0);
                         let r = q;
                         return (q, r);
                     }
                     // ±inf / rhs
-                    let q = $name::inf(sign);
-                    let r = $name::inf(lhs.signbit());
+                    let q = <$name>::inf(sign);
+                    let r = <$name>::inf(lhs.signbit());
                     (q, r)
                 } else {
                     // lhs / ±inf
-                    let q = $name::from_parts(sign, $name::ETINY, 0);
-                    let r = $name::from_parts(lhs.signbit(), 0, 0);
+                    let q = <$name>::from_parts(sign, <$name>::ETINY, 0);
+                    let r = <$name>::from_parts(lhs.signbit(), 0, 0);
                     (q, r)
                 }
             }
@@ -1040,12 +1050,12 @@ macro_rules! impl_dec_arith_ctx {
                               without modifying the original"]
             pub const fn next_minus(&self, x: $name) -> $name {
                 if x.is_nan() {
-                    return $name::select_nan(x, x);
+                    return <$name>::select_nan(x, x);
                 }
                 if !x.signbit() && x.is_infinite() {
-                    return $name::MAX;
+                    return <$name>::MAX;
                 }
-                const TINY: $name = <$name>::new(-1, $name::ETINY);
+                const TINY: $name = <$name>::new(-1, <$name>::ETINY);
                 let mut ctx = *self;
                 ctx.rounding = $crate::RoundingMode::ToNegativeInf;
                 let mut next = ctx.const_add(x, TINY);
@@ -1063,13 +1073,13 @@ macro_rules! impl_dec_arith_ctx {
                               without modifying the original"]
             pub const fn next_plus(&self, x: $name) -> $name {
                 if x.is_nan() {
-                    return $name::select_nan(x, x);
+                    return <$name>::select_nan(x, x);
                 }
                 if x.signbit() && x.is_infinite() {
-                    return $name::MIN;
+                    return <$name>::MIN;
                 }
                 // TODO(eric): round to +inf, not half-even.
-                const TINY: $name = <$name>::new(1, $name::ETINY);
+                const TINY: $name = <$name>::new(1, <$name>::ETINY);
                 let mut ctx = *self;
                 ctx.rounding = $crate::RoundingMode::ToPositiveInf;
                 let mut next = ctx.const_add(x, TINY);
@@ -1100,16 +1110,16 @@ macro_rules! impl_dec_arith_ctx {
             fn _quantize(&self, lhs: $name, rhs: $name) -> $name {
                 if lhs.is_special() || rhs.is_special() {
                     return if lhs.is_nan() || rhs.is_nan() {
-                        $name::select_nan(lhs, rhs)
+                        <$name>::select_nan(lhs, rhs)
                     } else if lhs.is_infinite() != rhs.is_infinite() {
-                        $name::nan(false, 0)
+                        <$name>::nan(false, 0)
                     } else {
-                        $name::inf(lhs.signbit())
+                        <$name>::inf(lhs.signbit())
                     };
                 }
 
                 if lhs.is_zero() {
-                    return $name::from_parts(lhs.signbit(), rhs.unbiased_exp(), 0);
+                    return <$name>::from_parts(lhs.signbit(), rhs.unbiased_exp(), 0);
                 }
 
                 if cfg!(debug_assertions) {
@@ -1137,23 +1147,25 @@ macro_rules! impl_dec_arith_ctx {
                     // DIGITS+LIMIT overflows. DIGITS+LIMIT can
                     // only overflow if K >= 2^10, at which point
                     // LIMIT > (2^32)-1.
-                    if lhs.digits() + diff > $name::DIGITS {
+                    if lhs.digits() + diff > <$name>::DIGITS {
                         // Too many digits.
-                        return $name::nan(false, 0);
+                        return <$name>::nan(false, 0);
                     }
                     let (lo, hi) = $arith::shl(lhs.coeff(), diff);
                     debug_assert!(hi == 0);
-                    return $name::from_parts(lhs.signbit(), rhs.unbiased_exp(), lo);
+                    return <$name>::from_parts(lhs.signbit(), rhs.unbiased_exp(), lo);
                 }
 
                 let diff = (rhs.biased_exp() - lhs.biased_exp()) as u32;
                 if lhs.digits() < diff {
                     // Rounding down to zero.
-                    return $name::from_parts(lhs.signbit(), rhs.unbiased_exp(), 0);
+                    return <$name>::from_parts(lhs.signbit(), rhs.unbiased_exp(), 0);
                 }
 
                 // We need to discard `diff` digits from the
-                // coefficient with proper rounding. Interpret
+                // coefficient with proper rounding.
+                //
+                // For the "to nearest" rounding modes, nterpret
                 // the coefficient as a decimal number, e.g.
                 //     c = iiii.ffff
                 // Add floor(0.5*(10^diff)), then divide by
@@ -1161,22 +1173,14 @@ macro_rules! impl_dec_arith_ctx {
                 //     q = iiii (quotient)
                 //     r = ffff (remainder)
                 // The quotient is the new coefficient and is
-                // correctly rounded except for the case where
-                // the fractional part was exactly 0.5. To
-                // account for this, decrement the quotient if
-                // the remainder is zero.
-                //
-                // 3.0 + 0.5 = 3.5 => (3, 5) => 3
-                // 3.2 + 0.5 = 3.7 => (3, 7) => 3
-                // 3.5 + 0.5 = 4.0 => (4, 0) => 4
-                // 3.7 + 0.5 = 4.2 => (4, 2) => 4
-                // 4.0 + 0.5 = 4.5 => (4, 5) => 4
-                // 4.2 + 0.5 = 4.7 => (4, 7) => 4
-                // 4.5 + 0.5 = 5.0 => (5, 0) => 4
-                // 4.7 + 0.5 = 5.2 => (5, 2) => 5
+                // correctly rounded for `ToNearestAway`. The
+                // other "to nearest" rounding modes need to
+                // handle the case where the fractional part was
+                // exactly 0.5 (i.e., the remainder is zero).
 
                 const_assert!(
-                    <$ucoeff>::MAX - $name::MAX_COEFF as $ucoeff >= $arith::point5($name::DIGITS),
+                    <$ucoeff>::MAX - <$name>::MAX_COEFF as $ucoeff
+                        >= $arith::point5(<$name>::DIGITS),
                 );
                 let mut coeff = lhs.coeff();
                 if matches!(
@@ -1185,6 +1189,10 @@ macro_rules! impl_dec_arith_ctx {
                         | $crate::RoundingMode::ToNearestAway
                         | $crate::RoundingMode::ToNearestTowardZero
                 ) {
+                    const_assert!(
+                        <$name>::MAX_COEFF as $ucoeff + $arith::point5(<$name>::DIGITS)
+                            <= <$ucoeff>::MAX
+                    );
                     // The addition cannot overflow since
                     //     MAX_COEFF + 5*(10^DIGITS) < <$ucoeff>::MAX
                     coeff += $arith::point5(diff);
@@ -1220,7 +1228,7 @@ macro_rules! impl_dec_arith_ctx {
                     _ => {}
                 }
 
-                $name::from_parts(lhs.signbit(), rhs.unbiased_exp(), q)
+                <$name>::from_parts(lhs.signbit(), rhs.unbiased_exp(), q)
             }
 
             /// TODO
@@ -1230,12 +1238,12 @@ macro_rules! impl_dec_arith_ctx {
             #[allow(dead_code, reason = "Not used by `Bid32`")]
             pub(crate) fn round_to_integral_exact(&self, x: $name) -> $name {
                 if x.is_nan() {
-                    $name::select_nan(x, x)
+                    <$name>::select_nan(x, x)
                 } else if x.is_infinite() || x.unbiased_exp() >= 0 {
                     x
                 } else {
                     // quantize(1e+0)
-                    self.quantize(x, $name::new(1, 0))
+                    self.quantize(x, <$name>::new(1, 0))
                 }
             }
 
@@ -1245,27 +1253,27 @@ macro_rules! impl_dec_arith_ctx {
             pub const fn sqrt(&self, x: $name) -> $name {
                 if x.is_nan() {
                     // sqrt(±NaN)
-                    return $name::select_nan(x, x);
+                    return <$name>::select_nan(x, x);
                 }
                 let ideal = x.unbiased_exp() / 2;
                 if x.is_zero() {
                     // sqrt(±0) == 0
-                    return $name::from_parts(x.signbit(), ideal, 0);
+                    return <$name>::from_parts(x.signbit(), ideal, 0);
                 }
                 if x.signbit() {
                     // sqrt(-x) == NaN
-                    return $name::nan(false, 0);
+                    return <$name>::nan(false, 0);
                 }
                 if x.is_infinite() {
                     // sqrt(+inf) == +inf
-                    return $name::inf(false);
+                    return <$name>::inf(false);
                 }
 
-                const APPROX1: $name = $name::new(256, -3);
-                const APPROX2: $name = $name::new(819, -3);
-                const APPROX3: $name = $name::new(819, -4);
-                const APPROX4: $name = $name::new(256, -1);
-                const PT5: $name = $name::new(5, -1);
+                const APPROX1: $name = <$name>::new(256, -3);
+                const APPROX2: $name = <$name>::new(819, -3);
+                const APPROX3: $name = <$name>::new(819, -4);
+                const APPROX4: $name = <$name>::new(256, -1);
+                const PT5: $name = <$name>::new(5, -1);
 
                 let xprec = x.digits();
                 let mut e = x.unbiased_exp() + xprec as $unbiased;
@@ -1284,10 +1292,10 @@ macro_rules! impl_dec_arith_ctx {
                 };
 
                 let mut p = 3;
-                while p < $name::MAX_PREC {
+                while p < <$name>::MAX_PREC {
                     p = 2 * p - 2;
-                    if p > $name::MAX_PREC {
-                        p = $name::MAX_PREC;
+                    if p > <$name>::MAX_PREC {
+                        p = <$name>::MAX_PREC;
                     }
                     // approx := 0.5*(approx + f/approx)
                     approx = self.const_mul(self.const_add(approx, self.const_div(f, approx)), PT5)
@@ -1341,7 +1349,7 @@ macro_rules! impl_dec_arith {
             #[allow(dead_code, reason = "Not used by `Bid32`")]
             pub(crate) fn compare_sig(mut self, mut rhs: Self) -> Self {
                 /// The bits set for an sNaN.
-                const SNAN_MASK: $ucoeff = $name::COMB_TOP6;
+                const SNAN_MASK: $ucoeff = <$name>::COMB_TOP6;
                 if self.is_nan() {
                     self = $crate::bid::canonical!($name, self.0 | SNAN_MASK)
                 }
@@ -1884,17 +1892,17 @@ macro_rules! impl_dec_misc_ctx {
                 if x.is_nan() {
                     return x;
                 }
-                if n > $name::MAX_SCALEB_N {
-                    return $name::NAN;
+                if n > <$name>::MAX_SCALEB_N {
+                    return <$name>::NAN;
                 }
                 if x.is_infinite() {
                     return x;
                 }
                 let mut exp = x.biased_exp() + n as $biased;
-                if exp <= $name::LIMIT {
+                if exp <= <$name>::LIMIT {
                     return x.with_biased_exp(exp);
                 }
-                while exp >= $name::LIMIT {
+                while exp >= <$name>::LIMIT {
                     exp -= 1;
                 }
                 todo!()
@@ -2144,7 +2152,7 @@ macro_rules! impl_dec_misc {
                 //
                 // NB: The compiler generates worse code for the
                 // obvious version.
-                const MAX_COEFF: $ucoeff = $name::MAX_COEFF as $ucoeff;
+                const MAX_COEFF: $ucoeff = <$name>::MAX_COEFF as $ucoeff;
                 let diff = (MAX_COEFF as $ucoeff).checked_sub(self.raw_coeff());
                 matches!(diff, None | Some(MAX_COEFF))
             }
