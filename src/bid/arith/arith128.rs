@@ -17,6 +17,7 @@ const fn umulh(x: u128, y: u128) -> u128 {
     widening_mul(x, y).1
 }
 
+// Returns `(lo, hi)`
 const fn widening_mul(x: u128, y: u128) -> (u128, u128) {
     let x1 = (x >> 64) as u64;
     let x0 = x as u64;
@@ -97,3 +98,32 @@ const RECIP10_2: [Divisor128; NUM_POW10] = {
     }
     table
 };
+
+#[cfg(test)]
+mod tests2 {
+    use super::*;
+
+    #[test]
+    fn test_idk() {
+        const RND: u128 = ((27105 as u128) << 64) | (1001882102603448320 as u128);
+        let mut x = 10u128.pow(34) - 1;
+        x += RND;
+        const REC: u128 = ((10889035741470030 as u128) << 64) | (15326071253540576846 as u128);
+        println!("x = {x}");
+        println!("rec = {REC}");
+        let (lo, hi) = widening_mul(x, REC);
+        println!("lo = {lo} ({}, {})", (lo >> 64) as u64, lo as u64);
+        println!("hi = {hi} ({}, {})", (hi >> 64) as u64, hi as u64);
+
+        let q = hi >> 69;
+        println!("q = {q}");
+        let r = (((((hi >> 64) as u64) << (128 - 69)) as u128) << 64) | ((hi as u64) as u128);
+        println!("r = {r}");
+
+        const IDK: u128 = ((8646911284551352320 as u128) << 64) | (18446744073709551615 as u128);
+        println!("? = {IDK}");
+
+        println!("q = {}", x / 10u128.pow(24));
+        println!("r = {}", x % 10u128.pow(24));
+    }
+}

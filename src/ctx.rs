@@ -9,17 +9,30 @@ use bitflags::bitflags;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Ctx<D> {
     //traps: Condition,
-    round: RoundingMode,
-    _dec: PhantomData<D>,
+    pub(crate) rounding: RoundingMode,
+    pub(crate) _dec: PhantomData<D>,
+}
+
+impl<D> Ctx<D> {
+    /// TODO
+    pub const fn new() -> Self {
+        Self {
+            //traps: Condition::default(),
+            rounding: RoundingMode::ToNearestEven,
+            _dec: PhantomData,
+        }
+    }
+    /// TODO
+    pub const fn with_rounding_mode(self, mode: RoundingMode) -> Self {
+        let mut ctx = self;
+        ctx.rounding = mode;
+        ctx
+    }
 }
 
 impl<D> Default for Ctx<D> {
     fn default() -> Self {
-        Self {
-            //traps: Condition::default(),
-            round: RoundingMode::default(),
-            _dec: PhantomData,
-        }
+        Self::new()
     }
 }
 

@@ -104,215 +104,6 @@ impl Bid128 {
     }
 }
 
-// Const arithmetic.
-impl Bid128 {
-    /// Returns `self + other`.
-    ///
-    /// This is the same as [`Add`][core::ops::Add], but can be
-    /// used in a const context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_add(self, rhs: Self) -> Self {
-        if self.is_special() || rhs.is_special() {
-            if self.is_nan() || rhs.is_nan() {
-                // ±NaN + rhs
-                // self + ±NaN
-                // ±NaN + ±NaN
-                return Self::select_nan(self, rhs);
-            }
-
-            if self.is_infinite() {
-                if rhs.is_infinite() && self.signbit() ^ rhs.signbit() {
-                    // +inf + -inf
-                    // -inf + +inf
-                    return Self::nan(false, 0);
-                }
-                // ±inf + rhs
-                // +inf + +inf
-                // -inf + -inf
-                return Self::inf(self.signbit());
-            }
-            debug_assert!(rhs.is_infinite());
-
-            // self + ±inf
-            return Self::inf(rhs.signbit());
-        };
-
-        // Both are now finite.
-        debug_assert!(self.is_finite() && rhs.is_finite());
-
-        if self.biased_exp() == rhs.biased_exp() {
-            // Fast path: exponents are the same, so we don't
-            // need to rescale either operand.
-            let exp = self.unbiased_exp();
-
-            let lhs = self.signed_coeff();
-            let rhs = rhs.signed_coeff();
-
-            let sum = lhs + rhs;
-            let sign = if sum == 0 {
-                // The sign of a zero is also zero unless
-                // both operands are negative or the signs
-                // differ and the rounding mode is
-                // `ToNegativeInf`.
-                lhs < 0 && rhs < 0
-            } else {
-                sum < 0
-            };
-            return Self::maybe_rounded(sign, exp, sum.unsigned_abs());
-        }
-        debug_assert!(self.biased_exp() != rhs.biased_exp());
-
-        // The exponents differ, so one operand needs to be
-        // rescaled.
-
-        let mut lhs = self;
-        let mut rhs = rhs;
-        if lhs.biased_exp() < rhs.biased_exp() {
-            lhs = rhs;
-            rhs = self;
-        }
-        debug_assert!(rhs.biased_exp() < lhs.biased_exp());
-
-        if lhs.is_zero() {
-            // ±0 + rhs
-            let mut sum = rhs.canonical();
-            if lhs.signbit() ^ rhs.signbit() && sum.is_zero() {
-                // If the signs differ and the result is
-                // exactly zero, the result is positive
-                // unless the rounding mode is to
-                // `ToNegativeInf`.
-                sum = sum.abs();
-            }
-            return sum;
-        }
-        debug_assert!(!lhs.is_zero());
-
-        todo!()
-    }
-
-    /// Returns `self / other`.
-    ///
-    /// This is the same as [`Div`][core::ops::Div], but can be
-    /// used in a const context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_div(self, rhs: Self) -> Self {
-        self.quorem(rhs).0
-    }
-
-    /// Returns `self * other`.
-    ///
-    /// This is the same as [`Mul`][core::ops::Mul], but can be
-    /// used in a const context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_mul(self, rhs: Self) -> Self {
-        if self.is_finite() && rhs.is_finite() {
-            todo!()
-        }
-
-        if self.is_nan() || rhs.is_nan() {
-            // ±NaN + rhs
-            // self + ±NaN
-            // ±NaN + ±NaN
-            return Self::select_nan(self, rhs);
-        }
-
-        if self.is_infinite() {
-            if rhs.is_infinite() && self.signbit() ^ rhs.signbit() {
-                // +inf + -inf
-                // -inf + +inf
-                return Self::nan(false, 0);
-            }
-            // ±inf + rhs
-            // +inf + +inf
-            // -inf + -inf
-            return Self::inf(self.signbit());
-        }
-        // self + ±inf
-        Self::inf(rhs.signbit())
-    }
-
-    /// Returns the quotient `q` and remainder `r` such that
-    ///
-    /// ```text
-    /// q = self/other
-    /// r = self%other
-    /// ```
-    ///
-    /// This is the same as [`Div`][core::ops::Div] and
-    /// [`Rem`][core::ops::Rem], but can be used in a const
-    /// context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn quorem(self, rhs: Self) -> (Self, Self) {
-        let sign = self.signbit() ^ rhs.signbit();
-
-        if self.is_finite() && rhs.is_finite() {
-            if self.is_zero() {
-                if rhs.is_zero() {
-                    // 0 / 0
-                    let q = Self::nan(false, 0);
-                    let r = q;
-                    return (q, r);
-                }
-                // self / 0
-                let q = Self::inf(sign);
-                let r = Self::inf(self.signbit());
-                return (q, r);
-            }
-            if rhs.is_zero() {
-                // 0 / rhs
-                let q = Self::from_parts(sign, 0, 0);
-                let r =
-                    Self::from_parts(self.signbit(), rhs.unbiased_exp() - self.unbiased_exp(), 0);
-                return (q, r);
-            }
-
-            // self / rhs
-            todo!()
-        }
-
-        if self.is_nan() || rhs.is_nan() {
-            // ±NaN / rhs
-            // self / ±NaN
-            // ±NaN / ±NaN
-            let q = Self::select_nan(self, rhs);
-            let r = q;
-            return (q, r);
-        }
-
-        if self.is_infinite() {
-            if rhs.is_infinite() {
-                // ±inf / ±inf
-                let q = Self::nan(false, 0);
-                let r = q;
-                return (q, r);
-            }
-            // ±inf / rhs
-            let q = Self::inf(sign);
-            let r = Self::inf(self.signbit());
-            (q, r)
-        } else {
-            // self / ±inf
-            let q = Self::from_parts(sign, Self::ETINY, 0);
-            let r = Self::from_parts(self.signbit(), 0, 0);
-            (q, r)
-        }
-    }
-
-    /// Returns `self % other`.
-    ///
-    /// This is the same as [`Rem`][core::ops::Rem], but can be
-    /// used in a const context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_rem(self, rhs: Self) -> Self {
-        self.quorem(rhs).1
-    }
-}
-
 // Misc.
 impl Bid128 {
     /// TODO
@@ -400,7 +191,7 @@ impl Bid128 {
 
     #[no_mangle]
     const fn test_quantize(self, rhs: Self) -> Self {
-        Self::new(0, rhs.unbiased_exp())
+        Self::from_parts(self.signbit(), rhs.unbiased_exp(), 0)
     }
 
     #[no_mangle]
@@ -434,12 +225,19 @@ mod tests {
             dpd::Dpd128,
         };
 
-        dectest::impl_backend!(Default<Bid128>, Bid128, Dpd128, u128);
+        dectest::impl_backend!(Bid128, Dpd128, u128);
         dectest::dectests!(d128 Default<Bid128>, "dq");
     }
 
     #[test]
     fn test_idk() {
+        println!("BIAS = {}", Bid128::BIAS);
+        println!("ETINY = {}", Bid128::ETINY);
+        println!("EMAX = {}", Bid128::EMAX);
+        println!("LIMIT = {}", Bid128::LIMIT);
+        println!("{}", Bid128::zero().unbiased_exp());
+        println!("{}", Bid128::zero().biased_exp());
+
         let x = Bid128::parse("9.999999999999999999999999999999999E+6144").unwrap();
         let y = x.to_dpd();
         println!("x {:0128b}", x);

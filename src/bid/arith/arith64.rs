@@ -3,6 +3,12 @@ use super::idiv::Divisor64;
 super::impl_basic!(u64, u32, 16);
 
 #[no_mangle]
+pub const fn shl64(x: u64, n: u32) -> (u64, u64) {
+    unsafe { crate::util::assume(n <= 17) }
+    shl(x, n)
+}
+
+#[no_mangle]
 pub const fn shr64(x: u64, n: u32) -> (u64, u64) {
     unsafe { crate::util::assume(n <= 17) }
     shr(x, n)

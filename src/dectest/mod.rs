@@ -7,13 +7,16 @@
 
 mod op;
 mod parse;
-use std::{error, fmt, marker::PhantomData};
+use std::{error, fmt};
 
 use anyhow::{anyhow, Result};
 use op::Op;
 pub use parse::parse;
 
-use super::{conv::ParseError, ctx::RoundingMode};
+use super::{
+    conv::ParseError,
+    ctx::{Ctx, RoundingMode},
+};
 
 macro_rules! failure {
     ($msg:literal $(,)?) => {
@@ -43,7 +46,7 @@ pub struct Test<'a> {
 
 impl Test<'_> {
     /// Runs a test.
-    pub fn run<B: Backend>(&self, backend: &B) -> Result<(), Error> {
+    pub fn run<B: Backend>(&self, backend: &mut B) -> Result<(), Error> {
         macro_rules! unary {
             (@str $input:expr, $f:ident) => {
                 match $input {
@@ -87,6 +90,8 @@ impl Test<'_> {
                 }
             };
         }
+
+        backend.set_rounding_mode(self.rounding);
 
         use Op::*;
         match &self.op {
@@ -240,6 +245,8 @@ pub trait Backend {
     /// Converts the decimal to its bit representation.
     fn to_bits(&self, dec: Self::Dec) -> Self::Bits;
 
+    fn set_rounding_mode(&mut self, mode: RoundingMode);
+
     fn abs(&self, x: Self::Dec) -> Self::Dec;
     fn add(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec;
     fn canonical(&self, x: Self::Dec) -> Self::Dec;
@@ -267,8 +274,8 @@ pub trait Backend {
 }
 
 macro_rules! impl_backend {
-    ($name:ty, $dec:ty, $dpd:ty, $bits:ty) => {
-        impl $crate::dectest::Backend for $name {
+    ($dec:ty, $dpd:ty, $bits:ty) => {
+        impl $crate::dectest::Backend for $crate::dectest::Default<$dec> {
             type Dec = $dec;
             type Bits = $bits;
 
@@ -284,12 +291,16 @@ macro_rules! impl_backend {
                 <$dec>::parse(s)
             }
 
+            fn set_rounding_mode(&mut self, mode: $crate::ctx::RoundingMode) {
+                self.ctx = self.ctx.with_rounding_mode(mode);
+            }
+
             fn abs(&self, x: Self::Dec) -> Self::Dec {
                 x.abs()
             }
 
             fn add(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-                lhs + rhs
+                self.ctx.const_add(lhs, rhs)
             }
 
             fn canonical(&self, x: Self::Dec) -> Self::Dec {
@@ -349,15 +360,15 @@ macro_rules! impl_backend {
             }
 
             fn multiply(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-                lhs * rhs
+                self.ctx.const_mul(lhs, rhs)
             }
 
             fn nextminus(&self, x: Self::Dec) -> Self::Dec {
-                x.next_minus()
+                self.ctx.next_minus(x)
             }
 
             fn nextplus(&self, x: Self::Dec) -> Self::Dec {
-                x.next_plus()
+                self.ctx.next_plus(x)
             }
 
             fn plus(&self, x: Self::Dec) -> Self::Dec {
@@ -365,7 +376,7 @@ macro_rules! impl_backend {
             }
 
             fn quantize(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-                lhs.quantize(rhs)
+                self.ctx.quantize(lhs, rhs)
             }
 
             fn samequantum(&self, lhs: Self::Dec, rhs: Self::Dec) -> bool {
@@ -373,11 +384,11 @@ macro_rules! impl_backend {
             }
 
             fn subtract(&self, lhs: Self::Dec, rhs: Self::Dec) -> Self::Dec {
-                lhs - rhs
+                self.ctx.const_sub(lhs, rhs)
             }
 
             fn tointegralx(&self, x: Self::Dec) -> Self::Dec {
-                x.round_to_integral_exact()
+                self.ctx.round_to_integral_exact(x)
             }
         }
     };
@@ -385,12 +396,14 @@ macro_rules! impl_backend {
 pub(crate) use impl_backend;
 
 /// A default backend for [`Bid128`], [`Bid64`], etc.
-pub struct Default<T>(PhantomData<T>);
+pub struct Default<T> {
+    pub(crate) ctx: Ctx<T>,
+}
 
 impl<T> Default<T> {
     /// Creates a new backend.
     pub const fn new() -> Self {
-        Self(PhantomData)
+        Self { ctx: Ctx::new() }
     }
 }
 
@@ -450,7 +463,7 @@ macro_rules! dectests {
                 );
                 for case in $crate::dectest::parse(CASES).unwrap() {
                     println!("case = {case}");
-                    match case.run(&<$backend>::new()) {
+                    match case.run(&mut <$backend>::new()) {
                         Err($crate::dectest::Error::Unsupported) => continue,
                         v => v.unwrap(),
                     }

@@ -19,7 +19,13 @@ macro_rules! impl_dec {
         $crate::bid::base::impl_dec_to_from_repr!(
             $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith, $dpd,
         );
+        $crate::bid::base::impl_dec_arith_ctx!(
+            $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
+        );
         $crate::bid::base::impl_dec_arith!(
+            $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
+        );
+        $crate::bid::base::impl_dec_misc_ctx!(
             $name, $ucoeff, $icoeff, $biased, $unbiased, $comb, $arith
         );
         $crate::bid::base::impl_dec_misc!(
@@ -172,6 +178,11 @@ macro_rules! impl_dec_internal {
 
             const MAX_SCALEB_N: u32 = 2 * (Self::EMAX as u32 + Self::MAX_PREC);
 
+            const CTX: $crate::Ctx<Self> = $crate::Ctx {
+                rounding: $crate::RoundingMode::ToNearestEven,
+                _dec: core::marker::PhantomData,
+            };
+
             const fn signbit(self) -> bool {
                 (self.0 & Self::SIGN_MASK) != 0
             }
@@ -294,18 +305,25 @@ macro_rules! impl_dec_internal {
                 debug_assert!(self.is_finite());
 
                 const_assert!($name::DIGITS <= <$unbiased>::MAX as u32);
+                const_assert!(<$unbiased>::MAX - $name::DIGITS as $unbiased >= $name::EMAX);
+
                 // `self.digits() as $unbiased` does not wrap
                 // because it is in [1, DIGITS], and `DIGITS <=
                 // <$unbiased>::MAX`.
-                #[allow(clippy::cast_possible_wrap)]
+                #[allow(
+                    clippy::cast_possible_wrap,
+                    reason = "`self.digits()` is in [1, DIGITS] \
+                               and DIGITS < <$unbiased>::MAX"
+                )]
                 let digits = self.digits() as $unbiased;
 
+                // This cannot overflow. See the const
+                // assertions.
                 self.unbiased_exp() + digits - 1
             }
 
-            /// Returns the full coefficient.
-            ///
-            /// NB: This may be out of range.
+            /// Returns the full coefficient without adjusting
+            /// for values > [`MAX_COEFF`][Self::MAX_COEFF].
             const fn raw_coeff(self) -> $ucoeff {
                 // The coefficient only has meaning for finite
                 // numbers.
@@ -327,17 +345,17 @@ macro_rules! impl_dec_internal {
                 debug_assert!(self.is_finite());
 
                 let coeff = self.raw_coeff();
-
-                // See 3.2(c)(2).
                 if coeff > Self::MAX_COEFF as $ucoeff {
+                    // See 3.2(c)(2).
                     0
                 } else {
                     coeff
                 }
             }
 
-            /// Returns the signed coefficient.
-            #[allow(dead_code)] // TODO
+            /// Same as [`coeff`][Self::coeff], but signed per
+            /// [`signbit`][Self::signbit].
+            #[allow(dead_code, reason = "WIP")]
             const fn signed_coeff(self) -> $icoeff {
                 // The coefficient only has meaning for finite
                 // numbers.
@@ -359,13 +377,16 @@ macro_rules! impl_dec_internal {
                 self.0 & Self::PAYLOAD_MASK
             }
 
-            /// TODO: keep this?
+            /// Returns `self` with its exponent set to `exp
+            /// + BIAS`.
             const fn with_unbiased_exp(self, exp: $unbiased) -> Self {
                 // TODO(eric): debug assertions
                 #[allow(clippy::cast_sign_loss, reason = "TODO")]
                 self.with_biased_exp((exp + Self::BIAS) as $biased)
             }
 
+            /// Returns `self` with its exponent set to exactly
+            /// `exp`.
             const fn with_biased_exp(mut self, exp: $biased) -> Self {
                 debug_assert!(exp <= Self::LIMIT);
 
@@ -442,6 +463,8 @@ macro_rules! impl_dec_internal {
                 let mut digits = $arith::digits(coeff);
                 // Figure out how many digits we need to drop.
                 let mut drop = max(
+                    // TODO(eric): Future proof the casts like
+                    // `quantize` does.
                     digits as $unbiased - Self::DIGITS as $unbiased,
                     Self::ETINY - exp,
                 );
@@ -461,6 +484,63 @@ macro_rules! impl_dec_internal {
                         digits -= 1;
                         drop -= 1;
                     }
+
+                    // Round half even: up if d > 5 or the new
+                    // LSD is odd.
+                    if d > 5 || (d == 5 && (coeff % 10) != 0) {
+                        // NB: This is where we'd mark inexact.
+                        coeff += 1;
+                        if coeff > Self::MAX_COEFF as $ucoeff {
+                            // We went from 999... to 100..., so
+                            // chop off a trailing digit.
+                            coeff /= 10;
+                            digits -= 1;
+                            exp += 1;
+                        }
+                    }
+                }
+                (coeff, exp, digits)
+            }
+
+            /// Rounds `(coeff, exp)`.
+            #[allow(dead_code)] // TODO
+            fn round2(mut coeff: $ucoeff, mut exp: $unbiased) -> ($ucoeff, $unbiased, u32) {
+                // This method also works if we don't need to
+                // round, but for performance reasons we always
+                // check first.
+
+                const fn max(x: $unbiased, y: $unbiased) -> $unbiased {
+                    if x < y {
+                        y
+                    } else {
+                        x
+                    }
+                }
+
+                let mut digits = $arith::digits(coeff);
+                // Figure out how many digits we need to drop.
+                let mut drop = max(
+                    digits as $unbiased - Self::DIGITS as $unbiased,
+                    Self::ETINY - exp,
+                );
+                println!("drop = {drop}");
+                if false && drop > 0 {
+                    exp += drop;
+                    let rem;
+                    (coeff, rem) = $arith::shr(coeff, drop as u32);
+                    digits -= drop as u32;
+                    if rem > 0 {}
+                } else if drop > 0 {
+                    exp += drop;
+
+                    let mut d = 0;
+                    while drop > 0 {
+                        d = coeff % 10;
+                        coeff /= 10;
+                        digits -= 1;
+                        drop -= 1;
+                    }
+                    println!("d = {d}");
 
                     // Round half even: up if d > 5 or the new
                     // LSD is odd.
@@ -516,19 +596,20 @@ macro_rules! impl_dec_internal {
                 false
             }
 
-            /// Creates a canonical finite number from the sign,
+            /// Creates a canonical finite number from its sign,
             /// unbiased exponent, an coefficient.
             ///
             /// The result is exact and unrounded.
             pub(crate) const fn from_parts(sign: bool, exp: $unbiased, coeff: $ucoeff) -> Self {
                 debug_assert!(coeff <= Self::MAX_COEFF as $ucoeff);
-                debug_assert!(exp >= Self::EMIN_LESS_PREC);
-                debug_assert!(exp <= Self::EMAX_LESS_PREC);
+                debug_assert!(exp >= Self::ETINY);
+                debug_assert!(exp <= Self::EMAX);
                 debug_assert!(!Self::need_round(coeff, exp));
 
-                // TODO(eric): If `exp` is valid then this cannot
-                // overflow. Maybe make sure of it?
-                #[allow(clippy::cast_sign_loss)]
+                #[allow(
+                    clippy::cast_sign_loss,
+                    reason = "If `exp` is in [ETINY, EMAX] then this is always positive."
+                )]
                 let biased = (exp + Self::BIAS) as $biased;
 
                 // Do we need to encode the coefficient using
@@ -562,7 +643,7 @@ macro_rules! impl_dec_internal {
                     bits |= (biased as $ucoeff) << Self::FORM1_EXP_SHIFT;
                     bits |= coeff & Self::FORM1_COEFF_MASK;
                 }
-                // TODO: $crate::bid::canonical!(bits)
+                // TODO: $crate::bid::canonical!($name, bits)
                 Self(bits)
             }
 
@@ -571,7 +652,7 @@ macro_rules! impl_dec_internal {
                 let mut bits = 0;
                 bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
                 bits |= Self::COMB_TOP4;
-                $crate::bid::canonical!(bits)
+                $crate::bid::canonical!($name, bits)
             }
 
             /// Creates a canonical quiet NaN.
@@ -582,7 +663,7 @@ macro_rules! impl_dec_internal {
                 bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
                 bits |= Self::COMB_TOP5;
                 bits |= payload;
-                $crate::bid::canonical!(bits)
+                $crate::bid::canonical!($name, bits)
             }
 
             /// Creates a canonical signaling NaN.
@@ -593,7 +674,7 @@ macro_rules! impl_dec_internal {
                 bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
                 bits |= Self::COMB_TOP6;
                 bits |= payload;
-                $crate::bid::canonical!(bits)
+                $crate::bid::canonical!($name, bits)
             }
 
             /// Creates a canonical zero.
@@ -695,6 +776,505 @@ macro_rules! impl_dec_consts {
 }
 pub(crate) use impl_dec_consts;
 
+macro_rules! impl_dec_arith_ctx {
+    (
+        $name:ident,
+        $ucoeff:ty,
+        $icoeff:ty,
+        $biased:ty,
+        $unbiased:ty,
+        $comb:ty,
+        $arith:ident $(,)?
+    ) => {
+        impl $crate::Ctx<$name> {
+            /// Returns `lhs + rhs`.
+            ///
+            /// This is the same as [`Add`][core::ops::Add], but
+            /// can be used in a const context.
+            #[must_use = "this returns the result of the operation \
+                            without modifying the original"]
+            pub const fn const_add(&self, lhs: $name, rhs: $name) -> $name {
+                if lhs.is_special() || rhs.is_special() {
+                    if lhs.is_nan() || rhs.is_nan() {
+                        // ±NaN + rhs
+                        // lhs + ±NaN
+                        // ±NaN + ±NaN
+                        return $name::select_nan(lhs, rhs);
+                    }
+
+                    if lhs.is_infinite() {
+                        if rhs.is_infinite() && lhs.signbit() ^ rhs.signbit() {
+                            // +inf + -inf
+                            // -inf + +inf
+                            return $name::nan(false, 0);
+                        }
+                        // ±inf + rhs
+                        // +inf + +inf
+                        // -inf + -inf
+                        return $name::inf(lhs.signbit());
+                    }
+                    debug_assert!(rhs.is_infinite());
+
+                    // lhs + ±inf
+                    return $name::inf(rhs.signbit());
+                };
+
+                // Both are now finite.
+                debug_assert!(lhs.is_finite() && rhs.is_finite());
+
+                if lhs.biased_exp() == rhs.biased_exp() {
+                    // Fast path: exponents are the same, so we don't
+                    // need to rescale either operand.
+                    let exp = lhs.unbiased_exp();
+
+                    let lhs = lhs.signed_coeff();
+                    let rhs = rhs.signed_coeff();
+
+                    let sum = lhs + rhs;
+                    let sign = if sum == 0 {
+                        // The sign of a zero is also zero unless
+                        // both operands are negative or the signs
+                        // differ and the rounding mode is
+                        // `ToNegativeInf`.
+                        lhs < 0 && rhs < 0
+                    } else {
+                        sum < 0
+                    };
+                    return $name::maybe_rounded(sign, exp, sum.unsigned_abs());
+                }
+                debug_assert!(lhs.biased_exp() != rhs.biased_exp());
+
+                // The exponents differ, so one operand needs to be
+                // rescaled.
+
+                let mut lhs = lhs;
+                let mut rhs = rhs;
+                if lhs.biased_exp() < rhs.biased_exp() {
+                    lhs = rhs;
+                    rhs = lhs;
+                }
+                debug_assert!(rhs.biased_exp() < lhs.biased_exp());
+
+                if lhs.is_zero() {
+                    // ±0 + rhs
+                    let mut sum = rhs.canonical();
+                    if lhs.signbit() ^ rhs.signbit() && sum.is_zero() {
+                        // If the signs differ and the result is
+                        // exactly zero, the result is positive
+                        // unless the rounding mode is to
+                        // `ToNegativeInf`.
+                        sum = sum.abs();
+                    }
+                    return sum;
+                }
+                debug_assert!(!lhs.is_zero());
+
+                todo!()
+            }
+
+            /// Returns `lhs / rhs`.
+            ///
+            /// This is the same as [`Div`][core::ops::Div], but
+            /// can be used in a const context.
+            #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+            pub const fn const_div(&self, lhs: $name, rhs: $name) -> $name {
+                self.quorem(lhs, rhs).0
+            }
+
+            /// Returns `lhs * rhs`.
+            ///
+            /// This is the same as [`Mul`][core::ops::Mul], but
+            /// can be used in a const context.
+            #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+            pub const fn const_mul(&self, lhs: $name, rhs: $name) -> $name {
+                if lhs.is_finite() && rhs.is_finite() {
+                    todo!()
+                }
+
+                if lhs.is_nan() || rhs.is_nan() {
+                    // ±NaN + rhs
+                    // lhs + ±NaN
+                    // ±NaN + ±NaN
+                    return $name::select_nan(lhs, rhs);
+                }
+
+                if lhs.is_infinite() {
+                    if rhs.is_infinite() && lhs.signbit() ^ rhs.signbit() {
+                        // +inf + -inf
+                        // -inf + +inf
+                        return $name::nan(false, 0);
+                    }
+                    // ±inf + rhs
+                    // +inf + +inf
+                    // -inf + -inf
+                    return $name::inf(lhs.signbit());
+                }
+                // lhs + ±inf
+                $name::inf(rhs.signbit())
+            }
+
+            /// Returns the quotient `q` and remainder `r` such
+            /// that
+            ///
+            /// ```text
+            /// q = lhs / rhs
+            /// r = lhs % rhs
+            /// ```
+            ///
+            /// This is the same as [`Div`][core::ops::Div] and
+            /// [`Rem`][core::ops::Rem], but can be used in
+            /// a const context.
+            #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+            pub const fn quorem(&self, lhs: $name, rhs: $name) -> ($name, $name) {
+                let sign = lhs.signbit() ^ rhs.signbit();
+
+                if lhs.is_finite() && rhs.is_finite() {
+                    if lhs.is_zero() {
+                        if rhs.is_zero() {
+                            // 0 / 0
+                            let q = $name::nan(false, 0);
+                            let r = q;
+                            return (q, r);
+                        }
+                        // lhs / 0
+                        let q = $name::inf(sign);
+                        let r = $name::inf(lhs.signbit());
+                        return (q, r);
+                    }
+                    if rhs.is_zero() {
+                        // 0 / rhs
+                        let q = $name::from_parts(sign, 0, 0);
+                        let r = $name::from_parts(
+                            lhs.signbit(),
+                            rhs.unbiased_exp() - lhs.unbiased_exp(),
+                            0,
+                        );
+                        return (q, r);
+                    }
+
+                    // lhs / rhs
+                    todo!()
+                }
+
+                if lhs.is_nan() || rhs.is_nan() {
+                    // ±NaN / rhs
+                    // lhs / ±NaN
+                    // ±NaN / ±NaN
+                    let q = $name::select_nan(lhs, rhs);
+                    let r = q;
+                    return (q, r);
+                }
+
+                if lhs.is_infinite() {
+                    if rhs.is_infinite() {
+                        // ±inf / ±inf
+                        let q = $name::nan(false, 0);
+                        let r = q;
+                        return (q, r);
+                    }
+                    // ±inf / rhs
+                    let q = $name::inf(sign);
+                    let r = $name::inf(lhs.signbit());
+                    (q, r)
+                } else {
+                    // lhs / ±inf
+                    let q = $name::from_parts(sign, $name::ETINY, 0);
+                    let r = $name::from_parts(lhs.signbit(), 0, 0);
+                    (q, r)
+                }
+            }
+
+            /// Returns `lhs % rhs`.
+            ///
+            /// This is the same as [`Rem`][core::ops::Rem], but
+            /// can be used in a const context.
+            #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+            pub const fn const_rem(&self, lhs: $name, rhs: $name) -> $name {
+                self.quorem(lhs, rhs).1
+            }
+
+            /// Returns `lhs - rhs`.
+            ///
+            /// This is the same as [`Sub`][core::ops::Sub], but
+            /// can be used in a const context.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn const_sub(&self, lhs: $name, rhs: $name) -> $name {
+                // x - y = x + -y
+                self.const_add(lhs, rhs.const_neg())
+            }
+
+            /// Returns the natural logarithm of `x`.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn ln(&self, _x: $name) -> $name {
+                todo!()
+            }
+
+            /// Returns the base 10 logarithm of `x`.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn log10(&self, _x: $name) -> $name {
+                todo!()
+            }
+
+            /// Returns `(a * b) + c` without any intermediate
+            /// rounding.
+            ///
+            /// This is also known as "fused multiply add."
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn mul_add(&self, _a: $name, _b: $name, _c: $name) -> $name {
+                todo!()
+            }
+
+            /// Returns the largest representable number that is
+            /// smaller than `x`.
+            ///
+            /// If `lhs` is `-Infinity`, it returns `-Infinity`.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn next_minus(&self, x: $name) -> $name {
+                if x.is_nan() {
+                    return $name::select_nan(x, x);
+                }
+                if !x.signbit() && x.is_infinite() {
+                    return $name::MAX;
+                }
+                const TINY: $name = <$name>::new(-1, $name::ETINY);
+                let mut ctx = *self;
+                ctx.rounding = $crate::RoundingMode::ToNegativeInf;
+                let mut next = ctx.const_add(x, TINY);
+                if next.is_zero() {
+                    next = next.copy_neg();
+                }
+                next
+            }
+
+            /// Returns the largest representable number that is
+            /// larger than `x`.
+            ///
+            /// If `lhs` is `+Infinity`, it returns `+Infinity`.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn next_plus(&self, x: $name) -> $name {
+                if x.is_nan() {
+                    return $name::select_nan(x, x);
+                }
+                if x.signbit() && x.is_infinite() {
+                    return $name::MIN;
+                }
+                // TODO(eric): round to +inf, not half-even.
+                const TINY: $name = <$name>::new(1, $name::ETINY);
+                let mut ctx = *self;
+                ctx.rounding = $crate::RoundingMode::ToPositiveInf;
+                let mut next = ctx.const_add(x, TINY);
+                if next.is_zero() {
+                    next = next.copy_neg();
+                }
+                next
+            }
+
+            /// Returns the closest representable number to
+            /// `lhs` that is in the direction of `rhs`.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn next_toward(&self, _lhs: $name, _rhs: $name) -> $name {
+                todo!()
+            }
+
+            /// Returns a number equal (before rounding) to
+            /// `lhs` and with the same sign as `lhs`, but with
+            /// the exponent of `rhs`.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub fn quantize(&self, lhs: $name, rhs: $name) -> $name {
+                if lhs.is_special() || rhs.is_special() {
+                    return if lhs.is_nan() || rhs.is_nan() {
+                        $name::select_nan(lhs, rhs)
+                    } else if lhs.is_infinite() != rhs.is_infinite() {
+                        $name::nan(false, 0)
+                    } else {
+                        $name::inf(lhs.signbit())
+                    };
+                }
+
+                if lhs.is_zero() {
+                    return $name::from_parts(lhs.signbit(), rhs.unbiased_exp(), 0);
+                }
+
+                if cfg!(debug_assertions) {
+                    println!("lhs = {} {}", lhs.biased_exp(), lhs.unbiased_exp());
+                    println!("rhs = {} {}", rhs.biased_exp(), rhs.unbiased_exp());
+                    println!("diff = {}", lhs.biased_exp().abs_diff(rhs.biased_exp()));
+                    println!("coeff = {} ({})", lhs.coeff(), lhs.digits());
+                }
+
+                // It's possible that `diff > u32::MAX` if `K` is
+                // at least 448 bits. We don't plan on supporting
+                // such large decimals in the near future.
+                const_assert!(<$biased>::MAX as u32 as $biased == <$biased>::MAX);
+
+                if lhs.biased_exp() == rhs.biased_exp() {
+                    // Already have the requested exponent.
+                    return lhs.canonical();
+                }
+
+                if lhs.biased_exp() > rhs.biased_exp() {
+                    // The exponent is decreasing, so shift the
+                    // coefficient to the left.
+                    let diff = (lhs.biased_exp() - rhs.biased_exp()) as u32;
+                    // This addition can only overflow if
+                    // DIGITS+LIMIT overflows. DIGITS+LIMIT can
+                    // only overflow if K >= 2^10, at which point
+                    // LIMIT > (2^32)-1.
+                    if lhs.digits() + diff > $name::DIGITS {
+                        // Too many digits.
+                        return $name::nan(false, 0);
+                    }
+                    let (lo, hi) = $arith::shl(lhs.coeff(), diff);
+                    debug_assert!(hi == 0);
+                    return $name::from_parts(lhs.signbit(), rhs.unbiased_exp(), lo);
+                }
+
+                let diff = (rhs.biased_exp() - lhs.biased_exp()) as u32;
+                if lhs.digits() < diff {
+                    // Rounding down to zero.
+                    return $name::from_parts(lhs.signbit(), rhs.unbiased_exp(), 0);
+                }
+
+                // We need to discard `diff` digits from the
+                // coefficient with proper rounding. Interpret
+                // the coefficient as a decimal number, e.g.
+                //     c = iiii.ffff
+                // Add floor(0.5*(10^diff)), then divide by
+                // 10^diff
+                //     q = iiii (quotient)
+                //     r = ffff (remainder)
+                // The quotient is the new coefficient and is
+                // correctly rounded except for the case where
+                // the fractional part was exactly 0.5. To
+                // account for this, decrement the quotient if
+                // the remainder is zero.
+                //
+                // 3.0 + 0.5 = 3.5 => (3, 5) => 3
+                // 3.2 + 0.5 = 3.7 => (3, 7) => 3
+                // 3.5 + 0.5 = 4.0 => (4, 0) => 4
+                // 3.7 + 0.5 = 4.2 => (4, 2) => 4
+                // 4.0 + 0.5 = 4.5 => (4, 5) => 4
+                // 4.2 + 0.5 = 4.7 => (4, 7) => 4
+                // 4.5 + 0.5 = 5.0 => (5, 0) => 4
+                // 4.7 + 0.5 = 5.2 => (5, 2) => 5
+
+                const_assert!(
+                    <$ucoeff>::MAX - $name::MAX_COEFF as $ucoeff >= $arith::point5($name::DIGITS),
+                );
+                // The addition cannot overflow since
+                //     MAX_COEFF + 5*(10^DIGITS) < <$ucoeff>::MAX
+                let coeff = lhs.coeff() + $arith::point5(diff);
+                if cfg!(debug_assertions) {
+                    println!("old coeff = {}", lhs.coeff());
+                    println!("new coeff = {coeff}");
+                    println!("adj = {}", $arith::point5(diff));
+                }
+
+                let (mut q, r) = $arith::shr(coeff, diff);
+                if cfg!(debug_assertions) {
+                    println!("q = {q}");
+                    println!("r = {r}");
+                    println!("exp = {}", rhs.unbiased_exp());
+                }
+
+                if matches!(self.rounding, $crate::RoundingMode::ToNearestEven)
+                    && q % 2 != 0
+                    && r == 0
+                {
+                    q -= 1;
+                }
+
+                $name::from_parts(lhs.signbit(), rhs.unbiased_exp(), q)
+            }
+
+            /// TODO
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            #[cfg(test)]
+            #[allow(dead_code, reason = "Not used by `Bid32`")]
+            pub(crate) fn round_to_integral_exact(&self, x: $name) -> $name {
+                if x.is_nan() {
+                    $name::select_nan(x, x)
+                } else if x.is_infinite() || x.unbiased_exp() >= 0 {
+                    x
+                } else {
+                    // quantize(1e+0)
+                    self.quantize(x, $name::new(1, 0))
+                }
+            }
+
+            /// Returns the square root of `x`.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn sqrt(&self, x: $name) -> $name {
+                if x.is_nan() {
+                    // sqrt(±NaN)
+                    return $name::select_nan(x, x);
+                }
+                let ideal = x.unbiased_exp() / 2;
+                if x.is_zero() {
+                    // sqrt(±0) == 0
+                    return $name::from_parts(x.signbit(), ideal, 0);
+                }
+                if x.signbit() {
+                    // sqrt(-x) == NaN
+                    return $name::nan(false, 0);
+                }
+                if x.is_infinite() {
+                    // sqrt(+inf) == +inf
+                    return $name::inf(false);
+                }
+
+                const APPROX1: $name = $name::new(256, -3);
+                const APPROX2: $name = $name::new(819, -3);
+                const APPROX3: $name = $name::new(819, -4);
+                const APPROX4: $name = $name::new(256, -1);
+                const PT5: $name = $name::new(5, -1);
+
+                let xprec = x.digits();
+                let mut e = x.unbiased_exp() + xprec as $unbiased;
+                let mut f = x.with_unbiased_exp(e);
+
+                let mut approx = if e % 2 == 0 {
+                    // approx := 0.259 + 0.819 * f
+                    APPROX2.mul_add(f, APPROX1)
+                } else {
+                    // f := f/1-
+                    f = f.with_unbiased_exp(f.unbiased_exp() - 1);
+                    // e := e+1
+                    e += 1;
+                    // approx := 0.0819 + 2.59 * f
+                    APPROX4.mul_add(f, APPROX3)
+                };
+
+                let mut p = 3;
+                while p < $name::MAX_PREC {
+                    p = 2 * p - 2;
+                    if p > $name::MAX_PREC {
+                        p = $name::MAX_PREC;
+                    }
+                    // approx := 0.5*(approx + f/approx)
+                    approx = self.const_mul(self.const_add(approx, self.const_div(f, approx)), PT5)
+                }
+                approx.with_unbiased_exp(e / 2)
+            }
+        }
+    };
+}
+pub(crate) use impl_dec_arith_ctx;
+
 macro_rules! impl_dec_arith {
     (
         $name:ident,
@@ -715,8 +1295,71 @@ macro_rules! impl_dec_arith {
                 if self.is_nan() {
                     Self::select_nan(self, self)
                 } else {
-                    self.copy_abs()
+                    self.copy_abs().canonical()
                 }
+            }
+
+            /// Only used by dectest.
+            #[cfg(test)]
+            #[allow(dead_code, reason = "Not used by `Bid32`")]
+            pub(crate) fn compare(self, rhs: Self) -> Self {
+                use Ordering::*;
+                match self.const_partial_cmp(rhs) {
+                    Some(Greater) => Self::new(1, 0), // +1
+                    Some(Less) => Self::new(-1, 0),   // -1
+                    Some(Equal) => Self::zero(),      // +0
+                    None => Self::select_nan(self, rhs),
+                }
+            }
+
+            /// Only used by dectest.
+            #[cfg(test)]
+            #[allow(dead_code, reason = "Not used by `Bid32`")]
+            pub(crate) fn compare_sig(mut self, mut rhs: Self) -> Self {
+                /// The bits set for an sNaN.
+                const SNAN_MASK: $ucoeff = $name::COMB_TOP6;
+                if self.is_nan() {
+                    self = $crate::bid::canonical!($name, self.0 | SNAN_MASK)
+                }
+                if rhs.is_nan() {
+                    rhs = $crate::bid::canonical!($name, rhs.0 | SNAN_MASK)
+                }
+                self.compare(rhs)
+            }
+
+            /// Only used by dectest.
+            #[cfg(test)]
+            #[allow(dead_code, reason = "Not used by `Bid32`")]
+            pub(crate) fn compare_total(self, rhs: Self) -> Self {
+                if cfg!(debug_assertions) {
+                    println!("compare_total({self}, {rhs})");
+                }
+                use Ordering::*;
+                match self.total_cmp(rhs) {
+                    Greater => Self::new(1, 0), // +1
+                    Less => Self::new(-1, 0),   // -1
+                    Equal => Self::zero(),      // +0
+                }
+            }
+
+            /// Returns `self + rhs`.
+            ///
+            /// This is the same as [`Add`][core::ops::Add], but
+            /// can be used in a const context.
+            #[must_use = "this returns the result of the operation \
+                            without modifying the original"]
+            pub const fn const_add(self, rhs: Self) -> Self {
+                Self::CTX.const_add(self, rhs)
+            }
+
+            /// Returns `self / rhs`.
+            ///
+            /// This is the same as [`Div`][core::ops::Div], but
+            /// can be used in a const context.
+            #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+            pub const fn const_div(self, rhs: Self) -> Self {
+                Self::CTX.const_div(self, rhs)
             }
 
             /// Reports whether `self == other`.
@@ -775,6 +1418,37 @@ macro_rules! impl_dec_arith {
                     $arith::const_eq_shifted(self.coeff(), other.coeff(), shift)
                 } else {
                     $arith::const_eq_shifted(other.coeff(), self.coeff(), shift)
+                }
+            }
+
+            /// Returns `self * rhs`.
+            ///
+            /// This is the same as [`Mul`][core::ops::Mul], but
+            /// can be used in a const context.
+            #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+            pub const fn const_mul(self, rhs: Self) -> Self {
+                Self::CTX.const_mul(self, rhs)
+            }
+
+            /// Returns `-self`.
+            ///
+            /// This is equivalent to `0 - self`.
+            ///
+            /// This is the same as [`Neg`][core::ops::Neg], but
+            /// can be used in a const context.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn const_neg(self) -> Self {
+                if self.is_nan() {
+                    // ±0 - ±NaN
+                    Self::nan(self.signbit(), self.payload())
+                } else if self.is_zero() {
+                    // ±0 - ±0
+                    self.copy_abs()
+                } else {
+                    // ±0 - self
+                    self.copy_neg().canonical()
                 }
             }
 
@@ -876,93 +1550,38 @@ macro_rules! impl_dec_arith {
                 }
             }
 
-            /// Only used by dectest.
-            #[cfg(test)]
-            #[allow(dead_code, reason = "Not used by `Bid32`")]
-            pub(crate) fn compare(self, rhs: Self) -> Self {
-                use Ordering::*;
-                match self.const_partial_cmp(rhs) {
-                    Some(Greater) => Self::new(1, 0), // +1
-                    Some(Less) => Self::new(-1, 0),   // -1
-                    Some(Equal) => Self::zero(),      // +0
-                    None => Self::select_nan(self, rhs),
-                }
-            }
-
-            /// Only used by dectest.
-            #[cfg(test)]
-            #[allow(dead_code, reason = "Not used by `Bid32`")]
-            pub(crate) fn compare_sig(mut self, mut rhs: Self) -> Self {
-                /// The bits set for an sNaN.
-                const SNAN_MASK: $ucoeff = $name::COMB_TOP6;
-                if self.is_nan() {
-                    self = $crate::bid::canonical!(self.0 | SNAN_MASK)
-                }
-                if rhs.is_nan() {
-                    rhs = $crate::bid::canonical!(rhs.0 | SNAN_MASK)
-                }
-                self.compare(rhs)
-            }
-
-            /// Only used by dectest.
-            #[cfg(test)]
-            #[allow(dead_code, reason = "Not used by `Bid32`")]
-            pub(crate) fn compare_total(self, rhs: Self) -> Self {
-                if cfg!(debug_assertions) {
-                    println!("compare_total({self}, {rhs})");
-                }
-                use Ordering::*;
-                match self.total_cmp(rhs) {
-                    Greater => Self::new(1, 0), // +1
-                    Less => Self::new(-1, 0),   // -1
-                    Equal => Self::zero(),      // +0
-                }
-            }
-
-            /// Returns `-self`.
+            /// Returns `self % rhs`.
             ///
-            /// This is equivalent to `0 - self`.
-            ///
-            /// This is the same as [`Neg`][core::ops::Neg], but
+            /// This is the same as [`Rem`][core::ops::Rem], but
             /// can be used in a const context.
             #[must_use = "this returns the result of the operation \
-                              without modifying the original"]
-            pub const fn const_neg(self) -> Self {
-                if self.is_nan() {
-                    // ±0 - ±NaN
-                    Self::nan(self.signbit(), self.payload())
-                } else if self.is_zero() {
-                    // ±0 - ±0
-                    self.copy_abs()
-                } else {
-                    // ±0 - self
-                    self.copy_neg().canonical()
-                }
+                      without modifying the original"]
+            pub const fn const_rem(self, rhs: Self) -> Self {
+                Self::CTX.const_rem(self, rhs)
             }
 
-            /// Returns `self - other`.
+            /// Returns `self - rhs`.
             ///
             /// This is the same as [`Sub`][core::ops::Sub], but
             /// can be used in a const context.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn const_sub(self, rhs: Self) -> Self {
-                // x - y = x + -y
-                self.const_add(rhs.const_neg())
+                Self::CTX.const_sub(self, rhs)
             }
 
             /// Returns the natural logarithm of `self`.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn ln(self) -> Self {
-                todo!()
+                Self::CTX.ln(self)
             }
 
             /// Returns the base 10 logarithm of `self`.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn log10(self) -> Self {
-                todo!()
+                Self::CTX.log10(self)
             }
 
             /// Returns the maximum of `self` and `rhs`.
@@ -1135,8 +1754,8 @@ macro_rules! impl_dec_arith {
             /// This is also known as "fused multiply add."
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
-            pub const fn mul_add(self, _a: Self, _b: Self) -> Self {
-                todo!()
+            pub const fn mul_add(self, a: Self, b: Self) -> Self {
+                Self::CTX.mul_add(self, a, b)
             }
 
             /// Returns the largest representable number that is
@@ -1146,19 +1765,7 @@ macro_rules! impl_dec_arith {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn next_minus(self) -> Self {
-                if self.is_nan() {
-                    return Self::select_nan(self, self);
-                }
-                if !self.signbit() && self.is_infinite() {
-                    return Self::MAX;
-                }
-                // TODO(eric): round to -inf, not half-even.
-                const TINY: $name = <$name>::new(-1, $name::ETINY);
-                let mut next = self.const_add(TINY);
-                if next.is_zero() {
-                    next = next.copy_neg();
-                }
-                next
+                Self::CTX.next_minus(self)
             }
 
             /// Returns the largest representable number that is
@@ -1168,27 +1775,15 @@ macro_rules! impl_dec_arith {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn next_plus(self) -> Self {
-                if self.is_nan() {
-                    return Self::select_nan(self, self);
-                }
-                if self.signbit() && self.is_infinite() {
-                    return Self::MIN;
-                }
-                // TODO(eric): round to +inf, not half-even.
-                const TINY: $name = <$name>::new(1, $name::ETINY);
-                let mut next = self.const_add(TINY);
-                if next.is_zero() {
-                    next = next.copy_neg();
-                }
-                next
+                Self::CTX.next_plus(self)
             }
 
             /// Returns the closest representable number to
             /// `self` that is in the direction of `rhs`.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
-            pub const fn next_toward(self, _rhs: Self) -> Self {
-                todo!()
+            pub const fn next_toward(self, rhs: Self) -> Self {
+                Self::CTX.next_toward(self, rhs)
             }
 
             /// Returns a number equal (before rounding) to
@@ -1197,57 +1792,24 @@ macro_rules! impl_dec_arith {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub fn quantize(self, rhs: Self) -> Self {
-                if self.is_special() || rhs.is_special() {
-                    return if self.is_nan() || rhs.is_nan() {
-                        Self::select_nan(self, rhs)
-                    } else if self.is_infinite() && rhs.is_infinite() {
-                        Self::nan(false, 0)
-                    } else {
-                        Self::inf(self.signbit())
-                    };
-                }
+                Self::CTX.quantize(self, rhs)
+            }
 
-                if self.biased_exp() == rhs.biased_exp() {
-                    // Already have the same exponent, so nothing
-                    // to do.
-                    return self.canonical();
-                }
-
-                if self.is_zero() {
-                    return Self::new(0, rhs.unbiased_exp());
-                }
-
-                let diff = self.biased_exp().abs_diff(rhs.biased_exp()) as u32;
-                debug_assert!(diff != 0);
-
-                if cfg!(debug_assertions) {
-                    println!("lhs = {} {}", self.biased_exp(), self.unbiased_exp());
-                    println!("rhs = {} {}", rhs.biased_exp(), rhs.unbiased_exp());
-                    println!("diff = {diff}");
-                    println!("coeff = {} ({})", self.coeff(), self.digits());
-                }
-
-                if diff > Self::DIGITS {
-                    // Too many digits.
-                    return Self::nan(false, 0);
-                }
-                if self.biased_exp() < rhs.biased_exp() && self.digits() < diff {
-                    return Self::new(0, rhs.unbiased_exp());
-                }
-
-                let coeff = if self.biased_exp() > rhs.biased_exp() {
-                    if cfg!(debug_assertions) {
-                        println!("{:?}", $arith::shl(self.coeff(), diff as u32));
-                    }
-                    $arith::shl(self.coeff(), diff).0
-                } else {
-                    $arith::shr(self.coeff(), diff).0
-                };
-                if cfg!(debug_assertions) {
-                    println!("coeff = {coeff}");
-                    println!("exp = {}", rhs.unbiased_exp());
-                }
-                Self::maybe_rounded(self.signbit(), rhs.unbiased_exp(), coeff)
+            /// Returns the quotient `q` and remainder `r` such
+            /// that
+            ///
+            /// ```text
+            /// q = self / rhs
+            /// r = self % rhs
+            /// ```
+            ///
+            /// This is the same as [`Div`][core::ops::Div] and
+            /// [`Rem`][core::ops::Rem], but can be used in
+            /// a const context.
+            #[must_use = "this returns the result of the operation \
+                      without modifying the original"]
+            pub const fn quorem(self, rhs: Self) -> (Self, Self) {
+                Self::CTX.quorem(self, rhs)
             }
 
             /// TODO
@@ -1256,75 +1818,67 @@ macro_rules! impl_dec_arith {
             #[cfg(test)]
             #[allow(dead_code, reason = "Not used by `Bid32`")]
             pub(crate) fn round_to_integral_exact(self) -> Self {
-                if self.is_nan() {
-                    Self::select_nan(self, self)
-                } else if self.is_infinite() || self.unbiased_exp() >= 0 {
-                    self
-                } else {
-                    // quantize(1e+0)
-                    self.quantize(Self::new(1, 0))
-                }
+                Self::CTX.round_to_integral_exact(self)
             }
 
             /// Returns the square root of `self`.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn sqrt(self) -> Self {
-                if self.is_nan() {
-                    // sqrt(±NaN)
-                    return Self::select_nan(self, self);
-                }
-                let ideal = self.unbiased_exp() / 2;
-                if self.is_zero() {
-                    // sqrt(±0) == 0
-                    return Self::from_parts(self.signbit(), ideal, 0);
-                }
-                if self.signbit() {
-                    // sqrt(-x) == NaN
-                    return Self::nan(false, 0);
-                }
-                if self.is_infinite() {
-                    // sqrt(+inf) == +inf
-                    return Self::inf(false);
-                }
-
-                const APPROX1: $name = $name::new(256, -3);
-                const APPROX2: $name = $name::new(819, -3);
-                const APPROX3: $name = $name::new(819, -4);
-                const APPROX4: $name = $name::new(256, -1);
-                const PT5: $name = $name::new(5, -1);
-
-                let xprec = self.digits();
-                let mut e = self.unbiased_exp() + xprec as $unbiased;
-                let mut f = self.with_unbiased_exp(e);
-
-                let mut approx = if e % 2 == 0 {
-                    // approx := 0.259 + 0.819 * f
-                    APPROX2.mul_add(f, APPROX1)
-                } else {
-                    // f := f/1-
-                    f = f.with_unbiased_exp(f.unbiased_exp() - 1);
-                    // e := e+1
-                    e += 1;
-                    // approx := 0.0819 + 2.59 * f
-                    APPROX4.mul_add(f, APPROX3)
-                };
-
-                let mut p = 3;
-                while p < $name::MAX_PREC {
-                    p = 2 * p - 2;
-                    if p > $name::MAX_PREC {
-                        p = $name::MAX_PREC;
-                    }
-                    // approx := 0.5*(approx + f/approx)
-                    approx = f.const_div(approx).const_add(approx).const_mul(PT5);
-                }
-                approx.with_unbiased_exp(e / 2)
+                Self::CTX.sqrt(self)
             }
         }
     };
 }
 pub(crate) use impl_dec_arith;
+
+macro_rules! impl_dec_misc_ctx {
+    (
+        $name:ident,
+        $ucoeff:ty,
+        $icoeff:ty,
+        $biased:ty,
+        $unbiased:ty,
+        $comb:ty,
+        $arith:ident $(,)?
+    ) => {
+        // Misc operations.
+        // <https://speleotrove.com/decimal/damisc.html>
+        impl $crate::Ctx<$name> {
+            /// Returns an integer that is the exponent of the
+            /// magnitude of the most significant digit.
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn logb(&self, _x: $name) -> $name {
+                todo!()
+            }
+
+            /// TODO
+            #[must_use = "this returns the result of the operation \
+                              without modifying the original"]
+            pub const fn scaleb(&self, x: $name, n: u32) -> $name {
+                if x.is_nan() {
+                    return x;
+                }
+                if n > $name::MAX_SCALEB_N {
+                    return $name::NAN;
+                }
+                if x.is_infinite() {
+                    return x;
+                }
+                let mut exp = x.biased_exp() + n as $biased;
+                if exp <= $name::LIMIT {
+                    return x.with_biased_exp(exp);
+                }
+                while exp >= $name::LIMIT {
+                    exp -= 1;
+                }
+                todo!()
+            }
+        }
+    };
+}
+pub(crate) use impl_dec_misc_ctx;
 
 macro_rules! impl_dec_misc {
     (
@@ -1351,9 +1905,9 @@ macro_rules! impl_dec_misc {
                               without modifying the original"]
             pub const fn canonical(self) -> Self {
                 if self.is_nan() {
-                    $crate::bid::canonical!(self.0 & Self::CANONICAL_NAN)
+                    $crate::bid::canonical!($name, self.0 & Self::CANONICAL_NAN)
                 } else if self.is_infinite() {
-                    $crate::bid::canonical!(self.0 & Self::CANONICAL_INF)
+                    $crate::bid::canonical!($name, self.0 & Self::CANONICAL_INF)
                 } else if self.raw_coeff() > Self::MAX_COEFF as $ucoeff {
                     Self::zero()
                 } else {
@@ -1576,7 +2130,7 @@ macro_rules! impl_dec_misc {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub const fn logb(self) -> Self {
-                todo!()
+                Self::CTX.logb(self)
             }
 
             /// TODO

@@ -5,7 +5,9 @@ pub mod arith32;
 pub mod arith64;
 pub mod idiv;
 pub mod uint256;
+mod util;
 
+// TODO(eric): get rid of `$half`?
 macro_rules! impl_basic {
     ($full:ty, $half:ty, $max_shift:literal) => {
         /// Returns the minimum number of bits required to
@@ -112,7 +114,15 @@ macro_rules! impl_basic {
             n as usize
         };
 
-        /// Returns `x * 10^n`.
+        /// Returns `floor(5 * 10^n)`.
+        pub const fn point5(n: u32) -> $full {
+            $crate::bid::arith::util::point5(n) as $full
+        }
+
+        /// Returns `(lo, hi) = x * 10^n`.
+        // TODO(eric): `inline(always)` is needed to avoid bounds
+        // checks. Try and find a better way?
+        #[inline(always)]
         pub const fn shl(x: $full, n: u32) -> ($full, $full) {
             debug_assert!(n <= $max_shift);
 
@@ -125,22 +135,21 @@ macro_rules! impl_basic {
         /// q = x / (10^n)
         /// r = x % (10^n)
         /// ```
+        // TODO(eric): `inline(always)` is needed to avoid bounds
+        // checks. Try and find a better way?
         #[inline(always)]
         pub const fn shr(x: $full, n: u32) -> ($full, $full) {
             debug_assert!(n <= $max_shift);
 
             if n == 0 {
-                // x / 10^0 = x/1 = x
+                // x / (10^0) = x/1 = x
                 return (x, 0);
             }
 
-            // Amazingly, the M1's integer division unit is
-            // better than our reciprocals for word-sized
+            // Amazingly, Apple Silicon's integer division units
+            // are better than our reciprocals for word-sized
             // operands.
-            if false
-                && cfg!(all(target_vendor = "apple", target_arch = "aarch64"))
-                && <$full>::BITS <= 64
-            {
+            if cfg!(all(target_vendor = "apple", target_arch = "aarch64")) && <$full>::BITS <= 64 {
                 let d = pow10(n);
                 return (x / d, x % d);
             }

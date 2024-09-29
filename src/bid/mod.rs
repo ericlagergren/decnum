@@ -24,8 +24,11 @@ pub use bid32::Bid32;
 pub use bid64::Bid64;
 
 macro_rules! canonical {
-    ($bits:expr) => {{
-        let x = Self::from_bits($bits);
+    ($bits:expr) => {
+        $crate::bid::canonical!(Self, $bits)
+    };
+    ($name:ident, $bits:expr) => {{
+        let x = $name::from_bits($bits);
         debug_assert!(x.is_canonical());
         x
     }};

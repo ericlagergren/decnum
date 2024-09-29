@@ -1,5 +1,10 @@
 use crate::util::{unlikely, unpredictable};
 
+// TODO(eric): The API `fn quorem(self, u: T)` requires the
+// compiler to perform a bunch of moves to swap `self` and `u`.
+// We should benchmark to see if it matters and, if so, update
+// the API.
+
 /// A 32-bit divisor.
 #[derive(Copy, Clone, Debug)]
 pub struct Divisor32 {

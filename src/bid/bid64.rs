@@ -80,49 +80,6 @@ impl Bid64 {
     }
 }
 
-// Const arithmetic.
-impl Bid64 {
-    /// Returns `self + other`.
-    ///
-    /// This is the same as [`Add`][core::ops::Add], but can be
-    /// used in a const context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_add(self, _rhs: Self) -> Self {
-        todo!()
-    }
-
-    /// Returns `self / other`.
-    ///
-    /// This is the same as [`Div`][core::ops::Div], but can be
-    /// used in a const context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_div(self, _rhs: Self) -> Self {
-        todo!()
-    }
-
-    /// Returns `self * other`.
-    ///
-    /// This is the same as [`Mul`][core::ops::Mul], but can be
-    /// used in a const context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_mul(self, _rhs: Self) -> Self {
-        todo!()
-    }
-
-    /// Returns `self % other`.
-    ///
-    /// This is the same as [`Rem`][core::ops::Rem], but can be
-    /// used in a const context.
-    #[must_use = "this returns the result of the operation \
-                      without modifying the original"]
-    pub const fn const_rem(self, _rhs: Self) -> Self {
-        todo!()
-    }
-}
-
 macro_rules! from_unsigned_impl {
     ($($ty:ty)*) => ($(
         impl From<$ty> for Bid64 {
@@ -158,7 +115,7 @@ mod tests {
             dpd::Dpd64,
         };
 
-        dectest::impl_backend!(Default<Bid64>, Bid64, Dpd64, u64);
+        dectest::impl_backend!(Bid64, Dpd64, u64);
         dectest::dectests!(d64 Default<Bid64>, "dd");
     }
 
