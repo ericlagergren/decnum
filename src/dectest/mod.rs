@@ -38,7 +38,7 @@ pub struct Test<'a> {
     pub precision: i32,
     pub max_exp: i32,
     pub min_exp: i32,
-    pub rounding: RoundingMode,
+    pub rounding: &'a str,
     pub id: &'a str,
     pub op: Op<'a>,
     pub result: &'a str,
@@ -91,7 +91,19 @@ impl Test<'_> {
             };
         }
 
-        backend.set_rounding_mode(self.rounding);
+        use RoundingMode::*;
+        let mode = match self.rounding {
+            "ceiling" => ToPositiveInf,
+            "down" => ToZero,
+            "floor" => ToNegativeInf,
+            "half_down" => ToNearestTowardZero,
+            "half_even" => ToNearestEven,
+            "half_up" => ToNearestAway,
+            "up" => AwayFromZero,
+            "05up" => return Err(Error::Unsupported),
+            s => return Err(anyhow!("unknown rounding mode: {s}").into()),
+        };
+        backend.set_rounding_mode(mode);
 
         use Op::*;
         match &self.op {

@@ -40,37 +40,38 @@ impl<D> Default for Ctx<D> {
 #[derive(Copy, Clone, Default, Debug, Eq, PartialEq)]
 pub enum RoundingMode {
     /// IEEE 754-2008 roundTiesToEven.
+    ///
+    /// - Under 0.5 rounds down.
+    /// - Over 0.5 rounds up.
+    /// - Exactly 0.5 rounds to the nearest even.
     #[default]
     ToNearestEven,
     /// IEEE 754-2008 roundTiesToAway.
+    ///
+    /// Like [`ToNearestEven`][Self::ToNearestEven], except that
+    /// 0.5 rounds up.
     ToNearestAway,
     /// IEEE 754-2008 roundTowardZero.
+    ///
+    /// AKA truncation.
     ToZero,
     /// No IEEE 754-2008 equivalent.
+    ///
+    /// Rounds up if the discarded digits are non-zero.
     AwayFromZero,
     /// IEEE 754-2008 roundTowardNegative.
+    ///
+    /// AKA floor.
     ToNegativeInf,
     /// IEEE 754-2008 roundTowardPositive.
+    ///
+    /// AKA ceiling.
     ToPositiveInf,
     /// No IEEE 754-2008 equivalent.
+    ///
+    /// Like [`ToNearestAway`][Self::ToNearestAway], except that
+    /// 0.5 rounds down.
     ToNearestTowardZero,
-}
-
-impl RoundingMode {
-    #[cfg(test)]
-    pub(super) fn try_from_str(s: &str) -> Option<Self> {
-        let mode = match s {
-            "ceiling" => Self::ToPositiveInf,
-            "down" => Self::ToZero,
-            "floor" => Self::ToNegativeInf,
-            "half_down" => Self::ToNearestTowardZero,
-            "half_even" => Self::ToNearestEven,
-            "half_up" | "05up" => Self::ToNearestAway,
-            "up" => Self::AwayFromZero,
-            _ => return None,
-        };
-        Some(mode)
-    }
 }
 
 /// An exceptional condition raised during or after an operation.

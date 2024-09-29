@@ -1093,6 +1093,11 @@ macro_rules! impl_dec_arith_ctx {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub fn quantize(&self, lhs: $name, rhs: $name) -> $name {
+                self._quantize(lhs, rhs)
+            }
+
+            #[inline(always)]
+            fn _quantize(&self, lhs: $name, rhs: $name) -> $name {
                 if lhs.is_special() || rhs.is_special() {
                     return if lhs.is_nan() || rhs.is_nan() {
                         $name::select_nan(lhs, rhs)
@@ -1173,27 +1178,46 @@ macro_rules! impl_dec_arith_ctx {
                 const_assert!(
                     <$ucoeff>::MAX - $name::MAX_COEFF as $ucoeff >= $arith::point5($name::DIGITS),
                 );
-                // The addition cannot overflow since
-                //     MAX_COEFF + 5*(10^DIGITS) < <$ucoeff>::MAX
-                let coeff = lhs.coeff() + $arith::point5(diff);
-                if cfg!(debug_assertions) {
-                    println!("old coeff = {}", lhs.coeff());
-                    println!("new coeff = {coeff}");
-                    println!("adj = {}", $arith::point5(diff));
+                let mut coeff = lhs.coeff();
+                if matches!(
+                    self.rounding,
+                    $crate::RoundingMode::ToNearestEven
+                        | $crate::RoundingMode::ToNearestAway
+                        | $crate::RoundingMode::ToNearestTowardZero
+                ) {
+                    // The addition cannot overflow since
+                    //     MAX_COEFF + 5*(10^DIGITS) < <$ucoeff>::MAX
+                    coeff += $arith::point5(diff);
                 }
 
                 let (mut q, r) = $arith::shr(coeff, diff);
-                if cfg!(debug_assertions) {
-                    println!("q = {q}");
-                    println!("r = {r}");
-                    println!("exp = {}", rhs.unbiased_exp());
-                }
-
-                if matches!(self.rounding, $crate::RoundingMode::ToNearestEven)
-                    && q % 2 != 0
-                    && r == 0
-                {
-                    q -= 1;
+                match self.rounding {
+                    $crate::RoundingMode::ToNearestEven => {
+                        if q % 2 != 0 && r == 0 {
+                            q -= 1
+                        }
+                    }
+                    $crate::RoundingMode::ToNearestTowardZero => {
+                        if r == 0 {
+                            q -= 1
+                        }
+                    }
+                    $crate::RoundingMode::AwayFromZero => {
+                        if r != 0 {
+                            q += 1;
+                        }
+                    }
+                    $crate::RoundingMode::ToPositiveInf => {
+                        if r != 0 && !lhs.signbit() {
+                            q += 1;
+                        }
+                    }
+                    $crate::RoundingMode::ToNegativeInf => {
+                        if r != 0 && lhs.signbit() {
+                            q += 1;
+                        }
+                    }
+                    _ => {}
                 }
 
                 $name::from_parts(lhs.signbit(), rhs.unbiased_exp(), q)
@@ -1792,7 +1816,7 @@ macro_rules! impl_dec_arith {
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
             pub fn quantize(self, rhs: Self) -> Self {
-                Self::CTX.quantize(self, rhs)
+                Self::CTX._quantize(self, rhs)
             }
 
             /// Returns the quotient `q` and remainder `r` such

@@ -3,7 +3,6 @@ use std::str::Chars;
 use anyhow::{bail, ensure, Context, Result};
 
 use super::{op::Op, Test};
-use crate::ctx::RoundingMode;
 
 /// Parses test cases.
 pub fn parse(s: &str) -> Result<Vec<Test<'_>>> {
@@ -11,7 +10,7 @@ pub fn parse(s: &str) -> Result<Vec<Test<'_>>> {
     let mut precision = 0;
     let mut max_exp = 0;
     let mut min_exp = 0;
-    let mut rounding: RoundingMode = RoundingMode::default();
+    let mut rounding = "half_even";
     let mut clamp = false;
     let mut tests = Vec::new();
 
@@ -90,7 +89,7 @@ impl<'a> Buf<'a> {
         };
         if let Some(kw) = token.strip_suffix(':') {
             let val = self.require_token("value")?;
-            Directive::parse(kw, val).map(Line::Directive).map(Some)
+            Directive::parse(kw, val).map(|opt| opt.map(Line::Directive))
         } else {
             let id = token;
             let op = self.parse_op()?;
@@ -237,8 +236,13 @@ fn parse_bool(s: &str) -> Result<bool> {
     }
 }
 
-fn parse_rounding(s: &str) -> Result<RoundingMode> {
-    RoundingMode::try_from_str(s).with_context(|| format!("unknown RoundingMode: `{s}`"))
+fn parse_rounding(s: &str) -> Result<&str> {
+    match s {
+        "ceiling" | "down" | "floor" | "half_down" | "half_even" | "half_up" | "up" | "05up" => {
+            Ok(s)
+        }
+        _ => bail!("unknown rounding mode: {s}"),
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -260,12 +264,12 @@ enum Directive<'a> {
     MaxExponent(i32),
     MinExponent(i32),
     Precision(i32),
-    Rounding(RoundingMode),
+    Rounding(&'a str),
     Version(&'a str),
 }
 
 impl<'a> Directive<'a> {
-    fn parse(kw: &str, val: &'a str) -> Result<Self> {
+    fn parse(kw: &str, val: &'a str) -> Result<Option<Self>> {
         use Directive::*;
         let dir = match kw {
             "clamp" => Clamp(parse_bool(val)?),
@@ -277,6 +281,6 @@ impl<'a> Directive<'a> {
             "version" => Version(val),
             _ => bail!("unknown directive: `{kw}`"),
         };
-        Ok(dir)
+        Ok(Some(dir))
     }
 }
