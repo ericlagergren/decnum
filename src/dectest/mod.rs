@@ -376,11 +376,11 @@ macro_rules! impl_backend {
             }
 
             fn nextminus(&self, x: Self::Dec) -> Self::Dec {
-                self.ctx.next_minus(x)
+                self.ctx.next_down(x)
             }
 
             fn nextplus(&self, x: Self::Dec) -> Self::Dec {
-                self.ctx.next_plus(x)
+                self.ctx.next_up(x)
             }
 
             fn plus(&self, x: Self::Dec) -> Self::Dec {
@@ -458,8 +458,8 @@ macro_rules! dectests {
             test_min => "Min",
             test_min_mag => "MinMag",
             test_minus => "Minus",
-            test_next_minus => "NextMinus",
-            test_next_plus => "NextPlus",
+            test_next_down => "NextMinus",
+            test_next_up => "NextPlus",
             test_plus => "Plus",
             test_quantize => "Quantize",
             test_same_quantum => "SameQuantum",

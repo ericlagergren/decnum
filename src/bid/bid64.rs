@@ -72,11 +72,7 @@ impl Bid64 {
     /// [`MIN_COEFF`][Self::MIN_COEFF] or greater than
     /// [`MAX_COEFF`][Self::MAX_COEFF].
     pub const fn from_u64(coeff: u64) -> Self {
-        if !Self::need_round(coeff, 0) {
-            Self::from_parts(false, 0, coeff)
-        } else {
-            Self::rounded(false, 0, coeff)
-        }
+        Self::CTX.maybe_rounded(false, 0, coeff)
     }
 }
 

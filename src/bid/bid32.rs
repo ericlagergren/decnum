@@ -54,11 +54,7 @@ impl Bid32 {
     ///
     /// The result is always exact.
     pub const fn from_u32(coeff: u32) -> Self {
-        if !Self::need_round(coeff, 0) {
-            Self::from_parts(false, 0, coeff)
-        } else {
-            Self::rounded(false, 0, coeff)
-        }
+        Self::CTX.maybe_rounded(false, 0, coeff)
     }
 }
 

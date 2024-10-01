@@ -134,6 +134,7 @@ impl Divisor128 {
     /// q = u / self
     /// r = u % self
     /// ```
+    #[inline(always)]
     pub const fn quorem(self, u: u128) -> (u128, u128) {
         let u1 = (u >> 64) as u64;
         let u0 = u as u64;
@@ -151,6 +152,7 @@ impl Divisor128 {
 }
 
 // NB: `d` must be normalized.
+#[inline(always)]
 const fn div2x1(mut u1: u64, mut u0: u64, d: u64, v: u64, s: u32) -> (u64, u64) {
     if s != 0 {
         u1 = (u1 << s) | (u0 >> (64 - s));
@@ -176,6 +178,7 @@ const fn div2x1(mut u1: u64, mut u0: u64, d: u64, v: u64, s: u32) -> (u64, u64) 
 }
 
 // NB: `d1`, `d0` must be normalized.
+#[inline(always)]
 const fn div3x2(
     mut u2: u64,
     mut u1: u64,

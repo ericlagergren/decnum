@@ -96,11 +96,7 @@ impl Bid128 {
     /// [`MIN_COEFF`][Self::MIN_COEFF] or greater than
     /// [`MAX_COEFF`][Self::MAX_COEFF].
     pub const fn from_u128(coeff: u128) -> Self {
-        if !Self::need_round(coeff, 0) {
-            Self::from_parts(false, 0, coeff)
-        } else {
-            Self::rounded(false, 0, coeff)
-        }
+        Self::CTX.maybe_rounded(false, 0, coeff)
     }
 }
 
@@ -231,19 +227,21 @@ mod tests {
 
     #[test]
     fn test_idk() {
+        let dec = Bid128::parse("1E+6144").unwrap();
+        println!("normal = {}", dec.is_normal());
+
         println!("BIAS = {}", Bid128::BIAS);
         println!("ETINY = {}", Bid128::ETINY);
         println!("EMAX = {}", Bid128::EMAX);
         println!("LIMIT = {}", Bid128::LIMIT);
-        println!("{}", Bid128::zero().unbiased_exp());
-        println!("{}", Bid128::zero().biased_exp());
+        println!("EMAX_LESS_PREC = {}", Bid128::EMAX_LESS_PREC);
+        println!("idk = {}", Bid128::LIMIT as i16 - Bid128::BIAS);
+        println!("EMIN_LESS_PREC = {}", Bid128::EMIN_LESS_PREC);
+        println!("digits = {}", dec.digits());
+        println!("unbiased = {}", dec.unbiased_exp());
+        println!("biased = {}", dec.biased_exp());
+        println!("adjusted = {}", dec.adjusted_exp());
 
-        let x = Bid128::parse("9.999999999999999999999999999999999E+6144").unwrap();
-        let y = x.to_dpd();
-        println!("x {:0128b}", x);
-        println!("y {:0128b}", y);
-        println!("x = {} {:016b} {x:?}", x.biased_exp(), x.biased_exp());
-        println!("y = {} {:016b} {y:?}", y.biased_exp(), y.biased_exp());
         //println!("z = {:?}", y.to_bid());
         assert!(false);
     }

@@ -3,6 +3,13 @@ macro_rules! impl_atod {
         impl $name {
             /// Parses a decimal from a string.
             pub const fn parse(s: &str) -> Result<Self, ParseError> {
+                Self::CTX.parse(s)
+            }
+        }
+
+        impl $crate::Ctx<$name> {
+            /// Parses a decimal from a string.
+            pub const fn parse(&self, s: &str) -> Result<$name, ParseError> {
                 let mut s = s.as_bytes();
                 if s.is_empty() {
                     return Err(ParseError::empty());
@@ -40,7 +47,7 @@ macro_rules! impl_atod {
                     Err(err) => return Err(err),
                 };
 
-                Ok(Self::maybe_rounded(sign, exp, coeff))
+                Ok(self.maybe_rounded(sign, exp, coeff))
             }
 
             /// Parses the coefficient.
@@ -89,7 +96,7 @@ macro_rules! impl_atod {
                 let sd = post.len();
 
                 let mut digits = pre.len() + post.len();
-                if digits > Self::DIGITS as usize {
+                if digits > <$name>::DIGITS as usize {
                     // Uncommon case: too many digits to know
                     // whether `coeff` overflowed. Maybe we have
                     // leading zeros?
@@ -131,7 +138,7 @@ macro_rules! impl_atod {
             /// The coefficient does not have any leading zeros.
             #[cold]
             const fn parse_large_coeff<'a>(pre: &'a [u8], mut post: &'a [u8]) -> ($ucoeff, usize) {
-                debug_assert!(pre.len() + post.len() > Self::DIGITS as usize);
+                debug_assert!(pre.len() + post.len() > <$name>::DIGITS as usize);
                 util::debug_assert_all_digits(pre);
                 util::debug_assert_all_digits(post);
 
@@ -209,12 +216,12 @@ macro_rules! impl_atod {
             /// Parses a special from `s`.
             ///
             /// The sign has already been parsed.
-            const fn parse_special(sign: bool, s: &[u8]) -> Result<Self, ParseError> {
-                if s.len() > "snan".len() + Self::PAYLOAD_DIGITS as usize {
+            const fn parse_special(sign: bool, s: &[u8]) -> Result<$name, ParseError> {
+                if s.len() > "snan".len() + <$name>::PAYLOAD_DIGITS as usize {
                     return Err(ParseError::invalid("unknown special"));
                 }
                 if conv::equal_fold_ascii(s, b"inf") || conv::equal_fold_ascii(s, b"infinity") {
-                    return Ok(Self::inf(sign));
+                    return Ok(<$name>::inf(sign));
                 }
 
                 const fn atoi(mut s: &[u8]) -> Result<$ucoeff, ParseError> {
@@ -240,7 +247,7 @@ macro_rules! impl_atod {
                 if let Some((chunk, rest)) = s.split_first_chunk::<4>() {
                     if conv::equal_fold_ascii(chunk, b"snan") {
                         return match atoi(rest) {
-                            Ok(payload) => Ok(Self::snan(sign, payload)),
+                            Ok(payload) => Ok(<$name>::snan(sign, payload)),
                             Err(err) => Err(err),
                         };
                     }
@@ -249,7 +256,7 @@ macro_rules! impl_atod {
                 if let Some((chunk, rest)) = s.split_first_chunk::<3>() {
                     if conv::equal_fold_ascii(chunk, b"nan") {
                         return match atoi(rest) {
-                            Ok(payload) => Ok(Self::nan(sign, payload)),
+                            Ok(payload) => Ok(<$name>::nan(sign, payload)),
                             Err(err) => Err(err),
                         };
                     }
