@@ -608,6 +608,8 @@ macro_rules! impl_dec_internal {
                     }
                     coeff = q;
                 }
+                // `coeff` is correctly rounded, but `exp` might
+                // be out of range.
 
                 if exp > <$name>::MAX_UNBIASED_EXP {
                     // The exponent is still too large.
@@ -645,7 +647,6 @@ macro_rules! impl_dec_internal {
                     // - exp + digits(coeff) - 1 <= EMAX
                     //            [1, P]
                     // - exp > EMAX - P - 1
-                    //   exp + P - 1 > EMAX
                     //
                     // Therefore, digits(coeff) < P.
                     //
@@ -784,8 +785,8 @@ macro_rules! impl_dec_arith_ctx {
                 debug_assert!(lhs.is_finite() && rhs.is_finite());
 
                 if lhs.biased_exp() == rhs.biased_exp() {
-                    // Fast path: exponents are the same, so we don't
-                    // need to rescale either operand.
+                    // Fast path: exponents are the same, so we
+                    // don't need to rescale either operand.
                     let exp = lhs.unbiased_exp();
 
                     let lhs = lhs.signed_coeff();
@@ -840,7 +841,32 @@ macro_rules! impl_dec_arith_ctx {
                 }
                 debug_assert!(!lhs.is_zero());
 
-                todo!()
+                let shift = (lhs.biased_exp() - rhs.biased_exp()) as u32;
+                let Some((lo, _)) = $arith::try_shl(lhs.coeff(), shift) else {
+                    todo!() // tiny
+                };
+
+                let exp = lhs.unbiased_exp() - rhs.unbiased_exp();
+                let lhs = if lhs.signbit() {
+                    -(lo as $icoeff)
+                } else {
+                    lo as $icoeff
+                };
+                let rhs = rhs.signed_coeff();
+
+                let sum = lhs + rhs;
+                let sign = if sum == 0 {
+                    // The sign of a zero is also zero unless
+                    // both operands are negative or the
+                    // signs differ and the rounding mode is
+                    // `ToNegativeInf`.
+                    (lhs < 0 && rhs < 0)
+                        || ((lhs < 0) != (rhs < 0)
+                            && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
+                } else {
+                    sum < 0
+                };
+                self.maybe_rounded(sign, exp, lo)
             }
 
             /// Returns `lhs / rhs`.

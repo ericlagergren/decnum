@@ -108,9 +108,7 @@ impl Test<'_> {
         use Op::*;
         match &self.op {
             Abs { input } => unary!(input, abs),
-            Add { .. } => {
-                //binary!((lhs, rhs), add)
-            }
+            Add { lhs, rhs } => binary!((lhs, rhs), add),
             Apply { input } => {
                 let got = parse_input(backend, input)?;
                 Self::check(backend, got, self.result)?;
