@@ -94,7 +94,7 @@ macro_rules! impl_dec_internal {
             ///
             /// This is also the largest allowed unbiased
             /// exponent.
-            pub(crate) const EMAX_LESS_PREC: $unbiased =
+            pub(crate) const MAX_UNBIASED_EXP: $unbiased =
                 Self::EMAX - ((Self::MAX_PREC as $unbiased) - 1);
 
             /// The minimum adjusted exponent for a full-length
@@ -102,7 +102,7 @@ macro_rules! impl_dec_internal {
             ///
             /// This is also the smallest allowed unbiased
             /// exponent.
-            pub(crate) const EMIN_LESS_PREC: $unbiased =
+            pub(crate) const MIN_UNBIASED_EXP: $unbiased =
                 Self::EMIN - ((Self::MAX_PREC as $unbiased) - 1);
 
             /// The number of digits of precision.
@@ -411,8 +411,8 @@ macro_rules! impl_dec_internal {
             /// NB: This has false negatives.
             const fn can_skip_rounding(coeff: $ucoeff, exp: $unbiased) -> bool {
                 coeff <= Self::MAX_COEFF as $ucoeff
-                    && exp >= Self::EMIN_LESS_PREC
-                    && exp <= Self::EMAX_LESS_PREC
+                    && exp >= Self::MIN_UNBIASED_EXP
+                    && exp <= Self::MAX_UNBIASED_EXP
             }
 
             /// Does `(coeff, exp)` need to be rounded?
@@ -430,13 +430,14 @@ macro_rules! impl_dec_internal {
             /// The result is exact and unrounded.
             pub(crate) const fn from_parts(sign: bool, exp: $unbiased, coeff: $ucoeff) -> Self {
                 debug_assert!(coeff <= Self::MAX_COEFF as $ucoeff);
-                debug_assert!(exp >= Self::ETINY);
-                debug_assert!(exp <= Self::LIMIT as $unbiased - Self::BIAS);
+                debug_assert!(exp >= Self::MIN_UNBIASED_EXP);
+                debug_assert!(exp <= Self::MAX_UNBIASED_EXP);
                 debug_assert!(!Self::need_round(coeff, exp));
 
                 #[allow(
                     clippy::cast_sign_loss,
-                    reason = "If `exp` is in [ETINY, EMAX] then this is always positive."
+                    reason = "If `exp` is in [MIN_UNBIASED_EXP, \
+                            MAX_UNBIASED_EXP] then this is always positive."
                 )]
                 let biased = (exp + Self::BIAS) as $biased;
 
@@ -550,76 +551,33 @@ macro_rules! impl_dec_internal {
 
             /// Creates a rounded number from its sign, unbiased
             /// exponent, and coefficient.
-            const fn rounded(&self, sign: bool, exp: $unbiased, coeff: $ucoeff) -> $name {
-                let (mut coeff, mut exp, digits) = self.round(sign, coeff, exp);
-
-                let adj = exp + (digits as $unbiased - 1);
-                debug_assert!(exp >= <$name>::EMIN);
-                debug_assert!(adj >= <$name>::EMIN);
-
-                if exp > <$name>::EMAX_LESS_PREC {
-                    if coeff == 0 {
-                        exp = <$name>::EMAX_LESS_PREC; // clamped
-                    } else if adj > <$name>::EMAX {
-                        // TODO(eric): inf vs max depending on
-                        // rounding mode.
-                        // NB: This is where we'd mark overflow.
-                        return <$name>::inf(sign);
-                    } else {
-                        let shift = exp - (<$name>::EMAX - (<$name>::MAX_PREC - 1) as i16);
-                        if shift > 0 {
-                            // `shift > 0`, so there isn't any
-                            // sign to lose.
-                            #[allow(clippy::cast_sign_loss)]
-                            let e = shift as u32;
-                            coeff *= (10 as $ucoeff).pow(e);
-                            exp -= shift;
-                        }
-                    }
-                }
-                debug_assert!(adj <= <$name>::EMAX);
-
-                // adj is in [ETINY, EMAX].
-
-                <$name>::from_parts(sign, exp, coeff)
-            }
-
-            /// Rounds `(coeff, exp)`.
-            const fn round(
-                &self,
-                sign: bool,
-                mut coeff: $ucoeff,
-                mut exp: $unbiased,
-            ) -> ($ucoeff, $unbiased, u32) {
+            const fn rounded(&self, sign: bool, mut exp: $unbiased, mut coeff: $ucoeff) -> $name {
                 // This method also works if we don't need to
-                // round, but for performance reasons we always
-                // check first.
+                // round, but for performance reasons we
+                // always check first.
                 debug_assert!(!<$name>::can_skip_rounding(coeff, exp));
 
-                const fn max(x: $unbiased, y: $unbiased) -> $unbiased {
-                    if x < y {
-                        y
+                const fn max(lhs: $unbiased, rhs: $unbiased) -> $unbiased {
+                    if lhs > rhs {
+                        lhs
                     } else {
-                        x
+                        rhs
                     }
                 }
 
-                let mut digits = $arith::digits(coeff);
-                // Figure out how many digits we need to drop.
+                // Figure out how many digits we need to shift
+                // off.
                 //
                 // TODO(eric): Future proof the casts like
                 // `quantize` does.
-                let mut drop = if digits as $unbiased > <$name>::DIGITS as $unbiased {
-                    digits as $unbiased - <$name>::DIGITS as $unbiased
-                } else if <$name>::ETINY > exp {
-                    <$name>::ETINY - exp
-                } else {
-                    return (coeff, exp, digits);
-                };
-
-                if true {
-                    exp += drop;
-                    let (mut q, r) = $arith::shr(coeff, drop as u32);
+                let digits = $arith::digits(coeff);
+                let shift = max(
+                    digits as $unbiased - <$name>::DIGITS as $unbiased,
+                    <$name>::ETINY - exp,
+                );
+                if shift > 0 {
+                    exp += shift;
+                    let (mut q, r) = $arith::shr(coeff, shift as u32);
                     match self.rounding {
                         $crate::RoundingMode::ToNearestEven => {
                             if q % 2 != 0 && r == 0 {
@@ -648,48 +606,62 @@ macro_rules! impl_dec_internal {
                         }
                         _ => {}
                     }
-                    digits -= drop as u32;
                     coeff = q;
-                } else {
-                    exp += drop;
-
-                    let mut d = 0;
-                    while drop > 0 {
-                        d = coeff % 10;
-                        coeff /= 10;
-                        digits -= 1;
-                        drop -= 1;
-                    }
-
-                    // Round half even: up if d > 5 or the new
-                    // LSD is odd.
-                    if d > 5 || (d == 5 && (coeff % 10) != 0) {
-                        // NB: This is where we'd mark inexact.
-                        coeff += 1;
-                        if coeff > <$name>::MAX_COEFF as $ucoeff {
-                            // We went from 999... to 100..., so
-                            // chop off a trailing digit.
-                            coeff /= 10;
-                            digits -= 1;
-                            exp += 1;
-                        }
-                    }
-
-                    let adj = exp + (digits as $unbiased - 1);
-                    if exp < <$name>::EMIN && adj < <$name>::EMIN {
-                        //// NB: This is where we'd mark underflow.
-                        //if adj < Self::ETINY {
-                        //    // Subnormal < ETINY, so exp = ETINY and
-                        //    // the coeff is rounded.
-                        //    //
-                        //    // TODO(eric): Round to 0, don't hard
-                        //    // code 0.
-                        //    return Self::from_parts(sign, Self::ETINY, 0);
-                        //}
-                        debug_assert!(adj >= <$name>::ETINY);
-                    }
                 }
-                (coeff, exp, digits)
+
+                if exp > <$name>::MAX_UNBIASED_EXP {
+                    // The exponent is still too large.
+
+                    if coeff == 0 {
+                        // Clamped.
+                        return <$name>::from_parts(sign, <$name>::MAX_UNBIASED_EXP, 0);
+                    }
+
+                    let adj = exp + $arith::digits(coeff) as $unbiased - 1;
+                    if adj > <$name>::EMAX {
+                        // Overflow. Either return infinity or
+                        // MAX.
+                        let inf = match self.rounding {
+                            $crate::RoundingMode::ToZero => false,
+                            $crate::RoundingMode::ToPositiveInf => !sign,
+                            $crate::RoundingMode::ToNegativeInf => sign,
+                            _ => true,
+                        };
+                        return if inf {
+                            <$name>::inf(sign)
+                        } else {
+                            <$name>::MAX
+                        };
+                    }
+
+                    // No overflow, so shift the coefficient left
+                    // and decrement the exponent accordingly.
+                    #[allow(clippy::cast_sign_loss, reason = "exp > MAX_UNBIASED_EXP")]
+                    let mut shift = (exp - <$name>::MAX_UNBIASED_EXP) as u32;
+
+                    // We know that
+                    //
+                    // - coeff > 0
+                    // - exp + digits(coeff) - 1 <= EMAX
+                    //            [1, P]
+                    // - exp > EMAX - P - 1
+                    //   exp + P - 1 > EMAX
+                    //
+                    // Therefore, digits(coeff) < P.
+                    //
+                    // Unfortunately, the compiler doesn't
+                    // understand this, so we need to prove to it
+                    // that `shl` doesn't panic.
+                    debug_assert!(shift < <$name>::DIGITS);
+                    debug_assert!(digits < <$name>::DIGITS);
+                    if shift > <$name>::DIGITS {
+                        shift = <$name>::DIGITS;
+                    }
+                    coeff = $arith::shl(coeff, shift).0;
+                    exp -= shift as $unbiased;
+                }
+
+                <$name>::from_parts(sign, exp, coeff)
             }
         }
     };
@@ -709,18 +681,18 @@ macro_rules! impl_dec_consts {
         impl $name {
             /// The largest value that can be represented by this
             /// type.
-            pub const MAX: Self = Self::new(Self::MAX_COEFF, Self::EMAX_LESS_PREC);
+            pub const MAX: Self = Self::new(Self::MAX_COEFF, Self::MAX_UNBIASED_EXP);
 
             /// The smallest value that can be represented by
             /// this type.
-            pub const MIN: Self = Self::new(Self::MIN_COEFF, Self::EMIN_LESS_PREC);
+            pub const MIN: Self = Self::new(Self::MIN_COEFF, Self::MIN_UNBIASED_EXP);
 
             /// The smallest positive value that can be
             /// represented by this type.
             pub const MIN_POSITIVE: Self = Self::new(Self::MAX_COEFF, Self::MIN_EXP);
 
             /// The largest allowed coefficient.
-            pub const MAX_COEFF: $icoeff = (10 as $icoeff).pow(Self::DIGITS) - 1;
+            pub const MAX_COEFF: $icoeff = <$icoeff>::pow(10, Self::DIGITS) - 1;
 
             /// The smallestallowed coefficient.
             pub const MIN_COEFF: $icoeff = -Self::MAX_COEFF;

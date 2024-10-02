@@ -147,15 +147,15 @@ macro_rules! impl_dpd {
 
             pub(crate) const fn from_parts_bin(sign: bool, exp: $unbiased, bin: $ucoeff) -> Self {
                 debug_assert!(bin <= <$bid>::MAX_COEFF as $ucoeff);
-                debug_assert!(exp >= <$bid>::EMIN_LESS_PREC);
-                debug_assert!(exp <= <$bid>::EMAX_LESS_PREC);
+                debug_assert!(exp >= <$bid>::MIN_UNBIASED_EXP);
+                debug_assert!(exp <= <$bid>::MAX_UNBIASED_EXP);
 
                 Self::from_parts_dpd(sign, exp, $pack(bin))
             }
 
             const fn from_parts_dpd(sign: bool, exp: $unbiased, dpd: $ucoeff) -> Self {
-                debug_assert!(exp >= <$bid>::EMIN_LESS_PREC);
-                debug_assert!(exp <= <$bid>::EMAX_LESS_PREC);
+                debug_assert!(exp >= <$bid>::MIN_UNBIASED_EXP);
+                debug_assert!(exp <= <$bid>::MAX_UNBIASED_EXP);
 
                 // TODO(eric): If `exp` is valid then this cannot
                 // overflow. Maybe make sure of it?

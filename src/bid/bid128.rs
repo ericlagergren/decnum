@@ -234,9 +234,9 @@ mod tests {
         println!("ETINY = {}", Bid128::ETINY);
         println!("EMAX = {}", Bid128::EMAX);
         println!("LIMIT = {}", Bid128::LIMIT);
-        println!("EMAX_LESS_PREC = {}", Bid128::EMAX_LESS_PREC);
+        println!("MAX_UNBIASED_EXP = {}", Bid128::MAX_UNBIASED_EXP);
         println!("idk = {}", Bid128::LIMIT as i16 - Bid128::BIAS);
-        println!("EMIN_LESS_PREC = {}", Bid128::EMIN_LESS_PREC);
+        println!("MIN_UNBIASED_EXP = {}", Bid128::MIN_UNBIASED_EXP);
         println!("digits = {}", dec.digits());
         println!("unbiased = {}", dec.unbiased_exp());
         println!("biased = {}", dec.biased_exp());
@@ -249,8 +249,8 @@ mod tests {
     #[test]
     fn test_exp() {
         for mut want in Bid128::MIN_EXP..=Bid128::MAX_EXP {
-            if want > Bid128::EMAX_LESS_PREC {
-                want = Bid128::EMAX_LESS_PREC;
+            if want > Bid128::MAX_UNBIASED_EXP {
+                want = Bid128::MAX_UNBIASED_EXP;
             }
 
             let d = Bid128::new(0, want);
@@ -332,7 +332,7 @@ mod tests {
         let inf = Bid128::inf(false);
         let max = Bid128::MAX;
         let min = Bid128::MIN;
-        let mid = Bid128::new(Bid128::MAX_COEFF / 2, Bid128::EMAX_LESS_PREC / 2);
+        let mid = Bid128::new(Bid128::MAX_COEFF / 2, Bid128::MAX_UNBIASED_EXP / 2);
         let zero = Bid128::zero();
 
         // impl Bid128 {

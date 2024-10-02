@@ -25,6 +25,10 @@
 //! [`rand`]: https://crates.io/crates/rand
 //! [`std`]: https://doc.rust-lang.org/std/
 
+// #![feature(const_mut_refs)] // TODO
+// #![feature(const_format_args)] // TODO
+// #![feature(panic_internals)] // TODO
+
 #![allow(clippy::unusual_byte_groupings)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(not(any(feature = "std", test)), deny(clippy::std_instead_of_core))]

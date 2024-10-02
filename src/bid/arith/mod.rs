@@ -8,6 +8,7 @@ pub mod uint256;
 mod util;
 
 // TODO(eric): get rid of `$half`?
+// TODO(eric): get rid of `$max_shift`?
 macro_rules! impl_basic {
     ($full:ty, $half:ty, $max_shift:literal) => {
         /// Returns the minimum number of bits required to
@@ -55,7 +56,7 @@ macro_rules! impl_basic {
 
         /// Returns the number of decimal digits in `x`.
         ///
-        /// The result will be in [0, $max_shift].
+        /// The result will be in [0, DIGITS].
         pub const fn digits(mut x: $full) -> u32 {
             // Ensure that `x` is non-zero so that `digits(0) ==
             // 1`.
@@ -120,12 +121,11 @@ macro_rules! impl_basic {
         }
 
         /// Returns `(lo, hi) = x * 10^n`.
-        // TODO(eric): `inline(always)` is needed to avoid bounds
-        // checks. Try and find a better way?
-        #[inline(always)]
+        ///
+        /// # Panics
+        ///
+        /// Panics if `n >= NUM_POW10`.
         pub const fn shl(x: $full, n: u32) -> ($full, $full) {
-            debug_assert!(n <= $max_shift);
-
             widening_mul(x, pow10(n))
         }
 
@@ -135,15 +135,14 @@ macro_rules! impl_basic {
         /// q = x / (10^n)
         /// r = x % (10^n)
         /// ```
-        // TODO(eric): `inline(always)` is needed to avoid bounds
-        // checks. Try and find a better way?
-        #[inline(always)]
         pub const fn shr(x: $full, n: u32) -> ($full, $full) {
-            debug_assert!(n <= $max_shift);
-
             if n == 0 {
                 // x / (10^0) = x/1 = x
                 return (x, 0);
+            }
+            if n > NUM_POW10 as u32 {
+                // x / y for y > x = 0
+                return (0, 0);
             }
 
             // Amazingly, Apple Silicon's integer division units
@@ -211,18 +210,18 @@ macro_rules! impl_basic {
 
             #[test]
             fn test_shl() {
-                for n in 0..=$max_shift {
+                for n in 0..NUM_POW10 as u32 {
                     let x = 1;
                     let got = shl(x, n).0;
-                    let want = x * (10 as $full).pow(n);
+                    let want = x * <$full>::pow(10, n);
                     assert_eq!(got, want, "{n}");
                 }
             }
 
             #[test]
             fn test_shr() {
-                for n in 0..=$max_shift {
-                    let x = (10 as $full).pow($max_shift) - 1;
+                for n in 0..NUM_POW10 as u32 {
+                    let x = <$full>::pow(10, NUM_POW10 as u32 - 1) - 1;
                     let got = shr(x, n);
                     let want = {
                         let q = x / (10 as $full).pow(n);
