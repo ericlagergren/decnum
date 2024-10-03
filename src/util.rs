@@ -1,5 +1,20 @@
 use core::{hint, mem::MaybeUninit};
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! debug {
+    () => {
+        if cfg!(debug_assertions) {
+            println!();
+        }
+    };
+    ($($arg:tt)*) => {
+        if cfg!(debug_assertions) {
+            println!($($arg)*);
+        }
+    };
+}
+
 /// Informs the compiler that `cond` is unlikely to occur.
 macro_rules! unlikely {
     ($cond:expr) => {

@@ -199,6 +199,23 @@ impl Bid128 {
     const fn test_from_i64(x: i64) -> Self {
         Self::from_i64(x)
     }
+
+    #[no_mangle]
+    const fn is_zero2(self) -> bool {
+        self.is_zero()
+    }
+
+    #[no_mangle]
+    const fn is_zero3(self) -> bool {
+        self.coeff() == 0
+    }
+
+    #[no_mangle]
+    const fn is_zero4(self) -> bool {
+        self.is_finite()
+            && self.is_form1()
+            && (self.raw_coeff() == 0 || self.raw_coeff() > Self::MAX_COEFF as u128)
+    }
 }
 
 /// TODO

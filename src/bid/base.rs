@@ -664,6 +664,147 @@ macro_rules! impl_dec_internal {
 
                 <$name>::from_parts(sign, exp, coeff)
             }
+
+            /// Calls [`from_parts`][Self::from_parts] or
+            /// [`rounded`][Self::rounded], depending whether or
+            /// not rounding is needed.
+            fn maybe_rounded2(&self, sign: bool, exp: $unbiased, coeff: $ucoeff) -> $name {
+                if <$name>::can_skip_rounding(coeff, exp) {
+                    // Fast path: `coeff` and `exp` are obviously
+                    // valid.
+                    <$name>::from_parts(sign, exp, coeff)
+                } else {
+                    // Slow path: we (probably) have to round.
+                    self.rounded2(sign, exp, coeff)
+                }
+            }
+
+            /// Creates a rounded number from its sign, unbiased
+            /// exponent, and coefficient.
+            fn rounded2(&self, sign: bool, mut exp: $unbiased, mut coeff: $ucoeff) -> $name {
+                // This method also works if we don't need to
+                // round, but for performance reasons we
+                // always check first.
+                debug_assert!(!<$name>::can_skip_rounding(coeff, exp));
+
+                const fn max(lhs: $unbiased, rhs: $unbiased) -> $unbiased {
+                    if lhs > rhs {
+                        lhs
+                    } else {
+                        rhs
+                    }
+                }
+
+                // Figure out how many digits we need to shift
+                // off.
+                //
+                // TODO(eric): Future proof the casts like
+                // `quantize` does.
+                let digits = $arith::digits(coeff);
+                let shift = max(
+                    digits as $unbiased - <$name>::DIGITS as $unbiased,
+                    <$name>::ETINY - exp,
+                );
+                $crate::debug!("shift = {shift}");
+                if shift > 0 {
+                    exp += shift;
+                    let (mut q, r) = $arith::shr(coeff, shift as u32);
+                    $crate::debug!("q = {q}");
+                    $crate::debug!("r = {r}");
+                    match self.rounding {
+                        $crate::RoundingMode::ToNearestEven => {
+                            let half = $arith::point5(shift as u32);
+                            if r > half || (r == half && q % 2 != 0) {
+                                q += 1;
+                            }
+                        }
+                        $crate::RoundingMode::ToNearestAway => {
+                            let half = $arith::point5(shift as u32);
+                            if r >= half {
+                                q += 1;
+                            }
+                        }
+                        $crate::RoundingMode::ToNearestTowardZero => {
+                            let half = $arith::point5(shift as u32);
+                            if r > half {
+                                q += 1;
+                            }
+                        }
+                        $crate::RoundingMode::AwayFromZero => {
+                            if r != 0 {
+                                q += 1;
+                            }
+                        }
+                        $crate::RoundingMode::ToPositiveInf => {
+                            if r != 0 && !sign {
+                                q += 1;
+                            }
+                        }
+                        $crate::RoundingMode::ToNegativeInf => {
+                            if r != 0 && sign {
+                                q += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                    coeff = q;
+                }
+                // `coeff` is correctly rounded, but `exp` might
+                // be out of range.
+
+                if exp > <$name>::MAX_UNBIASED_EXP {
+                    // The exponent is still too large.
+
+                    if coeff == 0 {
+                        // Clamped.
+                        return <$name>::from_parts(sign, <$name>::MAX_UNBIASED_EXP, 0);
+                    }
+
+                    let adj = exp + $arith::digits(coeff) as $unbiased - 1;
+                    if adj > <$name>::EMAX {
+                        // Overflow. Either return infinity or
+                        // MAX.
+                        let inf = match self.rounding {
+                            $crate::RoundingMode::ToZero => false,
+                            $crate::RoundingMode::ToPositiveInf => !sign,
+                            $crate::RoundingMode::ToNegativeInf => sign,
+                            _ => true,
+                        };
+                        return if inf {
+                            <$name>::inf(sign)
+                        } else {
+                            <$name>::MAX
+                        };
+                    }
+
+                    // No overflow, so shift the coefficient left
+                    // and decrement the exponent accordingly.
+                    #[allow(clippy::cast_sign_loss, reason = "exp > MAX_UNBIASED_EXP")]
+                    let mut shift = (exp - <$name>::MAX_UNBIASED_EXP) as u32;
+
+                    // We know that
+                    //
+                    // - coeff > 0
+                    // - exp + digits(coeff) - 1 <= EMAX
+                    //            [1, P]
+                    // - exp > EMAX - P - 1
+                    //
+                    // Therefore, digits(coeff) < P.
+                    //
+                    // Unfortunately, the compiler doesn't
+                    // understand this, so we need to prove to it
+                    // that `shl` doesn't panic.
+                    debug_assert!(shift < <$name>::DIGITS);
+                    debug_assert!(digits < <$name>::DIGITS);
+                    if shift > <$name>::DIGITS {
+                        shift = <$name>::DIGITS;
+                    }
+                    coeff = $arith::shl(coeff, shift).0;
+                    exp -= shift as $unbiased;
+                }
+
+                <$name>::from_parts(sign, exp, coeff)
+            }
         }
     };
 }
@@ -755,7 +896,8 @@ macro_rules! impl_dec_arith_ctx {
             /// can be used in a const context.
             #[must_use = "this returns the result of the operation \
                             without modifying the original"]
-            pub const fn const_add(&self, lhs: $name, rhs: $name) -> $name {
+            pub fn const_add(&self, lhs: $name, rhs: $name) -> $name {
+                use $crate::debug;
                 if lhs.is_special() || rhs.is_special() {
                     if lhs.is_nan() || rhs.is_nan() {
                         // ±NaN + rhs
@@ -789,17 +931,14 @@ macro_rules! impl_dec_arith_ctx {
                     // don't need to rescale either operand.
                     let exp = lhs.unbiased_exp();
 
-                    let lhs = lhs.signed_coeff();
-                    let rhs = rhs.signed_coeff();
-
-                    let sum = lhs + rhs;
+                    let sum = lhs.signed_coeff() + rhs.signed_coeff();
                     let sign = if sum == 0 {
                         // The sign of a zero is also zero unless
                         // both operands are negative or the
                         // signs differ and the rounding mode is
                         // `ToNegativeInf`.
-                        (lhs < 0 && rhs < 0)
-                            || ((lhs < 0) != (rhs < 0)
+                        (lhs.signbit() && rhs.signbit())
+                            || (lhs.signbit() != rhs.signbit()
                                 && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
                     } else {
                         sum < 0
@@ -811,62 +950,81 @@ macro_rules! impl_dec_arith_ctx {
                 // The exponents differ, so one operand needs to
                 // be rescaled.
 
-                let mut lhs = lhs;
-                let mut rhs = rhs;
-                if lhs.biased_exp() < rhs.biased_exp() {
-                    let tmp = lhs;
-                    lhs = rhs;
-                    rhs = tmp;
+                let mut hi = lhs;
+                let mut lo = rhs;
+                if hi.biased_exp() < lo.biased_exp() {
+                    let tmp = hi;
+                    hi = lo;
+                    lo = tmp;
                 }
-                debug_assert!(rhs.biased_exp() < lhs.biased_exp());
+                debug_assert!(lo.biased_exp() < hi.biased_exp());
 
-                if lhs.is_zero() {
-                    // ±0 + rhs
-                    let mut sum = rhs.canonical();
-                    if sum.is_zero() {
-                        // The sign of a zero is also zero unless
-                        // both operands are negative or the
-                        // signs differ and the rounding mode is
-                        // `ToNegativeInf`.
-                        if (lhs.signbit() && rhs.signbit())
-                            || (lhs.signbit() != rhs.signbit()
-                                && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
-                        {
-                            sum = $name(sum.0 | <$name>::SIGN_MASK);
-                        } else {
-                            sum = sum.copy_abs();
-                        }
-                    }
-                    return sum;
+                debug!("hi = {hi:?}");
+                debug!("lo = {lo:?}");
+
+                if hi.is_zero() {
+                    // hi + ±0
+                    //
+                    // The sign of a zero is also zero unless
+                    // both operands are negative or the
+                    // signs differ and the rounding mode is
+                    // `ToNegativeInf`.
+                    let mut lo = lo.canonical();
+                    if lo.is_zero() && (hi.signbit() && lo.signbit())
+                        || (hi.signbit() != lo.signbit()
+                            && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
+                    {
+                        lo.0 |= <$name>::SIGN_MASK;
+                    };
+                    return lo;
                 }
-                debug_assert!(!lhs.is_zero());
+                debug_assert!(!hi.is_zero());
 
-                let shift = (lhs.biased_exp() - rhs.biased_exp()) as u32;
-                let Some((lo, _)) = $arith::try_shl(lhs.coeff(), shift) else {
-                    todo!() // tiny
+                let shift = (hi.biased_exp() - lo.biased_exp()) as u32;
+                debug!("shift = {shift}");
+
+                let (x, y) = {
+                    let mut x = hi.coeff();
+                    let mut y = lo.coeff();
+                    debug!(" x = {x}");
+                    debug!(" y = {y}");
+                    if let Some((lo, _)) = $arith::try_shl(hi.coeff(), shift) {
+                        x = lo;
+                    } else if y != 0 {
+                        y = 1;
+                    };
+                    debug!("x' = {x}");
+                    debug!("y' = {y}");
+
+                    let x = if hi.signbit() {
+                        -(x as $icoeff)
+                    } else {
+                        x as $icoeff
+                    };
+                    let y = if lo.signbit() {
+                        -(y as $icoeff)
+                    } else {
+                        y as $icoeff
+                    };
+                    (x, y)
                 };
 
-                let exp = lhs.unbiased_exp() - rhs.unbiased_exp();
-                let lhs = if lhs.signbit() {
-                    -(lo as $icoeff)
-                } else {
-                    lo as $icoeff
-                };
-                let rhs = rhs.signed_coeff();
-
-                let sum = lhs + rhs;
+                let sum = x + y;
                 let sign = if sum == 0 {
                     // The sign of a zero is also zero unless
                     // both operands are negative or the
                     // signs differ and the rounding mode is
                     // `ToNegativeInf`.
-                    (lhs < 0 && rhs < 0)
-                        || ((lhs < 0) != (rhs < 0)
+                    (lhs.signbit() && rhs.signbit())
+                        || (lhs.signbit() != rhs.signbit()
                             && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
                 } else {
                     sum < 0
                 };
-                self.maybe_rounded(sign, exp, lo)
+                let exp = lo.unbiased_exp();
+                debug!("sum = {sum}");
+                debug!("exp = {exp}");
+                self.maybe_rounded2(sign, exp, sum.unsigned_abs())
             }
 
             /// Returns `lhs / rhs`.
@@ -1000,7 +1158,7 @@ macro_rules! impl_dec_arith_ctx {
             /// can be used in a const context.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
-            pub const fn const_sub(&self, lhs: $name, rhs: $name) -> $name {
+            pub fn const_sub(&self, lhs: $name, rhs: $name) -> $name {
                 // x - y = x + -y
                 self.const_add(lhs, rhs.const_neg())
             }
@@ -1035,7 +1193,7 @@ macro_rules! impl_dec_arith_ctx {
             /// If `lhs` is `-Infinity`, it returns `-Infinity`.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
-            pub const fn next_down(&self, x: $name) -> $name {
+            pub fn next_down(&self, x: $name) -> $name {
                 if x.is_nan() {
                     return <$name>::select_nan(x, x);
                 }
@@ -1058,7 +1216,7 @@ macro_rules! impl_dec_arith_ctx {
             /// If `lhs` is `+Infinity`, it returns `+Infinity`.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
-            pub const fn next_up(&self, x: $name) -> $name {
+            pub fn next_up(&self, x: $name) -> $name {
                 if x.is_nan() {
                     return <$name>::select_nan(x, x);
                 }
@@ -1236,7 +1394,7 @@ macro_rules! impl_dec_arith_ctx {
             /// Returns the square root of `x`.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
-            pub const fn sqrt(&self, x: $name) -> $name {
+            pub fn sqrt(&self, x: $name) -> $name {
                 if x.is_nan() {
                     // sqrt(±NaN)
                     return <$name>::select_nan(x, x);
@@ -1366,7 +1524,7 @@ macro_rules! impl_dec_arith {
             /// can be used in a const context.
             #[must_use = "this returns the result of the operation \
                             without modifying the original"]
-            pub const fn const_add(self, rhs: Self) -> Self {
+            pub fn const_add(self, rhs: Self) -> Self {
                 Self::CTX.const_add(self, rhs)
             }
 
@@ -1463,7 +1621,7 @@ macro_rules! impl_dec_arith {
                     Self::nan(self.signbit(), self.payload())
                 } else if self.is_zero() {
                     // ±0 - ±0
-                    self.copy_abs()
+                    self.copy_abs() // TODO: canonical?
                 } else {
                     // ±0 - self
                     self.copy_neg().canonical()
@@ -1584,7 +1742,7 @@ macro_rules! impl_dec_arith {
             /// can be used in a const context.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
-            pub const fn const_sub(self, rhs: Self) -> Self {
+            pub fn const_sub(self, rhs: Self) -> Self {
                 Self::CTX.const_sub(self, rhs)
             }
 
@@ -1782,7 +1940,7 @@ macro_rules! impl_dec_arith {
             /// If `self` is `-Infinity`, it returns `-Infinity`.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
-            pub const fn next_down(self) -> Self {
+            pub fn next_down(self) -> Self {
                 Self::CTX.next_down(self)
             }
 
@@ -1792,7 +1950,7 @@ macro_rules! impl_dec_arith {
             /// If `self` is `+Infinity`, it returns `+Infinity`.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
-            pub const fn next_up(self) -> Self {
+            pub fn next_up(self) -> Self {
                 Self::CTX.next_up(self)
             }
 
@@ -1842,7 +2000,7 @@ macro_rules! impl_dec_arith {
             /// Returns the square root of `self`.
             #[must_use = "this returns the result of the operation \
                               without modifying the original"]
-            pub const fn sqrt(self) -> Self {
+            pub fn sqrt(self) -> Self {
                 Self::CTX.sqrt(self)
             }
         }
@@ -2131,16 +2289,8 @@ macro_rules! impl_dec_misc {
                     return false;
                 }
                 // We're finite and using form one, so check that
-                // the coefficient is zero. However, we also have
-                // to account for the fact that a coefficient
-                // greater than `MAX_COEFF` is treated as if it
-                // were zero.
-                //
-                // NB: The compiler generates worse code for the
-                // obvious version.
-                const MAX_COEFF: $ucoeff = <$name>::MAX_COEFF as $ucoeff;
-                let diff = (MAX_COEFF as $ucoeff).checked_sub(self.raw_coeff());
-                matches!(diff, None | Some(MAX_COEFF))
+                // the coefficient is zero.
+                self.coeff() == 0
             }
 
             /// Returns an integer that is the exponent of the
