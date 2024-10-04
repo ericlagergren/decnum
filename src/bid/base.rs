@@ -983,16 +983,35 @@ macro_rules! impl_dec_arith_ctx {
                 let shift = (hi.biased_exp() - lo.biased_exp()) as u32;
                 debug!("shift = {shift}");
 
+                if shift >= <$name>::DIGITS {}
+
+                let mut exp = lo.unbiased_exp();
+                debug!("exp = {exp}");
                 let (x, y) = {
                     let mut x = hi.coeff();
                     let mut y = lo.coeff();
                     debug!(" x = {x}");
                     debug!(" y = {y}");
-                    if let Some((lo, _)) = $arith::try_shl(hi.coeff(), shift) {
-                        x = lo;
-                    } else if y != 0 {
-                        y = 1;
-                    };
+                    if shift < <$name>::DIGITS {
+                        x = $arith::shl(hi.coeff(), shift).0;
+                    } else {
+                        // The shift is so large that `rhs`
+                        // doesn't matter.
+                        //
+                        // P=3
+                        //
+                        // 123e5 + 1e0
+                        //
+                        //   12300000
+                        // +        1
+                        // ----------
+                        // = 12300001
+                        // = 123e5
+                        if y != 0 {
+                            y = 1;
+                        }
+                        //exp += (shift - <$name>::DIGITS) as $unbiased;
+                    }
                     debug!("x' = {x}");
                     debug!("y' = {y}");
 
@@ -1021,7 +1040,6 @@ macro_rules! impl_dec_arith_ctx {
                 } else {
                     sum < 0
                 };
-                let exp = lo.unbiased_exp();
                 debug!("sum = {sum}");
                 debug!("exp = {exp}");
                 self.maybe_rounded2(sign, exp, sum.unsigned_abs())

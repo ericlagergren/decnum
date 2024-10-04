@@ -129,16 +129,6 @@ macro_rules! impl_basic {
             widening_mul(x, pow10(n))
         }
 
-        /// Like [`shl`], but returns `None` if `n` is out of
-        /// range.
-        pub const fn try_shl(x: $full, n: u32) -> Option<($full, $full)> {
-            if n < NUM_POW10 as u32 {
-                Some(shl(x, n))
-            } else {
-                None
-            }
-        }
-
         /// Returns the quotient and remainder `(q, r)` such that
         ///
         /// ```text

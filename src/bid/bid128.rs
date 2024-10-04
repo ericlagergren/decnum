@@ -244,20 +244,24 @@ mod tests {
 
     #[test]
     fn test_idk() {
-        let dec = Bid128::parse("1E+6144").unwrap();
-        println!("normal = {}", dec.is_normal());
+        let a = Bid128::parse("70").unwrap();
+        let b = Bid128::parse("10000e+34").unwrap();
+        let c = Bid128::parse("1.000000000000000000000000000000000E+38").unwrap();
+        println!("a = {}", a.unbiased_exp());
+        println!("b = {}", b.unbiased_exp());
+        println!("c = {}", c.unbiased_exp());
 
-        println!("BIAS = {}", Bid128::BIAS);
-        println!("ETINY = {}", Bid128::ETINY);
-        println!("EMAX = {}", Bid128::EMAX);
-        println!("LIMIT = {}", Bid128::LIMIT);
-        println!("MAX_UNBIASED_EXP = {}", Bid128::MAX_UNBIASED_EXP);
-        println!("idk = {}", Bid128::LIMIT as i16 - Bid128::BIAS);
-        println!("MIN_UNBIASED_EXP = {}", Bid128::MIN_UNBIASED_EXP);
-        println!("digits = {}", dec.digits());
-        println!("unbiased = {}", dec.unbiased_exp());
-        println!("biased = {}", dec.biased_exp());
-        println!("adjusted = {}", dec.adjusted_exp());
+        // println!("BIAS = {}", Bid128::BIAS);
+        // println!("ETINY = {}", Bid128::ETINY);
+        // println!("EMAX = {}", Bid128::EMAX);
+        // println!("LIMIT = {}", Bid128::LIMIT);
+        // println!("MAX_UNBIASED_EXP = {}", Bid128::MAX_UNBIASED_EXP);
+        // println!("idk = {}", Bid128::LIMIT as i16 - Bid128::BIAS);
+        // println!("MIN_UNBIASED_EXP = {}", Bid128::MIN_UNBIASED_EXP);
+        // println!("digits = {}", dec.digits());
+        // println!("unbiased = {}", dec.unbiased_exp());
+        // println!("biased = {}", dec.biased_exp());
+        // println!("adjusted = {}", dec.adjusted_exp());
 
         //println!("z = {:?}", y.to_bid());
         assert!(false);
