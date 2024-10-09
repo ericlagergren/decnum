@@ -107,6 +107,9 @@ macro_rules! impl_basic {
             p
         }
 
+        /// TODO
+        pub const MAX_SHIFT: u32 = NUM_POW10 as u32;
+
         const NUM_POW10: usize = {
             let mut n = 0;
             while (10 as $full).checked_pow(n).is_some() {

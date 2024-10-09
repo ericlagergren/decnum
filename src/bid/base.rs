@@ -95,7 +95,7 @@ macro_rules! impl_dec_internal {
             /// This is also the largest allowed unbiased
             /// exponent.
             pub(crate) const MAX_UNBIASED_EXP: $unbiased =
-                Self::EMAX - ((Self::MAX_PREC as $unbiased) - 1);
+                Self::EMAX - ((Self::P as $unbiased) - 1);
 
             /// The minimum adjusted exponent for a full-length
             /// coefficient.
@@ -103,7 +103,7 @@ macro_rules! impl_dec_internal {
             /// This is also the smallest allowed unbiased
             /// exponent.
             pub(crate) const MIN_UNBIASED_EXP: $unbiased =
-                Self::EMIN - ((Self::MAX_PREC as $unbiased) - 1);
+                Self::EMIN - ((Self::P as $unbiased) - 1);
 
             /// The number of digits of precision.
             pub(crate) const MAX_PREC: u32 = Self::P;
@@ -581,11 +581,17 @@ macro_rules! impl_dec_internal {
                     match self.rounding {
                         $crate::RoundingMode::ToNearestEven => {
                             if q % 2 != 0 && r == 0 {
+                                // TODO(eric): I think this is
+                                // wrong because we're not adding
+                                // 0.5 like we do in `quantize`.
                                 q -= 1
                             }
                         }
                         $crate::RoundingMode::ToNearestTowardZero => {
                             if r == 0 {
+                                // TODO(eric): I think this is
+                                // wrong because we're not adding
+                                // 0.5 like we do in `quantize`.
                                 q -= 1
                             }
                         }
@@ -821,22 +827,25 @@ macro_rules! impl_dec_consts {
         $arith:ident $(,)?
     ) => {
         impl $name {
-            /// The largest value that can be represented by this
-            /// type.
+            /// The largest finite value that can be represented
+            /// by this type.
             pub const MAX: Self = Self::new(Self::MAX_COEFF, Self::MAX_UNBIASED_EXP);
 
-            /// The smallest value that can be represented by
-            /// this type.
+            /// The smallest finite value that can be represented
+            /// by this type.
             pub const MIN: Self = Self::new(Self::MIN_COEFF, Self::MIN_UNBIASED_EXP);
 
-            /// The smallest positive value that can be
+            /// The smallest normal positive value that can be
             /// represented by this type.
-            pub const MIN_POSITIVE: Self = Self::new(Self::MAX_COEFF, Self::MIN_EXP);
+            pub const MIN_POSITIVE: Self = Self::new(1, Self::MIN_UNBIASED_EXP);
+
+            /// Canonical zero.
+            pub const ZERO: Self = Self::zero();
 
             /// The largest allowed coefficient.
             pub const MAX_COEFF: $icoeff = <$icoeff>::pow(10, Self::DIGITS) - 1;
 
-            /// The smallestallowed coefficient.
+            /// The smallest allowed coefficient.
             pub const MIN_COEFF: $icoeff = -Self::MAX_COEFF;
 
             /// The maximum allowed exponent.
@@ -922,8 +931,6 @@ macro_rules! impl_dec_arith_ctx {
                     // lhs + ±inf
                     return <$name>::inf(rhs.signbit());
                 };
-
-                // Both are now finite.
                 debug_assert!(lhs.is_finite() && rhs.is_finite());
 
                 if lhs.biased_exp() == rhs.biased_exp() {
@@ -980,69 +987,135 @@ macro_rules! impl_dec_arith_ctx {
                 }
                 debug_assert!(!hi.is_zero());
 
-                let shift = (hi.biased_exp() - lo.biased_exp()) as u32;
+                let mut shift = (hi.biased_exp() - lo.biased_exp()) as u32;
                 debug!("shift = {shift}");
 
-                if shift >= <$name>::DIGITS {}
+                let mut x = hi.coeff();
+                let y = lo.coeff();
 
-                let mut exp = lo.unbiased_exp();
-                debug!("exp = {exp}");
-                let (x, y) = {
-                    let mut x = hi.coeff();
-                    let mut y = lo.coeff();
-                    debug!(" x = {x}");
-                    debug!(" y = {y}");
-                    if shift < <$name>::DIGITS {
-                        x = $arith::shl(hi.coeff(), shift).0;
-                    } else {
-                        // The shift is so large that `rhs`
-                        // doesn't matter.
+                debug!("x = {x}");
+                debug!("y = {y}");
+
+                let xd = $arith::digits(x);
+                let _yd = $arith::digits(y);
+
+                let mut xexp = hi.unbiased_exp();
+
+                if shift >= <$name>::DIGITS {
+                    debug!("shift < DIGITS");
+                    // The shift is so large the coefficients
+                    // might not overlap.
+
+                    let k = <$name>::DIGITS - xd;
+                    debug!("k = {k}");
+
+                    // x *= 10^k
+                    x = $arith::shl(x, k).0;
+                    debug!("x * 10^{k} = {x}");
+                    xexp -= k as $unbiased;
+                    debug!("xexp = {xexp}");
+
+                    shift -= k;
+
+                    if shift > <$name>::DIGITS {
+                        // The coefficients do not overlap, so
+                        // `lo` only matters for rounding. For
+                        // example:
                         //
                         // P=3
+                        // sum = 123e5 + 456e0
+                        //     = (123 * 10^5) + (456 * 10^0)
+                        //     = 12300000 + 456
+                        //     = 12300456
                         //
-                        // 123e5 + 1e0
-                        //
-                        //   12300000
-                        // +        1
-                        // ----------
-                        // = 12300001
-                        // = 123e5
-                        if y != 0 {
-                            y = 1;
+                        // Rounding `sum` to P=3, we get
+                        //    q = 123
+                        //    r = 00456
+                        // This gets rounded to
+                        //  - 123 for `ToNearest*`, `ToZero`, and
+                        //    `ToNegativeInf`
+                        //  - 124 for `AwayFromZero` and
+                        //    `ToPositiveInf`
+
+                        debug!("shift = {shift}");
+                        let mut q = x;
+                        let r = y;
+
+                        match self.rounding {
+                            $crate::RoundingMode::ToNearestEven => {
+                                if (shift as u32) < $arith::MAX_SHIFT {
+                                    let half = $arith::point5(shift as u32);
+                                    debug!("half = {half}");
+                                    if r > half || (r == half && q % 2 != 0) {
+                                        q += 1;
+                                    }
+                                }
+                            }
+                            $crate::RoundingMode::ToNearestTowardZero => {
+                                if (shift as u32) < $arith::MAX_SHIFT {
+                                    let half = $arith::point5(shift as u32);
+                                    debug!("half = {half}");
+                                    if r >= half {
+                                        q += 1;
+                                    }
+                                }
+                            }
+                            $crate::RoundingMode::AwayFromZero => {
+                                if r != 0 {
+                                    q += 1;
+                                }
+                            }
+                            $crate::RoundingMode::ToPositiveInf => {
+                                if r != 0 && !hi.signbit() {
+                                    q += 1;
+                                }
+                            }
+                            $crate::RoundingMode::ToNegativeInf => {
+                                if r != 0 && hi.signbit() {
+                                    q += 1;
+                                }
+                            }
+                            // TODO(eric): Other rounding modes?
+                            _ => {}
                         }
-                        //exp += (shift - <$name>::DIGITS) as $unbiased;
+
+                        return <$name>::from_parts(hi.signbit(), xexp, q);
                     }
-                    debug!("x' = {x}");
-                    debug!("y' = {y}");
+                }
+                debug_assert!(shift <= <$name>::DIGITS);
 
-                    let x = if hi.signbit() {
-                        -(x as $icoeff)
-                    } else {
-                        x as $icoeff
-                    };
-                    let y = if lo.signbit() {
-                        -(y as $icoeff)
-                    } else {
-                        y as $icoeff
-                    };
-                    (x, y)
-                };
-
-                let sum = x + y;
-                let sign = if sum == 0 {
-                    // The sign of a zero is also zero unless
-                    // both operands are negative or the
-                    // signs differ and the rounding mode is
-                    // `ToNegativeInf`.
-                    (lhs.signbit() && rhs.signbit())
-                        || (lhs.signbit() != rhs.signbit()
-                            && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
-                } else {
-                    sum < 0
-                };
-                debug!("sum = {sum}");
+                let exp = lo.unbiased_exp();
                 debug!("exp = {exp}");
-                self.maybe_rounded2(sign, exp, sum.unsigned_abs())
+
+                debug!("x = {x} * 10^{shift}");
+
+                let (xlo, xhi) = $arith::shl(x, shift);
+                if xhi == 0 {
+                    //if let (x, 0) = $arith::shl(x, shift) {
+                    let x = xlo;
+                    debug!("x = {x}");
+                    debug!("y = {y}");
+                    let (sum, mut sign) = if hi.signbit() == lo.signbit() {
+                        (x + y, hi.signbit())
+                    } else if x > y {
+                        (x - y, hi.signbit())
+                    } else {
+                        (y - x, !hi.signbit())
+                    };
+                    if sum == 0 {
+                        // The sign of a zero is also zero unless
+                        // both operands are negative or the
+                        // signs differ and the rounding mode is
+                        // `ToNegativeInf`.
+                        sign = (lhs.signbit() && rhs.signbit())
+                            || (lhs.signbit() != rhs.signbit()
+                                && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
+                    };
+                    debug!("sum = {sum}");
+                    debug!("exp = {exp}");
+                    return self.maybe_rounded2(sign, exp, sum);
+                }
+                todo!()
             }
 
             /// Returns `lhs / rhs`.

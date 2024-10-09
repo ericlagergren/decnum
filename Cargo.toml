@@ -25,7 +25,6 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
 [features]
 default = [
 	"std", # TODO
-	"dpd-tables",
 ]
 
 # Enable `alloc`.
@@ -69,7 +68,7 @@ ruint = { version = "1.12.3" }
 
 dec = { version = "0.4.9" }
 decnumber-sys = { version = "0.1.6" }
-dfp-number-sys = { version = "0.1.0"}
+inteldfp = { path = "/Users/eric/git/inteldfp" }
 
 [patch.crates-io]
 decnumber-sys = { path = "/Users/eric/git/rust-dec/decnumber-sys" }
