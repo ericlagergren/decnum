@@ -1,3 +1,8 @@
+//! Implement division via recpirocal via "Improved division by
+//! invariant integers" by N. Möller and T. Granlund.
+//!
+//! <https://gmplib.org/~tege/division-paper.pdf>
+
 use crate::util::{unlikely, unpredictable};
 
 // TODO(eric): The API `fn quorem(self, u: T)` requires the
@@ -149,6 +154,33 @@ impl Divisor128 {
             (q as u128, r)
         }
     }
+
+    /// Compute the quotient and remainder `(q, r)` where
+    ///
+    /// ```text
+    /// q = (1, u) / self
+    /// r = (1, u) % self
+    /// ```
+    ///
+    /// for `v > 1`.
+    //#[inline(always)]
+    #[no_mangle]
+    pub const fn quorem2(self, u: u128) -> (u128, u128) {
+        let u2 = 1;
+        let u1 = (u >> 64) as u64;
+        let u0 = u as u64;
+
+        if self.d1 == 0 {
+            let (_, r) = div2x1(0, u2, self.d0, self.v, self.s);
+            let (q1, r) = div2x1(r, u1, self.d0, self.v, self.s);
+            let (q0, r) = div2x1(r, u0, self.d0, self.v, self.s);
+            let q = pack64(q1, q0);
+            (q, r as u128)
+        } else {
+            let (q, r) = div3x2(u2, u1, u0, self.d1, self.d0, self.v, self.s);
+            (q as u128, r)
+        }
+    }
 }
 
 // NB: `d` must be normalized.
@@ -189,10 +221,13 @@ const fn div3x2(
     s: u32,
 ) -> (u64, u128) {
     if s != 0 {
-        u2 = u1 >> (64 - s);
+        u2 = (u2 << s) | (u1 >> (64 - s));
         u1 = (u1 << s) | (u0 >> (64 - s));
         u0 <<= s;
     };
+
+    debug_assert!(pack64(d1, d0) >= 1 << (128 - 1));
+    debug_assert!(pack64(u2, u1) < pack64(d1, d0));
 
     let d = pack64(d1, d0);
     let (q1, q0) = umul(v, u2);
@@ -310,16 +345,32 @@ mod tests {
             let u1 = rand_word!();
             let u0 = rand_word!();
             let v1 = rand_word!();
-            let v0 = rand_word!();
+            let mut v0 = rand_word!();
+            if v1 == 0 && v0 == 0 {
+                v0 |= 1;
+            }
 
             let u = pack64(u1, u0);
             let mut v = pack64(v1, v0);
-            if v == 0 {
-                v = 1;
-            }
 
             let got = Divisor128::new(v).quorem(u);
             let want = golden(u, v);
+            assert_eq!(got, want, "#{i}: {u}/{v}");
+
+            if v == 1 {
+                v0 += 1;
+                v += 1;
+            }
+
+            let got = Divisor128::new(v).quorem2(u);
+            #[allow(non_camel_case_types)]
+            type u256 = ruint::Uint<256, 4>;
+            let u = u256::from_limbs([u0, u1, 1, 0]);
+            let v = u256::from_limbs([v0, v1, 0, 0]);
+            let want: (u128, u128) = (
+                (u / v).try_into().unwrap(), // q
+                (u % v).try_into().unwrap(), // r
+            );
             assert_eq!(got, want, "#{i}: {u}/{v}");
         }
     }

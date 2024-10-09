@@ -217,7 +217,7 @@ macro_rules! impl_atod {
             ///
             /// The sign has already been parsed.
             const fn parse_special(sign: bool, s: &[u8]) -> Result<$name, ParseError> {
-                if s.len() > "snan".len() + <$name>::PAYLOAD_DIGITS as usize {
+                if s.len() > "snan".len() + <$name>::MAX_PAYLOAD_DIGITS as usize {
                     return Err(ParseError::invalid("unknown special"));
                 }
                 if conv::equal_fold_ascii(s, b"inf") || conv::equal_fold_ascii(s, b"infinity") {

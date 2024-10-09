@@ -320,8 +320,8 @@ mod tests {
         const BITS: u32 = Bid128::G - 6;
         const MAX: u32 = (1 << BITS) - 1;
         for x in [
-            Bid128::nan(false, Bid128::PAYLOAD_MAX),
-            Bid128::snan(false, Bid128::PAYLOAD_MAX),
+            Bid128::nan(false, Bid128::MAX_PAYLOAD),
+            Bid128::snan(false, Bid128::MAX_PAYLOAD),
         ] {
             let bits = x.to_bits();
             for exp in 0..=MAX {

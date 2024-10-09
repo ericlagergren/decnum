@@ -105,9 +105,6 @@ macro_rules! impl_dec_internal {
             pub(crate) const MIN_UNBIASED_EXP: $unbiased =
                 Self::EMIN - ((Self::P as $unbiased) - 1);
 
-            /// The number of digits of precision.
-            pub(crate) const MAX_PREC: u32 = Self::P;
-
             /// The shift needed to set the sign bit.
             pub(crate) const SIGN_SHIFT: u32 = Self::K - Self::S;
             /// Masks just the sign bit.
@@ -169,9 +166,9 @@ macro_rules! impl_dec_internal {
             /// Masks a NaN's payload.
             pub(crate) const PAYLOAD_MASK: $ucoeff = Self::COEFF_MASK;
             /// The maximum number of digits in a NaN's payload.
-            const PAYLOAD_DIGITS: u32 = $arith::digits(Self::PAYLOAD_MASK);
+            const MAX_PAYLOAD_DIGITS: u32 = $arith::digits(Self::PAYLOAD_MASK);
             /// The maximum allowed NaN payload.
-            const PAYLOAD_MAX: $ucoeff = Self::PAYLOAD_MASK;
+            const MAX_PAYLOAD: $ucoeff = Self::PAYLOAD_MASK;
 
             /// A mask for the bits (all except [G6:Gw+4]) that
             /// are allowed to be set for a canonical NaN.
@@ -182,7 +179,7 @@ macro_rules! impl_dec_internal {
             /// allowed to be set for a canonical infinity.
             const CANONICAL_INF: $ucoeff = Self::SIGN_MASK | Self::COMB_TOP4;
 
-            const MAX_SCALEB_N: u32 = 2 * (Self::EMAX as u32 + Self::MAX_PREC);
+            const MAX_SCALEB_N: u32 = 2 * (Self::EMAX as u32 + Self::P);
 
             const CTX: $crate::Ctx<Self> = $crate::Ctx {
                 rounding: $crate::RoundingMode::ToNearestEven,
@@ -486,7 +483,7 @@ macro_rules! impl_dec_internal {
 
             /// Creates a canonical quiet NaN.
             pub(crate) const fn nan(sign: bool, payload: $ucoeff) -> Self {
-                debug_assert!(payload <= Self::PAYLOAD_MAX);
+                debug_assert!(payload <= Self::MAX_PAYLOAD);
 
                 let mut bits = 0;
                 bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
@@ -497,7 +494,7 @@ macro_rules! impl_dec_internal {
 
             /// Creates a canonical signaling NaN.
             pub(crate) const fn snan(sign: bool, payload: $ucoeff) -> Self {
-                debug_assert!(payload <= Self::PAYLOAD_MAX);
+                debug_assert!(payload <= Self::MAX_PAYLOAD);
 
                 let mut bits = 0;
                 bits |= (sign as $ucoeff) << Self::SIGN_SHIFT;
@@ -855,7 +852,7 @@ macro_rules! impl_dec_consts {
             pub const MIN_EXP: $unbiased = Self::EMIN;
 
             /// The number of base 10 significant digits.
-            pub const DIGITS: u32 = Self::MAX_PREC;
+            pub const DIGITS: u32 = Self::P;
 
             /// Not a Number (NaN).
             ///
@@ -954,8 +951,8 @@ macro_rules! impl_dec_arith_ctx {
                 }
                 debug_assert!(lhs.biased_exp() != rhs.biased_exp());
 
-                // The exponents differ, so one operand needs to
-                // be rescaled.
+                // The exponents differ, so align the
+                // coefficients.
 
                 let mut hi = lhs;
                 let mut lo = rhs;
@@ -996,15 +993,16 @@ macro_rules! impl_dec_arith_ctx {
                 debug!("x = {x}");
                 debug!("y = {y}");
 
-                let xd = $arith::digits(x);
-                let _yd = $arith::digits(y);
-
+                let mut xd = $arith::digits(x);
                 let mut xexp = hi.unbiased_exp();
 
                 if shift >= <$name>::DIGITS {
                     debug!("shift < DIGITS");
                     // The shift is so large the coefficients
                     // might not overlap.
+                    //
+                    // Try to normalize `hi` to get the
+                    // coefficients to overlap.
 
                     let k = <$name>::DIGITS - xd;
                     debug!("k = {k}");
@@ -1016,10 +1014,13 @@ macro_rules! impl_dec_arith_ctx {
                     debug!("xexp = {xexp}");
 
                     shift -= k;
+                    xd += k;
+                    let _ = xd; // TODO
 
                     if shift > <$name>::DIGITS {
-                        // The coefficients do not overlap, so
-                        // `lo` only matters for rounding. For
+                        // Even after normalizing `hi` the
+                        // coefficients do not overlap, so `lo`
+                        // only matters for rounding. For
                         // example:
                         //
                         // P=3
@@ -1084,37 +1085,57 @@ macro_rules! impl_dec_arith_ctx {
                 }
                 debug_assert!(shift <= <$name>::DIGITS);
 
-                let exp = lo.unbiased_exp();
-                debug!("exp = {exp}");
+                // At this point we have either
+                //    sum = x*(10^shift) + y for x >= y
+                //    sum = y - x*(10^shift) for x < y
+                //
+                // `shift` is in [0, DIGITS], so 10^shift will
+                // not overflow. There are still two other ways
+                // this could overflow:
+                //
+                // 1. x*(10^shift)
+                //    if digits(x)+shift > digits(<$ucoeff>::MAX)
+                // 2. x*(10^shift) + y
+                //    if bitlen(x)+bitlen(y) >= <$ucoeff>::BITS
 
                 debug!("x = {x} * 10^{shift}");
 
-                let (xlo, xhi) = $arith::shl(x, shift);
+                let (x, xhi) = $arith::shl(x, shift);
                 if xhi == 0 {
-                    //if let (x, 0) = $arith::shl(x, shift) {
-                    let x = xlo;
+                    // x*(10^shift) did not overflow, but adding
+                    // `y` still might.
                     debug!("x = {x}");
                     debug!("y = {y}");
-                    let (sum, mut sign) = if hi.signbit() == lo.signbit() {
-                        (x + y, hi.signbit())
-                    } else if x > y {
-                        (x - y, hi.signbit())
+                    let (sum, carry) = if hi.signbit() == lo.signbit() {
+                        x.overflowing_add(y)
                     } else {
-                        (y - x, !hi.signbit())
+                        (x.abs_diff(y), false)
                     };
-                    if sum == 0 {
-                        // The sign of a zero is also zero unless
-                        // both operands are negative or the
-                        // signs differ and the rounding mode is
-                        // `ToNegativeInf`.
-                        sign = (lhs.signbit() && rhs.signbit())
-                            || (lhs.signbit() != rhs.signbit()
-                                && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
-                    };
-                    debug!("sum = {sum}");
-                    debug!("exp = {exp}");
-                    return self.maybe_rounded2(sign, exp, sum);
+                    if !carry {
+                        let sign = if sum == 0 {
+                            // The sign of a zero is also zero unless
+                            // both operands are negative or the
+                            // signs differ and the rounding mode is
+                            // `ToNegativeInf`.
+                            (hi.signbit() && lo.signbit())
+                                || (hi.signbit() != lo.signbit()
+                                    && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
+                        } else if x > y {
+                            hi.signbit()
+                        } else {
+                            lo.signbit()
+                        };
+                        let exp = lo.unbiased_exp();
+                        debug!("sum = {sum}");
+                        debug!("exp = {exp}");
+                        return self.maybe_rounded2(sign, exp, sum);
+                    }
                 }
+
+                // P=5
+                //
+                // 123*(10^5) =
+
                 todo!()
             }
 
@@ -1527,10 +1548,10 @@ macro_rules! impl_dec_arith_ctx {
                 };
 
                 let mut p = 3;
-                while p < <$name>::MAX_PREC {
+                while p < <$name>::DIGITS {
                     p = 2 * p - 2;
-                    if p > <$name>::MAX_PREC {
-                        p = <$name>::MAX_PREC;
+                    if p > <$name>::DIGITS {
+                        p = <$name>::DIGITS;
                     }
                     // approx := 0.5*(approx + f/approx)
                     approx = self.const_mul(self.const_add(approx, self.const_div(f, approx)), PT5)
