@@ -122,7 +122,7 @@ impl Divisor128 {
             }
             p = p.wrapping_sub(d1);
         }
-        let (t1, t0) = umul(v, d0);
+        let (t1, t0) = umul64(v, d0);
         p = p.wrapping_add(t1);
         if p < t1 {
             v -= 1;
@@ -165,8 +165,7 @@ impl Divisor128 {
     /// for `v > 1`.
     //#[inline(always)]
     #[no_mangle]
-    pub const fn quorem2(self, u: u128) -> (u128, u128) {
-        let u2 = 1;
+    pub const fn quorem2(self, u2: u64, u: u128) -> (u128, u128) {
         let u1 = (u >> 64) as u64;
         let u0 = u as u64;
 
@@ -181,6 +180,60 @@ impl Divisor128 {
             (q as u128, r)
         }
     }
+
+    /// Compute the quotient and remainder `(q, r)` where
+    ///
+    /// ```text
+    /// q = u / self
+    /// r = u % self
+    /// ```
+    //#[inline(always)]
+    #[no_mangle]
+    pub const fn quorem3(self, _u1: u128, _u0: u128) -> (u128, u128) {
+        // NB: `d` must be normalized.
+        #[inline(always)]
+        #[allow(dead_code)]
+        const fn div2x1(mut u1: u64, mut u0: u64, d: u64, v: u64, s: u32) -> (u64, u64) {
+            if s != 0 {
+                u1 = (u1 << s) | (u0 >> (64 - s));
+                u0 <<= s;
+            }
+
+            debug_assert!(d >= 1 << (64 - 1));
+            debug_assert!(u1 < d);
+
+            let (q1, q0) = umul64(v, u1);
+            let (mut q1, q0) = uadd64(q1, q0, u1, u0);
+            q1 = q1.wrapping_add(1);
+            let mut r = u0.wrapping_sub(q1.wrapping_mul(d));
+            if unpredictable!(r > q0) {
+                q1 = q1.wrapping_sub(1);
+                r = r.wrapping_add(d);
+            }
+            if unlikely!(r >= d) {
+                q1 += 1;
+                r -= d;
+            }
+            (q1, r >> s)
+        }
+
+        todo!()
+
+        // let u1 = (u >> 64) as u64;
+        // let u0 = u as u64;
+
+        // if self.d1 == 0 {
+        //     let (_, r) = div2x1(0, u2, self.d0, self.v, self.s);
+        //     let (q1, r) = div2x1(r, u1, self.d0, self.v, self.s);
+        //     let (q0, r) = div2x1(r, u0, self.d0, self.v, self.s);
+        //     let q = pack64(q1, q0);
+        //     (q, r as u128)
+        // } else {
+        //     let d = ((self.d1 as u128) << 64) | (self.d0 as u128);
+        //     let (q, r) = div4x2(u1, u0, d, self.v, self.s);
+        //     (q as u128, r)
+        // }
+    }
 }
 
 // NB: `d` must be normalized.
@@ -194,8 +247,8 @@ const fn div2x1(mut u1: u64, mut u0: u64, d: u64, v: u64, s: u32) -> (u64, u64) 
     debug_assert!(d >= 1 << (64 - 1));
     debug_assert!(u1 < d);
 
-    let (q1, q0) = umul(v, u1);
-    let (mut q1, q0) = uadd(q1, q0, u1, u0);
+    let (q1, q0) = umul64(v, u1);
+    let (mut q1, q0) = uadd64(q1, q0, u1, u0);
     q1 = q1.wrapping_add(1);
     let mut r = u0.wrapping_sub(q1.wrapping_mul(d));
     if unpredictable!(r > q0) {
@@ -230,11 +283,11 @@ const fn div3x2(
     debug_assert!(pack64(u2, u1) < pack64(d1, d0));
 
     let d = pack64(d1, d0);
-    let (q1, q0) = umul(v, u2);
-    let (mut q1, q0) = uadd(q1, q0, u2, u1);
+    let (q1, q0) = umul64(v, u2);
+    let (mut q1, q0) = uadd64(q1, q0, u2, u1);
     let r1 = u1.wrapping_sub(q1.wrapping_mul(d1));
     let t = {
-        let (t1, t0) = umul(d0, q1);
+        let (t1, t0) = umul64(d0, q1);
         pack64(t1, t0)
     };
     let mut r = pack64(r1, u0).wrapping_sub(t).wrapping_sub(d);
@@ -250,8 +303,35 @@ const fn div3x2(
     (q1, r >> s)
 }
 
+// NB: `d` must be normalized.
+//#[inline(always)]
+#[no_mangle]
+const fn div4x2(mut u1: u128, mut u0: u128, d: u128, v: u128, s: u32) -> (u128, u128) {
+    if s != 0 {
+        u1 = (u1 << s) | (u0 >> (128 - s));
+        u0 <<= s;
+    }
+
+    debug_assert!(d >= 1 << (128 - 1));
+    debug_assert!(u1 < d);
+
+    let (q1, q0) = umul128(v, u1);
+    let (mut q1, q0) = uadd128(q1, q0, u1, u0);
+    q1 = q1.wrapping_add(1);
+    let mut r = u0.wrapping_sub(q1.wrapping_mul(d));
+    if unpredictable!(r > q0) {
+        q1 = q1.wrapping_sub(1);
+        r = r.wrapping_add(d);
+    }
+    if unlikely!(r >= d) {
+        q1 += 1;
+        r -= d;
+    }
+    (q1, r >> s)
+}
+
 /// Returns `x*y = (hi, lo)`.
-const fn umul(x: u64, y: u64) -> (u64, u64) {
+const fn umul64(x: u64, y: u64) -> (u64, u64) {
     // SAFETY: The result is contained in the larger
     // type.
     let wide = unsafe { (x as u128).unchecked_mul(y as u128) };
@@ -260,14 +340,48 @@ const fn umul(x: u64, y: u64) -> (u64, u64) {
     (hi, lo)
 }
 
-/// Returns `x+y = (hi, lo)`
-const fn uadd(x1: u64, x0: u64, y1: u64, y0: u64) -> (u64, u64) {
-    let x = ((x1 as u128) << 64) | (x0 as u128);
-    let y = ((y1 as u128) << 64) | (y0 as u128);
-    let sum = x + y;
-    let hi = (sum >> 64) as u64;
-    let lo = sum as u64;
+// Returns `x*y = (hi, lo)`.
+const fn umul128(x: u128, y: u128) -> (u128, u128) {
+    let x1 = (x >> 64) as u64;
+    let x0 = x as u64;
+    let y1 = (y >> 64) as u64;
+    let y0 = y as u64;
+
+    /// Returns `lhs * rhs + carry`.
+    const fn carrying_mul(lhs: u64, rhs: u64, carry: u64) -> (u64, u64) {
+        // SAFETY: The result is contained in the larger type.
+        let wide = unsafe {
+            (lhs as u128)
+                .unchecked_mul(rhs as u128)
+                .unchecked_add(carry as u128)
+        };
+        (wide as u64, (wide >> 64) as u64)
+    }
+
+    let (p1, p2) = carrying_mul(x0, y0, 0);
+    let (p2, p31) = carrying_mul(x0, y1, p2);
+    let (p2, p32) = carrying_mul(x1, y0, p2);
+    let (p3, p4o) = p31.overflowing_add(p32);
+    let (p3, p4) = carrying_mul(x1, y1, p3);
+    let p4 = p4.wrapping_add(p4o as u64);
+
+    let hi = p3 as u128 | (p4 as u128) << 64; // hi
+    let lo = p1 as u128 | (p2 as u128) << 64; // lo
     (hi, lo)
+}
+
+/// Returns `x+y = (hi, lo)`, wrapping on overflow.
+const fn uadd64(x1: u64, x0: u64, y1: u64, y0: u64) -> (u64, u64) {
+    let (z0, c) = x0.overflowing_add(y0);
+    let z1 = x1.wrapping_add(y1).wrapping_add(c as u64);
+    (z1, z0)
+}
+
+/// Returns `x+y = (hi, lo)`, wrapping on overflow.
+const fn uadd128(x1: u128, x0: u128, y1: u128, y0: u128) -> (u128, u128) {
+    let (z0, c) = x0.overflowing_add(y0);
+    let z1 = x1.wrapping_add(y1).wrapping_add(c as u128);
+    (z1, z0)
 }
 
 const fn pack64(hi: u64, lo: u64) -> u128 {
@@ -357,15 +471,16 @@ mod tests {
             let want = golden(u, v);
             assert_eq!(got, want, "#{i}: {u}/{v}");
 
+            let u2 = rand_word!();
             if v == 1 {
                 v0 += 1;
                 v += 1;
             }
 
-            let got = Divisor128::new(v).quorem2(u);
+            let got = Divisor128::new(v).quorem2(u2, u);
             #[allow(non_camel_case_types)]
             type u256 = ruint::Uint<256, 4>;
-            let u = u256::from_limbs([u0, u1, 1, 0]);
+            let u = u256::from_limbs([u0, u1, u2, 0]);
             let v = u256::from_limbs([v0, v1, 0, 0]);
             let want: (u128, u128) = (
                 (u / v).try_into().unwrap(), // q

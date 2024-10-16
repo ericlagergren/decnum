@@ -56,7 +56,7 @@ macro_rules! impl_basic {
 
         /// Returns the number of decimal digits in `x`.
         ///
-        /// The result will be in [0, DIGITS].
+        /// The result will be in `ceil(log10(2^<$full>::BITS))`.
         pub const fn digits(mut x: $full) -> u32 {
             // Ensure that `x` is non-zero so that `digits(0) ==
             // 1`.
@@ -78,26 +78,26 @@ macro_rules! impl_basic {
         }
 
         /// Returns 10^n.
-        const fn pow10(n: u32) -> $full {
+        pub const fn pow10(n: u32) -> $full {
             #[allow(
                 clippy::indexing_slicing,
                 reason = "This is a const initializer, so panicking is okay."
             )]
-            const POW10: [$full; NUM_POW10] = {
-                let mut tab = [0; NUM_POW10];
+            const TABLE: [$full; NUM_POW10] = {
+                let mut table = [0; NUM_POW10];
                 let mut i = 0;
-                while i < tab.len() {
-                    tab[i] = <$full>::pow(10, i as u32);
+                while i < table.len() {
+                    table[i] = <$full>::pow(10, i as u32);
                     i += 1;
                 }
-                tab
+                table
             };
 
             #[allow(
                 clippy::indexing_slicing,
                 reason = "Calling code always checks that `n` is in range"
             )]
-            let p = POW10[n as usize]; // or (10 as $full).pow(n)
+            let p = TABLE[n as usize]; // or (10 as $full).pow(n)
 
             // SAFETY: `p` is a power of 10, so it cannot be
             // zero. This line helps the compiler get rid of some
@@ -107,8 +107,32 @@ macro_rules! impl_basic {
             p
         }
 
-        /// TODO
-        pub const MAX_SHIFT: u32 = NUM_POW10 as u32;
+        /// Returns the number of bits in `10^n`.
+        pub const fn pow10_bits(n: u32) -> u32 {
+            #[allow(
+                clippy::indexing_slicing,
+                reason = "This is a const initializer, so panicking is okay."
+            )]
+            const TABLE: [u32; NUM_POW10] = {
+                let mut table = [0; NUM_POW10];
+                let mut i = 0;
+                while i < table.len() {
+                    table[i] = bitlen(pow10(i as u32));
+                    i += 1;
+                }
+                table
+            };
+
+            #[allow(
+                clippy::indexing_slicing,
+                reason = "Calling code always checks that `n` is in range"
+            )]
+            let bits = TABLE[n as usize];
+            bits
+        }
+
+        /// The maximum shift that does not overflow `$full`.
+        pub const MAX_SHIFT: u32 = (NUM_POW10 - 1) as u32;
 
         const NUM_POW10: usize = {
             let mut n = 0;
@@ -127,7 +151,7 @@ macro_rules! impl_basic {
         ///
         /// # Panics
         ///
-        /// Panics if `n >= NUM_POW10`.
+        /// Panics if `n > MAX_SHIFT`.
         pub const fn shl(x: $full, n: u32) -> ($full, $full) {
             widening_mul(x, pow10(n))
         }

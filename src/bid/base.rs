@@ -577,19 +577,21 @@ macro_rules! impl_dec_internal {
                     let (mut q, r) = $arith::shr(coeff, shift as u32);
                     match self.rounding {
                         $crate::RoundingMode::ToNearestEven => {
-                            if q % 2 != 0 && r == 0 {
-                                // TODO(eric): I think this is
-                                // wrong because we're not adding
-                                // 0.5 like we do in `quantize`.
-                                q -= 1
+                            let half = $arith::point5(shift as u32);
+                            if r > half || (r == half && q % 2 != 0) {
+                                q += 1;
+                            }
+                        }
+                        $crate::RoundingMode::ToNearestAway => {
+                            let half = $arith::point5(shift as u32);
+                            if r >= half {
+                                q += 1;
                             }
                         }
                         $crate::RoundingMode::ToNearestTowardZero => {
-                            if r == 0 {
-                                // TODO(eric): I think this is
-                                // wrong because we're not adding
-                                // 0.5 like we do in `quantize`.
-                                q -= 1
+                            let half = $arith::point5(shift as u32);
+                            if r > half {
+                                q += 1;
                             }
                         }
                         $crate::RoundingMode::AwayFromZero => {
@@ -611,59 +613,74 @@ macro_rules! impl_dec_internal {
                     }
                     coeff = q;
                 }
+
                 // `coeff` is correctly rounded, but `exp` might
                 // be out of range.
-
-                if exp > <$name>::MAX_UNBIASED_EXP {
-                    // The exponent is still too large.
-
-                    if coeff == 0 {
-                        // Clamped.
-                        return <$name>::from_parts(sign, <$name>::MAX_UNBIASED_EXP, 0);
-                    }
-
-                    let adj = exp + $arith::digits(coeff) as $unbiased - 1;
-                    if adj > <$name>::EMAX {
-                        // Overflow. Either return infinity or
-                        // MAX.
-                        let inf = match self.rounding {
-                            $crate::RoundingMode::ToZero => false,
-                            $crate::RoundingMode::ToPositiveInf => !sign,
-                            $crate::RoundingMode::ToNegativeInf => sign,
-                            _ => true,
-                        };
-                        return if inf {
-                            <$name>::inf(sign)
-                        } else {
-                            <$name>::MAX
-                        };
-                    }
-
-                    // No overflow, so shift the coefficient left
-                    // and decrement the exponent accordingly.
-                    #[allow(clippy::cast_sign_loss, reason = "exp > MAX_UNBIASED_EXP")]
-                    let mut shift = (exp - <$name>::MAX_UNBIASED_EXP) as u32;
-
-                    // We know that
-                    //
-                    // - coeff > 0
-                    // - exp + digits(coeff) - 1 <= EMAX
-                    //            [1, P]
-                    // - exp > EMAX - P - 1
-                    //
-                    // Therefore, digits(coeff) < P.
-                    //
-                    // Unfortunately, the compiler doesn't
-                    // understand this, so we need to prove to it
-                    // that `shl` doesn't panic.
-                    debug_assert!(shift < <$name>::DIGITS);
-                    debug_assert!(digits < <$name>::DIGITS);
-                    if shift > <$name>::DIGITS {
-                        shift = <$name>::DIGITS;
-                    }
-                    coeff = $arith::shl(coeff, shift).0;
-                    exp -= shift as $unbiased;
+                if exp <= <$name>::MAX_UNBIASED_EXP {
+                    <$name>::from_parts(sign, exp, coeff)
+                } else {
+                    self.round_exp(sign, exp, coeff, digits)
                 }
+            }
+
+            /// Rounds the number when `exp > MAX_UNBIASED_EXP`.
+            ///
+            /// Requires `coeff <= MAX_COEFF`.
+            const fn round_exp(
+                &self,
+                sign: bool,
+                mut exp: $unbiased,
+                mut coeff: $ucoeff,
+                digits: u32,
+            ) -> $name {
+                debug_assert!(coeff <= <$name>::MAX_COEFF as $ucoeff);
+                debug_assert!(exp > <$name>::MAX_UNBIASED_EXP);
+
+                if coeff == 0 {
+                    // Clamped.
+                    return <$name>::from_parts(sign, <$name>::MAX_UNBIASED_EXP, 0);
+                }
+
+                let adj = exp + $arith::digits(coeff) as $unbiased - 1;
+                if adj > <$name>::EMAX {
+                    // Overflow. Either return infinity or MAX.
+                    let inf = match self.rounding {
+                        $crate::RoundingMode::ToZero => false,
+                        $crate::RoundingMode::ToPositiveInf => !sign,
+                        $crate::RoundingMode::ToNegativeInf => sign,
+                        _ => true,
+                    };
+                    return if inf {
+                        <$name>::inf(sign)
+                    } else {
+                        <$name>::MAX
+                    };
+                }
+
+                // No overflow, so shift the coefficient left and
+                // decrement the exponent accordingly.
+                #[allow(clippy::cast_sign_loss, reason = "exp > MAX_UNBIASED_EXP")]
+                let mut shift = (exp - <$name>::MAX_UNBIASED_EXP) as u32;
+
+                // We know that
+                //
+                // - coeff > 0
+                // - exp + digits(coeff) - 1 <= EMAX
+                //            [1, P]
+                // - exp > EMAX - P - 1
+                //
+                // Therefore, digits(coeff) < P.
+                //
+                // Unfortunately, the compiler doesn't understand
+                // this, so we need to prove to it that `shl`
+                // doesn't panic.
+                debug_assert!(shift < <$name>::DIGITS);
+                debug_assert!(digits < <$name>::DIGITS);
+                if shift > <$name>::DIGITS {
+                    shift = <$name>::DIGITS;
+                }
+                coeff = $arith::shl(coeff, shift).0;
+                exp -= shift as $unbiased;
 
                 <$name>::from_parts(sign, exp, coeff)
             }
@@ -903,6 +920,11 @@ macro_rules! impl_dec_arith_ctx {
             #[must_use = "this returns the result of the operation \
                             without modifying the original"]
             pub fn const_add(&self, lhs: $name, rhs: $name) -> $name {
+                self._const_add(lhs, rhs)
+            }
+
+            #[inline(always)]
+            fn _const_add(&self, lhs: $name, rhs: $name) -> $name {
                 use $crate::debug;
                 if lhs.is_special() || rhs.is_special() {
                     if lhs.is_nan() || rhs.is_nan() {
@@ -930,7 +952,8 @@ macro_rules! impl_dec_arith_ctx {
                 };
                 debug_assert!(lhs.is_finite() && rhs.is_finite());
 
-                if lhs.biased_exp() == rhs.biased_exp() {
+                // TODO(eric): keep this fast path?
+                if false && lhs.biased_exp() == rhs.biased_exp() {
                     // Fast path: exponents are the same, so we
                     // don't need to rescale either operand.
                     let exp = lhs.unbiased_exp();
@@ -949,7 +972,7 @@ macro_rules! impl_dec_arith_ctx {
                     };
                     return self.maybe_rounded(sign, exp, sum.unsigned_abs());
                 }
-                debug_assert!(lhs.biased_exp() != rhs.biased_exp());
+                // debug_assert!(lhs.biased_exp() != rhs.biased_exp());
 
                 // The exponents differ, so align the
                 // coefficients.
@@ -961,7 +984,7 @@ macro_rules! impl_dec_arith_ctx {
                     hi = lo;
                     lo = tmp;
                 }
-                debug_assert!(lo.biased_exp() < hi.biased_exp());
+                debug_assert!(lo.biased_exp() <= hi.biased_exp());
 
                 debug!("hi = {hi:?}");
                 debug!("lo = {lo:?}");
@@ -993,9 +1016,6 @@ macro_rules! impl_dec_arith_ctx {
                 debug!("x = {x}");
                 debug!("y = {y}");
 
-                let mut xd = $arith::digits(x);
-                let mut xexp = hi.unbiased_exp();
-
                 if shift >= <$name>::DIGITS {
                     debug!("shift < DIGITS");
                     // The shift is so large the coefficients
@@ -1004,18 +1024,24 @@ macro_rules! impl_dec_arith_ctx {
                     // Try to normalize `hi` to get the
                     // coefficients to overlap.
 
-                    let k = <$name>::DIGITS - xd;
-                    debug!("k = {k}");
+                    const_assert!({
+                        let got = $arith::digits(<$name>::MAX_COEFF as $ucoeff);
+                        got == <$name>::DIGITS
+                    });
+                    // The compiler does not understand that this
+                    // will never wrap.
+                    //
+                    // SAFETY: `digits(MAX_COEFF) == DIGITS`, so
+                    // this will never wrap. See the above
+                    // assertion.
+                    let delta = unsafe { <$name>::DIGITS.unchecked_sub($arith::digits(x)) };
+                    debug!("delta = {delta}");
 
-                    // x *= 10^k
-                    x = $arith::shl(x, k).0;
-                    debug!("x * 10^{k} = {x}");
-                    xexp -= k as $unbiased;
-                    debug!("xexp = {xexp}");
+                    x = $arith::shl(x, delta).0;
+                    debug!("x * 10^{delta} = {x}");
 
-                    shift -= k;
-                    xd += k;
-                    let _ = xd; // TODO
+                    shift -= delta;
+                    debug!("shift - delta = {shift}");
 
                     if shift > <$name>::DIGITS {
                         // Even after normalizing `hi` the
@@ -1044,7 +1070,7 @@ macro_rules! impl_dec_arith_ctx {
 
                         match self.rounding {
                             $crate::RoundingMode::ToNearestEven => {
-                                if (shift as u32) < $arith::MAX_SHIFT {
+                                if (shift as u32) <= $arith::MAX_SHIFT {
                                     let half = $arith::point5(shift as u32);
                                     debug!("half = {half}");
                                     if r > half || (r == half && q % 2 != 0) {
@@ -1053,7 +1079,7 @@ macro_rules! impl_dec_arith_ctx {
                                 }
                             }
                             $crate::RoundingMode::ToNearestTowardZero => {
-                                if (shift as u32) < $arith::MAX_SHIFT {
+                                if (shift as u32) <= $arith::MAX_SHIFT {
                                     let half = $arith::point5(shift as u32);
                                     debug!("half = {half}");
                                     if r >= half {
@@ -1080,18 +1106,23 @@ macro_rules! impl_dec_arith_ctx {
                             _ => {}
                         }
 
-                        return <$name>::from_parts(hi.signbit(), xexp, q);
+                        let exp = hi.unbiased_exp() - delta as $unbiased;
+                        debug!("exp - delta = {exp}");
+                        debug!("q = {q}");
+
+                        return <$name>::from_parts(hi.signbit(), exp, q);
                     }
                 }
                 debug_assert!(shift <= <$name>::DIGITS);
 
                 // At this point we have either
+                //
                 //    sum = x*(10^shift) + y for x >= y
                 //    sum = y - x*(10^shift) for x < y
                 //
                 // `shift` is in [0, DIGITS], so 10^shift will
-                // not overflow. There are still two other ways
-                // this could overflow:
+                // not overflow `$ucoeff`. There are still two
+                // other ways this could overflow, however:
                 //
                 // 1. x*(10^shift)
                 //    if digits(x)+shift > digits(<$ucoeff>::MAX)
@@ -1100,16 +1131,120 @@ macro_rules! impl_dec_arith_ctx {
 
                 debug!("x = {x} * 10^{shift}");
 
-                let (x, xhi) = $arith::shl(x, shift);
+                // Check to see if we can avoid both case (1) and
+                // (2) and compute the result without overflowing
+                // `$ucoeff`.
+                //
+                // Multiplying an N-bit number with an M-bit
+                // number requires at most N+M bits. For example,
+                // `(2^64)-1 * (2^64)-1` requires 128 bits.
+                //
+                // Adding an N-bit number with an M-bit number
+                // requires at most max(N,M)+1 bits. For example,
+                // `(2^64)-1 + (2^64)-1` requires 65 bits.
+                //
+                // We have two additions
+                //    1. `sum = x' + y`
+                //    2. `sum += 0.5555...`
+                // which means we need two spare bits.
+                let bits = $arith::bitlen(x) + $arith::pow10_bits(shift);
+                if bits < <$ucoeff>::BITS - 2 {
+                    debug!("bits = {bits}");
+                    debug!("x = {x}");
+                    debug!("y = {y}");
+
+                    x = $arith::shl(x, shift).0;
+                    let mut sum = if hi.signbit() == lo.signbit() {
+                        x + y
+                    } else {
+                        x.abs_diff(y)
+                    };
+                    debug!("sum = {sum}");
+
+                    let sign = if sum == 0 {
+                        // The sign of a zero is also zero unless
+                        // both operands are negative or the
+                        // signs differ and the rounding mode is
+                        // `ToNegativeInf`.
+                        (hi.signbit() && lo.signbit())
+                            || (hi.signbit() != lo.signbit()
+                                && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
+                    } else if x > y {
+                        hi.signbit()
+                    } else {
+                        lo.signbit()
+                    };
+
+                    let mut exp = lo.unbiased_exp();
+
+                    debug!("sum = {sum}");
+                    debug!("exp = {exp}");
+
+                    if sum <= <$name>::MAX_COEFF as $ucoeff {
+                        // Rounding isn't needed.
+                        return <$name>::from_parts(sign, exp, sum);
+                    }
+
+                    let shift = $arith::digits(sum) - <$name>::DIGITS;
+                    if self.rounding.needs_pt5() {
+                        // The addition cannot overflow since we
+                        // reserved one bit for this addition.
+                        sum += $arith::point5(shift);
+                    }
+
+                    let (mut q, r) = $arith::shr(sum, shift);
+                    match self.rounding {
+                        $crate::RoundingMode::ToNearestEven => {
+                            if q % 2 != 0 && r == 0 {
+                                q -= 1
+                            }
+                        }
+                        $crate::RoundingMode::ToNearestTowardZero => {
+                            if r == 0 {
+                                q -= 1
+                            }
+                        }
+                        $crate::RoundingMode::AwayFromZero => {
+                            if r != 0 {
+                                q += 1;
+                            }
+                        }
+                        $crate::RoundingMode::ToPositiveInf => {
+                            if r != 0 && !lhs.signbit() {
+                                q += 1;
+                            }
+                        }
+                        $crate::RoundingMode::ToNegativeInf => {
+                            if r != 0 && lhs.signbit() {
+                                q += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    exp += shift as $unbiased;
+                    return if exp <= <$name>::MAX_UNBIASED_EXP {
+                        <$name>::from_parts(sign, exp, q)
+                    } else {
+                        // TODO(eric): This is ~just
+                        //    digits(sum)-shift
+                        // plus an adjustment if q+1 grows by one
+                        // digit.
+                        let digits = $arith::digits(q);
+                        self.round_exp(sign, exp, q, digits)
+                    };
+                }
+
+                let (xlo, mut xhi) = $arith::shl(x, shift);
                 if xhi == 0 {
                     // x*(10^shift) did not overflow, but adding
                     // `y` still might.
-                    debug!("x = {x}");
+                    debug!("x = {xlo}");
                     debug!("y = {y}");
                     let (sum, carry) = if hi.signbit() == lo.signbit() {
-                        x.overflowing_add(y)
+                        xlo.overflowing_add(y)
                     } else {
-                        (x.abs_diff(y), false)
+                        (xlo.abs_diff(y), false)
                     };
                     if !carry {
                         let sign = if sum == 0 {
@@ -1120,7 +1255,7 @@ macro_rules! impl_dec_arith_ctx {
                             (hi.signbit() && lo.signbit())
                                 || (hi.signbit() != lo.signbit()
                                     && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
-                        } else if x > y {
+                        } else if xlo > y {
                             hi.signbit()
                         } else {
                             lo.signbit()
@@ -1130,13 +1265,15 @@ macro_rules! impl_dec_arith_ctx {
                         debug!("exp = {exp}");
                         return self.maybe_rounded2(sign, exp, sum);
                     }
+                    xhi = 1;
+                    let _ = xhi; // TODO
                 }
 
                 // P=5
                 //
                 // 123*(10^5) =
 
-                todo!()
+                <$name>::nan(false, 0)
             }
 
             /// Returns `lhs / rhs`.
@@ -1381,13 +1518,14 @@ macro_rules! impl_dec_arith_ctx {
                 if cfg!(debug_assertions) {
                     println!("lhs = {} {}", lhs.biased_exp(), lhs.unbiased_exp());
                     println!("rhs = {} {}", rhs.biased_exp(), rhs.unbiased_exp());
-                    println!("diff = {}", lhs.biased_exp().abs_diff(rhs.biased_exp()));
+                    println!("shift = {}", lhs.biased_exp().abs_diff(rhs.biased_exp()));
                     println!("coeff = {} ({})", lhs.coeff(), lhs.digits());
                 }
 
-                // It's possible that `diff > u32::MAX` if `K` is
-                // at least 448 bits. We don't plan on supporting
-                // such large decimals in the near future.
+                // It's possible that `shift > u32::MAX` if `K`
+                // is at least 448 bits. We don't plan on
+                // supporting such large decimals in the near
+                // future.
                 const_assert!(<$biased>::MAX as u32 as $biased == <$biased>::MAX);
 
                 if lhs.biased_exp() == rhs.biased_exp() {
@@ -1398,34 +1536,34 @@ macro_rules! impl_dec_arith_ctx {
                 if lhs.biased_exp() > rhs.biased_exp() {
                     // The exponent is decreasing, so shift the
                     // coefficient to the left.
-                    let diff = (lhs.biased_exp() - rhs.biased_exp()) as u32;
+                    let shift = (lhs.biased_exp() - rhs.biased_exp()) as u32;
                     // This addition can only overflow if
                     // DIGITS+LIMIT overflows. DIGITS+LIMIT can
                     // only overflow if K >= 2^10, at which point
                     // LIMIT > (2^32)-1.
-                    if lhs.digits() + diff > <$name>::DIGITS {
+                    if lhs.digits() + shift > <$name>::DIGITS {
                         // Too many digits.
                         return <$name>::nan(false, 0);
                     }
-                    let (lo, hi) = $arith::shl(lhs.coeff(), diff);
-                    debug_assert!(hi == 0);
+                    let (lo, _hi) = $arith::shl(lhs.coeff(), shift);
+                    debug_assert!(_hi == 0);
                     return <$name>::from_parts(lhs.signbit(), rhs.unbiased_exp(), lo);
                 }
 
-                let diff = (rhs.biased_exp() - lhs.biased_exp()) as u32;
-                if lhs.digits() < diff {
+                let shift = (rhs.biased_exp() - lhs.biased_exp()) as u32;
+                if lhs.digits() < shift {
                     // Rounding down to zero.
                     return <$name>::from_parts(lhs.signbit(), rhs.unbiased_exp(), 0);
                 }
 
-                // We need to discard `diff` digits from the
+                // We need to discard `shift` digits from the
                 // coefficient with proper rounding.
                 //
                 // For the "to nearest" rounding modes, nterpret
                 // the coefficient as a decimal number, e.g.
                 //     c = iiii.ffff
-                // Add floor(0.5*(10^diff)), then divide by
-                // 10^diff
+                // Add floor(0.5*(10^shift)), then divide by
+                // 10^shift
                 //     q = iiii (quotient)
                 //     r = ffff (remainder)
                 // The quotient is the new coefficient and is
@@ -1439,22 +1577,17 @@ macro_rules! impl_dec_arith_ctx {
                         >= $arith::point5(<$name>::DIGITS),
                 );
                 let mut coeff = lhs.coeff();
-                if matches!(
-                    self.rounding,
-                    $crate::RoundingMode::ToNearestEven
-                        | $crate::RoundingMode::ToNearestAway
-                        | $crate::RoundingMode::ToNearestTowardZero
-                ) {
+                if self.rounding.needs_pt5() {
                     const_assert!(
                         <$name>::MAX_COEFF as $ucoeff + $arith::point5(<$name>::DIGITS)
                             <= <$ucoeff>::MAX
                     );
                     // The addition cannot overflow since
                     //     MAX_COEFF + 5*(10^DIGITS) < <$ucoeff>::MAX
-                    coeff += $arith::point5(diff);
+                    coeff += $arith::point5(shift);
                 }
 
-                let (mut q, r) = $arith::shr(coeff, diff);
+                let (mut q, r) = $arith::shr(coeff, shift);
                 match self.rounding {
                     $crate::RoundingMode::ToNearestEven => {
                         if q % 2 != 0 && r == 0 {
@@ -1637,7 +1770,7 @@ macro_rules! impl_dec_arith {
             #[must_use = "this returns the result of the operation \
                             without modifying the original"]
             pub fn const_add(self, rhs: Self) -> Self {
-                Self::CTX.const_add(self, rhs)
+                Self::CTX._const_add(self, rhs)
             }
 
             /// Returns `self / rhs`.

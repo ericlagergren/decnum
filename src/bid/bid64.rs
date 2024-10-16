@@ -116,6 +116,16 @@ mod tests {
     }
 
     #[test]
+    fn test_oops() {
+        use arith64::{bitlen, pow10, pow10_bits};
+        let x = 33;
+        let shift = 1;
+        let got = bitlen(x) + pow10_bits(shift);
+        let want = bitlen(x * pow10(shift));
+        assert!(got >= want, "{got} >= {want}");
+    }
+
+    #[test]
     fn test_exp() {
         for exp in 0..=Bid64::MAX_EXP {
             let d = Bid64::new(0, exp);

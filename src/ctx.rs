@@ -74,6 +74,15 @@ pub enum RoundingMode {
     ToNearestTowardZero,
 }
 
+impl RoundingMode {
+    pub(crate) const fn needs_pt5(self) -> bool {
+        matches!(
+            self,
+            Self::ToNearestEven | Self::ToNearestAway | Self::ToNearestTowardZero
+        )
+    }
+}
+
 /// An exceptional condition raised during or after an operation.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Condition(u32);

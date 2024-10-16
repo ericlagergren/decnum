@@ -4,13 +4,25 @@ super::impl_basic!(u64, u32, 16);
 
 #[no_mangle]
 pub const fn shl64(x: u64, n: u32) -> (u64, u64) {
-    unsafe { crate::util::assume(n <= 17) }
+    unsafe { crate::util::assume(n <= 16) }
     shl(x, n)
 }
 
 #[no_mangle]
+pub const fn shl64_v2(x: u64, n: u32) -> u64 {
+    unsafe { crate::util::assume(n <= 16) }
+    shl(x, n).0
+}
+
+#[no_mangle]
+pub const fn shl64_v3(x: u64, n: u32) -> u64 {
+    unsafe { crate::util::assume(n <= 16) }
+    x * pow10(n)
+}
+
+#[no_mangle]
 pub const fn shr64(x: u64, n: u32) -> (u64, u64) {
-    unsafe { crate::util::assume(n <= 17) }
+    unsafe { crate::util::assume(n <= 16) }
     shr(x, n)
 }
 

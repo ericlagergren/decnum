@@ -3,6 +3,24 @@ use super::idiv::Divisor128;
 super::impl_basic!(u128, u64, 34);
 
 #[no_mangle]
+pub const fn shl128(x: u128, n: u32) -> (u128, u128) {
+    unsafe { crate::util::assume(n <= 34) }
+    shl(x, n)
+}
+
+#[no_mangle]
+pub const fn shl128_v2(x: u128, n: u32) -> u128 {
+    unsafe { crate::util::assume(n <= 34) }
+    shl(x, n).0
+}
+
+#[no_mangle]
+pub const fn shl128_v3(x: u128, n: u32) -> u128 {
+    unsafe { crate::util::assume(n <= 34) }
+    x * pow10(n)
+}
+
+#[no_mangle]
 pub const fn shr128(x: u128, n: u32) -> (u128, u128) {
     unsafe { crate::util::assume(n <= 34) }
     // if n == 0 {
