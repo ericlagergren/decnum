@@ -8,9 +8,8 @@ pub mod uint256;
 mod util;
 
 // TODO(eric): get rid of `$half`?
-// TODO(eric): get rid of `$max_shift`?
 macro_rules! impl_basic {
-    ($full:ty, $half:ty, $max_shift:literal) => {
+    ($full:ty, $half:ty) => {
         /// Returns the minimum number of bits required to
         /// represent `x`.
         ///
@@ -173,7 +172,7 @@ macro_rules! impl_basic {
             }
 
             // Amazingly, Apple Silicon's integer division units
-            // are better than our reciprocals for word-sized
+            // are better than reciprocals for word-sized
             // operands.
             if cfg!(all(target_vendor = "apple", target_arch = "aarch64")) && <$full>::BITS <= 64 {
                 let d = pow10(n);
@@ -193,8 +192,8 @@ macro_rules! impl_basic {
                     clippy::indexing_slicing,
                     reason = "Calling code always checks that `n` is in range"
                 )]
-                let d = RECIP10_2[n as usize];
-                return d.quorem(x);
+                let d = RECIP10_IMPROVED[n as usize];
+                return quorem(x, d);
             }
 
             // Implement division via recpirocal via "Division by
@@ -230,6 +229,26 @@ macro_rules! impl_basic {
 
             (q, r)
         }
+
+        /*
+        /// Returns the quotient and remainder `(q, r)` such that
+        ///
+        /// ```text
+        /// q = x / (10^n)
+        /// r = x % (10^n)
+        /// ```
+        pub const fn shr2(lo: $full, hi: $full, n: u32) -> ($full, $full) {
+            if hi == 0 {
+                return shr(lo, n);
+            }
+            #[allow(
+                clippy::indexing_slicing,
+                reason = "Calling code always checks that `n` is in range"
+            )]
+            let d = RECIP10_IMPROVED[n as usize];
+            return wide_quorem(hi, lo, d);
+        }
+        */
 
         #[cfg(test)]
         mod tests {

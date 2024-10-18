@@ -1,34 +1,51 @@
-use super::idiv::Divisor128;
+use super::idiv::{div2x1, div3x2, div4x2, Divisor128};
 
-super::impl_basic!(u128, u64, 34);
+super::impl_basic!(u128, u64);
 
-#[no_mangle]
-pub const fn shl128(x: u128, n: u32) -> (u128, u128) {
-    unsafe { crate::util::assume(n <= 34) }
-    shl(x, n)
+const fn quorem(u: u128, d: Divisor128) -> (u128, u128) {
+    let Divisor128 { d, v, s } = d;
+
+    let u1 = (u >> 64) as u64;
+    let u0 = u as u64;
+
+    let d1 = (d >> 64) as u64;
+    let d0 = d as u64;
+    if d1 == 0 {
+        let (q1, r) = div2x1(0, u1, d0, v, s);
+        let (q0, r) = div2x1(r, u0, d0, v, s);
+        let q = ((q1 as u128) << 64) | (q0 as u128);
+        (q, r as u128)
+    } else {
+        let (q, r) = div3x2(0, u1, u0, d1, d0, v, s);
+        (q as u128, r)
+    }
 }
 
-#[no_mangle]
-pub const fn shl128_v2(x: u128, n: u32) -> u128 {
-    unsafe { crate::util::assume(n <= 34) }
-    shl(x, n).0
-}
+#[allow(dead_code)]
+const fn wide_quorem(u1: u128, u0: u128, d: Divisor128) -> ((u128, u128), u128) {
+    let Divisor128 { d, v, s } = d;
 
-#[no_mangle]
-pub const fn shl128_v3(x: u128, n: u32) -> u128 {
-    unsafe { crate::util::assume(n <= 34) }
-    x * pow10(n)
-}
+    let d1 = (d >> 64) as u64;
+    let d0 = d as u64;
+    if d1 == 0 {
+        let u3 = (u1 >> 64) as u64;
+        let u2 = u1 as u64;
+        let u1 = (u0 >> 64) as u64;
+        let u0 = u0 as u64;
 
-#[no_mangle]
-pub const fn shr128(x: u128, n: u32) -> (u128, u128) {
-    unsafe { crate::util::assume(n <= 34) }
-    // if n == 0 {
-    //     return (x, 0);
-    // }
-    // let d = RECIP10_2[n as usize];
-    // Divisor128::quorem2(x, d)
-    shr(x, n)
+        let (q3, r) = div2x1(0, u3, d0, v, s);
+        let (q2, r) = div2x1(r, u2, d0, v, s);
+        let (q1, r) = div2x1(r, u1, d0, v, s);
+        let (q0, r) = div2x1(r, u0, d0, v, s);
+
+        let hi = ((q3 as u128) << 64) | (q2 as u128);
+        let lo = ((q1 as u128) << 64) | (q0 as u128);
+
+        ((hi, lo), r as u128)
+    } else {
+        let (q, r) = div4x2(u1, u0, d, v as u128, s);
+        ((0, q), r)
+    }
 }
 
 const fn umulh(x: u128, y: u128) -> u128 {
@@ -107,7 +124,7 @@ const RECIP10: [(u32, u32, u128); NUM_POW10] = [
     (0, 125, 144740111546645244279463731260859884817), // 10^38
 ];
 
-const RECIP10_2: [Divisor128; NUM_POW10] = {
+const RECIP10_IMPROVED: [Divisor128; NUM_POW10] = {
     let mut table = [Divisor128::uninit(); NUM_POW10];
     let mut i = 0;
     while i < table.len() {

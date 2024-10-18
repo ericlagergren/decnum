@@ -1,29 +1,19 @@
-use super::idiv::Divisor64;
+use super::idiv::{div2x1, Divisor64};
 
-super::impl_basic!(u64, u32, 16);
+super::impl_basic!(u64, u32);
 
-#[no_mangle]
-pub const fn shl64(x: u64, n: u32) -> (u64, u64) {
-    unsafe { crate::util::assume(n <= 16) }
-    shl(x, n)
+const fn quorem(u: u64, d: Divisor64) -> (u64, u64) {
+    let Divisor64 { d, v, s } = d;
+    div2x1(0, u, d, v, s)
 }
 
-#[no_mangle]
-pub const fn shl64_v2(x: u64, n: u32) -> u64 {
-    unsafe { crate::util::assume(n <= 16) }
-    shl(x, n).0
-}
-
-#[no_mangle]
-pub const fn shl64_v3(x: u64, n: u32) -> u64 {
-    unsafe { crate::util::assume(n <= 16) }
-    x * pow10(n)
-}
-
-#[no_mangle]
-pub const fn shr64(x: u64, n: u32) -> (u64, u64) {
-    unsafe { crate::util::assume(n <= 16) }
-    shr(x, n)
+#[allow(dead_code)]
+const fn wide_quorem(u1: u64, u0: u64, d: Divisor64) -> (u128, u128) {
+    let Divisor64 { d, v, s } = d;
+    let (q1, r) = div2x1(0, u1, d, v, s);
+    let (q0, r) = div2x1(r, u0, d, v, s);
+    let q = ((q1 as u128) << 64) | (q0 as u128);
+    (q, r as u128)
 }
 
 const fn umulh(lhs: u64, rhs: u64) -> u64 {
@@ -61,7 +51,7 @@ const RECIP10: [(u32, u32, u64); NUM_POW10] = [
     (0, 62, 8507059173023461587),  // 10^19
 ];
 
-const RECIP10_2: [Divisor64; NUM_POW10] = {
+const RECIP10_IMPROVED: [Divisor64; NUM_POW10] = {
     let mut table = [Divisor64::uninit(); NUM_POW10];
     let mut i = 0;
     while i < table.len() {

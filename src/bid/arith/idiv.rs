@@ -13,9 +13,9 @@ use crate::util::{unlikely, unpredictable};
 /// A 32-bit divisor.
 #[derive(Copy, Clone, Debug)]
 pub struct Divisor32 {
-    d: u64, // divisor
-    v: u64, // reciprocal
-    s: u32, // shift
+    pub d: u64, // divisor
+    pub v: u64, // reciprocal
+    pub s: u32, // shift
 }
 
 impl Divisor32 {
@@ -36,6 +36,7 @@ impl Divisor32 {
     /// q = u / self
     /// r = u % self
     /// ```
+    #[allow(dead_code)]
     pub const fn quorem(self, u: u32) -> (u32, u32) {
         let (q, r) = div2x1(0, u as u64, self.d as u64, self.v as u64, self.s);
         (q as u32, r as u32)
@@ -45,9 +46,9 @@ impl Divisor32 {
 /// A 64-bit divisor.
 #[derive(Copy, Clone, Debug)]
 pub struct Divisor64 {
-    d: u64, // divisor
-    v: u64, // reciprocal
-    s: u32, // shift
+    pub d: u64, // divisor
+    pub v: u64, // reciprocal
+    pub s: u32, // shift
 }
 
 impl Divisor64 {
@@ -71,6 +72,7 @@ impl Divisor64 {
     /// q = u / self
     /// r = u % self
     /// ```
+    #[allow(dead_code)]
     pub const fn quorem(self, u: u64) -> (u64, u64) {
         div2x1(0, u, self.d, self.v, self.s)
     }
@@ -79,20 +81,14 @@ impl Divisor64 {
 /// A 128-bit divisor.
 #[derive(Copy, Clone, Debug)]
 pub struct Divisor128 {
-    d1: u64, // divisor high
-    d0: u64, // divisor low
-    v: u64,  // reciprocal
-    s: u32,  // shift
+    pub d: u128, // divisor
+    pub v: u64,  // reciprocal
+    pub s: u32,  // shift
 }
 
 impl Divisor128 {
     pub const fn uninit() -> Self {
-        Self {
-            d1: 0,
-            d0: 0,
-            v: 0,
-            s: 0,
-        }
+        Self { d: 0, v: 0, s: 0 }
     }
 
     pub const fn new(d: u128) -> Self {
@@ -103,7 +99,7 @@ impl Divisor128 {
 
         if d1 == 0 {
             let Divisor64 { d, v, s } = Divisor64::new(d0);
-            return Self { d1: 0, d0: d, v, s };
+            return Self { d: d as u128, v, s };
         }
 
         let s = d1.leading_zeros();
@@ -130,7 +126,8 @@ impl Divisor128 {
                 v -= 1;
             }
         }
-        Self { d1, d0, v, s }
+        let d = pack64(d1, d0);
+        Self { d, v, s }
     }
 
     /// Compute the quotient and remainder `(q, r)` where
@@ -140,43 +137,21 @@ impl Divisor128 {
     /// r = u % self
     /// ```
     #[inline(always)]
+    #[allow(dead_code)]
     pub const fn quorem(self, u: u128) -> (u128, u128) {
         let u1 = (u >> 64) as u64;
         let u0 = u as u64;
 
-        if self.d1 == 0 {
-            let (q1, r) = div2x1(0, u1, self.d0, self.v, self.s);
-            let (q0, r) = div2x1(r, u0, self.d0, self.v, self.s);
+        let d1 = (self.d >> 64) as u64;
+        let d0 = self.d as u64;
+
+        if d1 == 0 {
+            let (q1, r) = div2x1(0, u1, d0, self.v, self.s);
+            let (q0, r) = div2x1(r, u0, d0, self.v, self.s);
             let q = pack64(q1, q0);
             (q, r as u128)
         } else {
-            let (q, r) = div3x2(0, u1, u0, self.d1, self.d0, self.v, self.s);
-            (q as u128, r)
-        }
-    }
-
-    /// Compute the quotient and remainder `(q, r)` where
-    ///
-    /// ```text
-    /// q = (1, u) / self
-    /// r = (1, u) % self
-    /// ```
-    ///
-    /// for `v > 1`.
-    //#[inline(always)]
-    #[no_mangle]
-    pub const fn quorem2(self, u2: u64, u: u128) -> (u128, u128) {
-        let u1 = (u >> 64) as u64;
-        let u0 = u as u64;
-
-        if self.d1 == 0 {
-            let (_, r) = div2x1(0, u2, self.d0, self.v, self.s);
-            let (q1, r) = div2x1(r, u1, self.d0, self.v, self.s);
-            let (q0, r) = div2x1(r, u0, self.d0, self.v, self.s);
-            let q = pack64(q1, q0);
-            (q, r as u128)
-        } else {
-            let (q, r) = div3x2(u2, u1, u0, self.d1, self.d0, self.v, self.s);
+            let (q, r) = div3x2(0, u1, u0, d1, d0, self.v, self.s);
             (q as u128, r)
         }
     }
@@ -238,7 +213,7 @@ impl Divisor128 {
 
 // NB: `d` must be normalized.
 #[inline(always)]
-const fn div2x1(mut u1: u64, mut u0: u64, d: u64, v: u64, s: u32) -> (u64, u64) {
+pub(super) const fn div2x1(mut u1: u64, mut u0: u64, d: u64, v: u64, s: u32) -> (u64, u64) {
     if s != 0 {
         u1 = (u1 << s) | (u0 >> (64 - s));
         u0 <<= s;
@@ -264,7 +239,7 @@ const fn div2x1(mut u1: u64, mut u0: u64, d: u64, v: u64, s: u32) -> (u64, u64) 
 
 // NB: `d1`, `d0` must be normalized.
 #[inline(always)]
-const fn div3x2(
+pub(super) const fn div3x2(
     mut u2: u64,
     mut u1: u64,
     mut u0: u64,
@@ -304,9 +279,9 @@ const fn div3x2(
 }
 
 // NB: `d` must be normalized.
-//#[inline(always)]
-#[no_mangle]
-const fn div4x2(mut u1: u128, mut u0: u128, d: u128, v: u128, s: u32) -> (u128, u128) {
+#[inline(always)]
+#[allow(dead_code)]
+pub(super) const fn div4x2(mut u1: u128, mut u0: u128, d: u128, v: u128, s: u32) -> (u128, u128) {
     if s != 0 {
         u1 = (u1 << s) | (u0 >> (128 - s));
         u0 <<= s;
@@ -471,22 +446,22 @@ mod tests {
             let want = golden(u, v);
             assert_eq!(got, want, "#{i}: {u}/{v}");
 
-            let u2 = rand_word!();
-            if v == 1 {
-                v0 += 1;
-                v += 1;
-            }
+            // let u2 = rand_word!();
+            // if v == 1 {
+            //     v0 += 1;
+            //     v += 1;
+            // }
 
-            let got = Divisor128::new(v).quorem2(u2, u);
-            #[allow(non_camel_case_types)]
-            type u256 = ruint::Uint<256, 4>;
-            let u = u256::from_limbs([u0, u1, u2, 0]);
-            let v = u256::from_limbs([v0, v1, 0, 0]);
-            let want: (u128, u128) = (
-                (u / v).try_into().unwrap(), // q
-                (u % v).try_into().unwrap(), // r
-            );
-            assert_eq!(got, want, "#{i}: {u}/{v}");
+            // let got = Divisor128::new(v).quorem2(u2, u);
+            // #[allow(non_camel_case_types)]
+            // type u256 = ruint::Uint<256, 4>;
+            // let u = u256::from_limbs([u0, u1, u2, 0]);
+            // let v = u256::from_limbs([v0, v1, 0, 0]);
+            // let want: (u128, u128) = (
+            //     (u / v).try_into().unwrap(), // q
+            //     (u % v).try_into().unwrap(), // r
+            // );
+            // assert_eq!(got, want, "#{i}: {u}/{v}");
         }
     }
 }
