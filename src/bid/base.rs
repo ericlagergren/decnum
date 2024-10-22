@@ -1006,34 +1006,34 @@ macro_rules! impl_dec_arith_ctx {
                 debug!("hi = {hi:?} ({hi})");
                 debug!("lo = {lo:?} ({lo})");
 
-                if hi.is_zero() {
-                    debug!("hi = 0");
-                    // hi + ±0
+                let mut x = hi.coeff();
+                let mut y = lo.coeff();
+
+                debug!("x = {x}");
+                debug!("y = {y}");
+
+                if x == 0 {
+                    let sum = y;
+                    let exp = lo.unbiased_exp();
+                    // ±0 + y
                     //
                     // The sign of a zero is also zero unless
                     // both operands are negative or the signs
                     // differ and the rounding mode is
                     // `ToNegativeInf`.
-                    let lo = lo.canonical();
-                    let sign = if lo.is_zero() {
+                    let sign = if sum == 0 {
                         (hi.signbit() && lo.signbit())
                             || (hi.signbit() != lo.signbit()
                                 && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
                     } else {
                         lo.signbit()
                     };
-                    return lo.copy_with_sign(sign);
+                    return <$name>::from_parts(sign, exp, sum);
                 }
-                debug_assert!(!hi.is_zero());
+                debug_assert!(x != 0);
 
                 let mut shift = (hi.biased_exp() - lo.biased_exp()) as u32;
                 debug!("shift = {shift}");
-
-                let mut x = hi.coeff();
-                let mut y = lo.coeff();
-
-                debug!("x = {x}");
-                debug!("y = {y}");
 
                 if shift >= <$name>::DIGITS {
                     // The shift is so large the coefficients
@@ -1097,14 +1097,15 @@ macro_rules! impl_dec_arith_ctx {
                         let mut exp = hi.unbiased_exp() - delta as $unbiased;
 
                         let mut sum = x;
-                        debug!("sum = {sum}");
+                        debug!("sum       = {sum}");
 
-                        const IDK: $ucoeff = (1 + <$name>::MAX_COEFF as $ucoeff) / 10;
-
-                        debug!("IDK = {IDK}");
+                        // The max power of 10 less than
+                        // MAX_COEFF.
+                        const MAX_POW10: $ucoeff = $arith::pow10(<$name>::DIGITS - 1);
+                        debug!("MAX_POW10 = {MAX_POW10}");
 
                         let r = y;
-                        debug!("r = {r}");
+                        debug!("r = {r} ({y})");
 
                         match self.rounding {
                             $crate::RoundingMode::ToNearestEven
@@ -1116,36 +1117,60 @@ macro_rules! impl_dec_arith_ctx {
                             }
                             $crate::RoundingMode::ToPositiveInf => {
                                 if r != 0 && !lo.signbit() {
-                                    if hi.signbit() {
-                                        sum = sum.wrapping_add(<$ucoeff>::MAX);
-                                    }
-                                    if sum < IDK {
+                                    sum = if hi.signbit() {
+                                        sum.wrapping_sub(1)
+                                    } else {
+                                        sum.wrapping_add(1)
+                                    };
+                                    if sum < MAX_POW10 {
+                                        // sum = normalize(x) and
+                                        // shift > DIGITS, so sum
+                                        // should be at least
+                                        // MAX_POW10. If it's
+                                        // less, then we've
+                                        // decremented sum and
+                                        // changed the number of
+                                        // digits. We're rounding
+                                        // up to +inf, so adjust
+                                        // sum accordingly.
                                         exp -= 1;
                                         sum = <$name>::MAX_COEFF as $ucoeff;
-                                    } else if sum >= IDK * 10 {
+                                    } else if sum > <$name>::MAX_COEFF as $ucoeff {
+                                        // We'll only ever exceed
+                                        // MAX_COEFF if x is
+                                        // MAX_COEFF and we
+                                        // increment it. We're
+                                        // rounding up to +inf,
+                                        // so adjust sum
+                                        // accordingly.
                                         exp += 1;
-                                        sum = IDK;
+                                        sum = MAX_POW10;
                                     }
                                 }
                             }
                             $crate::RoundingMode::ToNegativeInf => {
                                 if r != 0 && lo.signbit() {
-                                    if hi.signbit() {
-                                        sum = sum.wrapping_sub(<$ucoeff>::MAX);
-                                    }
-                                    if sum < IDK {
+                                    sum = if hi.signbit() {
+                                        sum.wrapping_add(1)
+                                    } else {
+                                        sum.wrapping_sub(1)
+                                    };
+                                    // For context, see the
+                                    // comments in the
+                                    // `ToPositiveInf` case.
+                                    if sum < MAX_POW10 {
                                         exp -= 1;
                                         sum = <$name>::MAX_COEFF as $ucoeff;
-                                    } else if sum >= IDK * 10 {
+                                    } else if sum > <$name>::MAX_COEFF as $ucoeff {
                                         exp += 1;
-                                        sum = IDK;
+                                        sum = MAX_POW10;
                                     }
                                 }
                             }
                             $crate::RoundingMode::ToZero => {
                                 if hi.signbit() != lo.signbit() {
                                     sum -= 1;
-                                    if sum < IDK {
+                                    if sum < MAX_POW10 {
                                         exp -= 1;
                                         sum = <$name>::MAX_COEFF as $ucoeff;
                                     }
