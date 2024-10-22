@@ -131,6 +131,7 @@ macro_rules! impl_basic {
         }
 
         /// The maximum shift that does not overflow `$full`.
+        #[allow(dead_code)]
         pub const MAX_SHIFT: u32 = (NUM_POW10 - 1) as u32;
 
         const NUM_POW10: usize = {

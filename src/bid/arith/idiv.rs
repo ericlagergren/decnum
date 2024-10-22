@@ -440,7 +440,7 @@ mod tests {
             }
 
             let u = pack64(u1, u0);
-            let mut v = pack64(v1, v0);
+            let v = pack64(v1, v0);
 
             let got = Divisor128::new(v).quorem(u);
             let want = golden(u, v);

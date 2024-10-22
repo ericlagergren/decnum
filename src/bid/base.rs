@@ -586,18 +586,24 @@ macro_rules! impl_dec_internal {
                     let (mut q, r) = $arith::shr(coeff, shift as u32);
                     match self.rounding {
                         $crate::RoundingMode::ToNearestEven => {
+                            // TODO(eric): What if `shift` is out
+                            // of range?
                             let half = $arith::point5(shift as u32);
                             if r > half || (r == half && q % 2 != 0) {
                                 q += 1;
                             }
                         }
                         $crate::RoundingMode::ToNearestAway => {
+                            // TODO(eric): What if `shift` is out
+                            // of range?
                             let half = $arith::point5(shift as u32);
                             if r >= half {
                                 q += 1;
                             }
                         }
                         $crate::RoundingMode::ToNearestTowardZero => {
+                            // TODO(eric): What if `shift` is out
+                            // of range?
                             let half = $arith::point5(shift as u32);
                             if r > half {
                                 q += 1;
@@ -1063,76 +1069,97 @@ macro_rules! impl_dec_arith_ctx {
 
                     if shift > <$name>::DIGITS {
                         // The coefficients still do not overlap,
-                        // so `lo` only matters for rounding. For
-                        // example:
+                        // so `lo` only matters in two cases:
                         //
-                        // P=3
-                        // sum = 123e5 + 456e0
-                        //     = (123 * 10^5) + (456 * 10^0)
+                        // 1. If it changes the number of digits
+                        //    in the result.
+                        // 2. For rounding.
+                        //
+                        // For example, given P=3:
+                        //
+                        // sum = 123e5 + 456
+                        //     = (123 * 10^5) + 456
                         //     = 12300000 + 456
                         //     = 12300456
+                        // q = 123
+                        // r = 00456
                         //
-                        // Rounding `sum` to P=3, we get
-                        //    q = 123
-                        //    r = 00456
-                        // This gets rounded to
-                        //  - 123 for `ToNearest*`, `ToZero`, and
-                        //    `ToNegativeInf`
-                        //  - 124 for `AwayFromZero` and
-                        //    `ToPositiveInf`
+                        // sum = 1e5 + 999
+                        //     = (1 * 10^5) + 999
+                        //     = 100000 + 999
+                        //     = 100999
+                        // q = 100
+                        // r = 999
 
                         debug!("shift = {shift}");
 
                         let sign = hi.signbit();
+                        let mut exp = hi.unbiased_exp() - delta as $unbiased;
 
-                        let (mut q, r) = (x, y);
-                        debug!("q = {q}");
+                        let mut sum = x;
+                        debug!("sum = {sum}");
+
+                        const IDK: $ucoeff = (1 + <$name>::MAX_COEFF as $ucoeff) / 10;
+
+                        debug!("IDK = {IDK}");
+
+                        let r = y;
                         debug!("r = {r}");
+
                         match self.rounding {
-                            $crate::RoundingMode::ToNearestEven => {
-                                if (shift as u32) <= $arith::MAX_SHIFT {
-                                    let half = $arith::point5(shift as u32);
-                                    debug!("half = {half}");
-                                    if r > half || (r == half && q % 2 != 0) {
-                                        q += 1;
-                                    }
-                                }
-                            }
-                            $crate::RoundingMode::ToNearestTowardZero => {
-                                if (shift as u32) <= $arith::MAX_SHIFT {
-                                    let half = $arith::point5(shift as u32);
-                                    debug!("half = {half}");
-                                    if r >= half {
-                                        q += 1;
-                                    }
-                                }
+                            $crate::RoundingMode::ToNearestEven
+                            | $crate::RoundingMode::ToNearestTowardZero => {
+                                // TODO
                             }
                             $crate::RoundingMode::AwayFromZero => {
-                                if r != 0 {
-                                    q += 1;
-                                }
+                                // TODO
                             }
                             $crate::RoundingMode::ToPositiveInf => {
-                                if r != 0 && !sign {
-                                    q += 1;
+                                if r != 0 && !lo.signbit() {
+                                    if hi.signbit() {
+                                        sum = sum.wrapping_add(<$ucoeff>::MAX);
+                                    }
+                                    if sum < IDK {
+                                        exp -= 1;
+                                        sum = <$name>::MAX_COEFF as $ucoeff;
+                                    } else if sum >= IDK * 10 {
+                                        exp += 1;
+                                        sum = IDK;
+                                    }
                                 }
                             }
                             $crate::RoundingMode::ToNegativeInf => {
-                                if r != 0 && sign {
-                                    q += 1;
+                                if r != 0 && lo.signbit() {
+                                    if hi.signbit() {
+                                        sum = sum.wrapping_sub(<$ucoeff>::MAX);
+                                    }
+                                    if sum < IDK {
+                                        exp -= 1;
+                                        sum = <$name>::MAX_COEFF as $ucoeff;
+                                    } else if sum >= IDK * 10 {
+                                        exp += 1;
+                                        sum = IDK;
+                                    }
                                 }
                             }
-                            $crate::RoundingMode::ToZero => {}
+                            $crate::RoundingMode::ToZero => {
+                                if hi.signbit() != lo.signbit() {
+                                    sum -= 1;
+                                    if sum < IDK {
+                                        exp -= 1;
+                                        sum = <$name>::MAX_COEFF as $ucoeff;
+                                    }
+                                }
+                            }
                             // TODO(eric): Other rounding modes?
                             _ => {}
                         }
 
-                        let exp = hi.unbiased_exp() - delta as $unbiased;
                         debug!("sign = {sign}");
                         debug!("exp - delta = {exp}");
-                        debug!("sum = {q}");
+                        debug!("sum = {sum}");
 
-                        return <$name>::from_parts(sign, exp, q);
+                        return <$name>::from_parts(sign, exp, sum);
                     }
                 }
                 debug_assert!(shift <= <$name>::DIGITS);
@@ -1275,30 +1302,35 @@ macro_rules! impl_dec_arith_ctx {
                 debug!("delta = {delta}");
 
                 // x -= 10^(DIGITS-shift)
-                debug!("x = {x}");
+                debug!("A x = {x}");
                 x -= $arith::pow10(<$name>::DIGITS - shift);
-                debug!("x = {x}");
+                debug!("B x = {x}");
                 x = ((x as $icoeff) * ($arith::pow10(delta) as $icoeff)) as $ucoeff;
                 //x = $arith::shl(x, delta).0;
-                debug!("x = {x}");
+                debug!("C x = {x}");
 
                 // SAFETY: TODO
                 let extra = unsafe { shift.unchecked_sub(delta) };
 
-                debug!("y = {y}");
+                debug!("A y = {y}");
+
                 if hi.signbit() != lo.signbit() {
+                    // Subtraction.
                     y = y.wrapping_add(<$ucoeff>::MAX);
                     y ^= <$ucoeff>::MAX;
                 }
-                debug!("y = {y}");
+                debug!("B y = {y}");
+
                 y = y.wrapping_add($arith::pow10(<$name>::DIGITS));
-                debug!("y = {y}");
+                debug!("C y = {y}");
+
                 if self.rounding.needs_pt5() {
                     y += $arith::point5(extra);
-                    debug!("y = {y}");
+                    debug!("D y = {y}");
                 }
+
                 let (y, r) = $arith::shr(y, extra);
-                debug!("y = {y}");
+                debug!("E y = {y}");
                 debug!("r = {r}");
 
                 let mut sum = x + y;

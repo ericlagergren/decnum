@@ -21,3 +21,21 @@ macro_rules! trait_impls {
 trait_impls!(Bid32, dfp::Bid32);
 trait_impls!(Bid64, dfp::Bid64);
 trait_impls!(Bid128, dfp::Bid128);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wat() {
+        use dfp::{Bid64, Ctx, RoundingMode};
+
+        let ctx = Ctx::<Bid64>::new().with_rounding(RoundingMode::ToNearestEven);
+        let lhs = ctx.parse("1E+2").unwrap();
+        let rhs = ctx.parse("-1E-6143").unwrap();
+        let ctx = Ctx::<Bid64>::new().with_rounding(RoundingMode::ToZero);
+        let sum = ctx.add(lhs, rhs);
+        println!("{lhs} + {rhs} = {sum}");
+        assert!(false);
+    }
+}

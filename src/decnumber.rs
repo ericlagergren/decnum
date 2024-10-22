@@ -3,6 +3,7 @@
 use std::{
     ffi::{c_char, c_int, CStr, CString},
     fmt,
+    ops::Add,
 };
 
 use decnumber_sys::*;
@@ -11,6 +12,20 @@ use crate::{
     bid::{Bid128, Bid64},
     dpd::Dpd128,
 };
+
+fn ctx64() -> decContext {
+    let mut ctx = decContext {
+        digits: 0,
+        emax: 0,
+        emin: 0,
+        round: 0,
+        traps: 0,
+        status: 0,
+        clamp: 0,
+    };
+    unsafe { decContextDefault(&mut ctx, DEC_INIT_DECIMAL64) };
+    ctx
+}
 
 fn ctx128() -> decContext {
     let mut ctx = decContext {
@@ -43,9 +58,9 @@ impl Quad {
             }
             bcd
         };
-        let mut d = decQuad { bytes: [0u8; 16] };
-        unsafe { decQuadFromBCD(&mut d, exp as i32, bcd.as_ptr().cast(), sign) };
-        Self(d)
+        let mut d = Self::default();
+        unsafe { decQuadFromBCD(&mut d.0, exp as i32, bcd.as_ptr().cast(), sign) };
+        d
     }
 
     pub fn from_u32(coeff: u32) -> Self {
@@ -79,10 +94,16 @@ impl Quad {
 
     pub fn parse(s: &str) -> Self {
         let s = CString::new(s).unwrap();
-        let mut d = decQuad { bytes: [0u8; 16] };
+        let mut d = Self::default();
         let mut ctx = ctx128();
-        unsafe { decQuadFromString(&mut d, s.as_ptr(), &mut ctx) };
-        Self(d)
+        unsafe { decQuadFromString(&mut d.0, s.as_ptr(), &mut ctx) };
+        d
+    }
+}
+
+impl Default for Quad {
+    fn default() -> Self {
+        Self(decQuad { bytes: [0u8; 16] })
     }
 }
 
@@ -116,6 +137,18 @@ impl PartialEq<Quad> for Bid128 {
 impl PartialEq<Bid128> for Quad {
     fn eq(&self, other: &Bid128) -> bool {
         other.to_dpd() == *self
+    }
+}
+
+impl Add for Quad {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        let mut sum = Self::default();
+        let mut ctx = ctx128();
+        ctx.round = DEC_ROUND_DOWN;
+        unsafe { decQuadAdd(&mut sum.0, &self.0, &rhs.0, &mut ctx) };
+        sum
     }
 }
 
@@ -166,19 +199,8 @@ impl Double {
     pub fn parse(s: &str) -> Self {
         let s = CString::new(s).unwrap();
         let mut d = decDouble { bytes: [0u8; 8] };
-        let ctx = unsafe {
-            let mut ctx = decContext {
-                digits: 0,
-                emax: 0,
-                emin: 0,
-                round: 0,
-                traps: 0,
-                status: 0,
-                clamp: 0,
-            };
-            decContextDefault(&mut ctx, DEC_INIT_DECIMAL64)
-        };
-        unsafe { decDoubleFromString(&mut d, s.as_ptr(), ctx) };
+        let mut ctx = ctx64();
+        unsafe { decDoubleFromString(&mut d, s.as_ptr(), &mut ctx) };
         Self(d)
     }
 }
@@ -203,3 +225,17 @@ impl PartialEq<Double> for Quad {
         true // TODO
     }
 }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+
+//     #[test]
+//     fn test_wat() {
+//         let lhs = Quad::parse("1E+2");
+//         let rhs = Quad::parse("-1E-6143");
+//         let sum = lhs + rhs;
+//         println!("{lhs} + {rhs} = {sum}");
+//         assert!(false);
+//     }
+// }
