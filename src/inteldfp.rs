@@ -31,9 +31,8 @@ mod tests {
         use dfp::{Bid64, Ctx, RoundingMode};
 
         let ctx = Ctx::<Bid64>::new().with_rounding(RoundingMode::ToNearestEven);
-        let lhs = ctx.parse("1E+2").unwrap();
-        let rhs = ctx.parse("-1E-6143").unwrap();
-        let ctx = Ctx::<Bid64>::new().with_rounding(RoundingMode::ToZero);
+        let lhs = ctx.parse("1E+34").unwrap();
+        let rhs = ctx.parse("-0.5001").unwrap();
         let sum = ctx.add(lhs, rhs);
         println!("{lhs} + {rhs} = {sum}");
         assert!(false);

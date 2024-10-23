@@ -12,6 +12,10 @@ pub struct u256 {
 }
 
 impl u256 {
+    const fn zero() -> Self {
+        Self { lo: 0, hi: 0 }
+    }
+
     /// Creates a `u256`.
     pub const fn new(lo: u128) -> Self {
         Self { lo, hi: 0 }
@@ -51,5 +55,33 @@ impl u256 {
 
     pub const fn bitlen(self) -> u32 {
         arith128::bitlen(self.hi) + arith128::bitlen(self.lo)
+    }
+
+    pub const fn const_shl(self, n: u32) -> Self {
+        if n > 128 {
+            Self {
+                lo: 0,
+                hi: self.lo << (n - 128),
+            }
+        } else {
+            Self {
+                lo: self.lo << n,
+                hi: (self.hi << n) | (self.lo >> (128 - n)),
+            }
+        }
+    }
+
+    pub const fn const_shr(self, n: u32) -> Self {
+        if n > 128 {
+            Self {
+                lo: self.hi >> (n - 128),
+                hi: 0,
+            }
+        } else {
+            Self {
+                lo: (self.lo >> n) | (self.hi >> (128 - n)),
+                hi: self.hi >> n,
+            }
+        }
     }
 }

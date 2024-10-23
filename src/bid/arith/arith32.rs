@@ -1,18 +1,20 @@
-use super::idiv::{div2x1, Divisor32};
+use super::idiv::{div2x1, Divisor2x1};
 
 super::impl_basic!(u32, u16);
 
-const fn quorem(u: u32, d: Divisor32) -> (u32, u32) {
-    let Divisor32 { d, v, s } = d;
+type Divisor = Divisor2x1<u32, u64>;
+
+const fn quorem(u: u32, d: Divisor) -> (u32, u32) {
+    let Divisor { d, v, s } = d;
     let (q, r) = div2x1(0, u as u64, d as u64, v as u64, s);
     (q as u32, r as u32)
 }
 
-#[allow(dead_code)]
-const fn wide_quorem(u: u64, d: Divisor32) -> (u64, u64) {
-    let Divisor32 { d, v, s } = d;
-    let (q, r) = div2x1(0, u as u64, d as u64, v as u64, s);
-    (q, r)
+const fn wide_quorem(u1: u32, u0: u32, d: Divisor) -> (u32, u32) {
+    let Divisor { d, v, s } = d;
+    let u = ((u1 as u64) << 32) | (u0 as u64);
+    let (q, r) = div2x1(0, u, d as u64, v as u64, s);
+    (q as u32, r as u32)
 }
 
 const fn umulh(lhs: u32, rhs: u32) -> u32 {
@@ -40,11 +42,11 @@ const RECIP10: [(u32, u32, u32); NUM_POW10] = [
     (9, 7, 281475),      // 10^9
 ];
 
-const RECIP10_IMPROVED: [Divisor32; NUM_POW10] = {
-    let mut table = [Divisor32::uninit(); NUM_POW10];
+const RECIP10_IMPROVED: [Divisor; NUM_POW10] = {
+    let mut table = [Divisor::uninit(); NUM_POW10];
     let mut i = 0;
     while i < table.len() {
-        table[i] = Divisor32::new(pow10(i as u32));
+        table[i] = Divisor::new(pow10(i as u32));
         i += 1;
     }
     table

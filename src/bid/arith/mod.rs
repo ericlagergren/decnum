@@ -8,6 +8,7 @@ pub mod uint256;
 mod util;
 
 // TODO(eric): get rid of `$half`?
+// TODO(eric): rename `$half` to `$word`?
 macro_rules! impl_basic {
     ($full:ty, $half:ty) => {
         /// Returns the minimum number of bits required to
@@ -231,7 +232,6 @@ macro_rules! impl_basic {
             (q, r)
         }
 
-        /*
         /// Returns the quotient and remainder `(q, r)` such that
         ///
         /// ```text
@@ -247,9 +247,8 @@ macro_rules! impl_basic {
                 reason = "Calling code always checks that `n` is in range"
             )]
             let d = RECIP10_IMPROVED[n as usize];
-            return wide_quorem(hi, lo, d);
+            wide_quorem(hi, lo, d)
         }
-        */
 
         #[cfg(test)]
         mod tests {

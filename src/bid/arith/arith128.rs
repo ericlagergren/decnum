@@ -1,4 +1,4 @@
-use super::idiv::{div2x1, div3x2, div4x2, Divisor128};
+use super::idiv::{div2x1, div3x2, div4x1, div4x2, Divisor2x1, Divisor3x2};
 
 super::impl_basic!(u128, u64);
 
@@ -21,8 +21,7 @@ const fn quorem(u: u128, d: Divisor128) -> (u128, u128) {
     }
 }
 
-#[allow(dead_code)]
-const fn wide_quorem(u1: u128, u0: u128, d: Divisor128) -> ((u128, u128), u128) {
+const fn wide_quorem(u1: u128, u0: u128, d: Divisor128) -> (u128, u128) {
     let Divisor128 { d, v, s } = d;
 
     let d1 = (d >> 64) as u64;
@@ -38,13 +37,40 @@ const fn wide_quorem(u1: u128, u0: u128, d: Divisor128) -> ((u128, u128), u128) 
         let (q1, r) = div2x1(r, u1, d0, v, s);
         let (q0, r) = div2x1(r, u0, d0, v, s);
 
-        let hi = ((q3 as u128) << 64) | (q2 as u128);
-        let lo = ((q1 as u128) << 64) | (q0 as u128);
+        debug_assert!(q3 == 0);
+        debug_assert!(q2 == 0);
 
-        ((hi, lo), r as u128)
+        let q = ((q1 as u128) << 64) | (q0 as u128);
+        (q, r as u128)
     } else {
-        let (q, r) = div4x2(u1, u0, d, v as u128, s);
-        ((0, q), r)
+        div4x2(u1, u0, d, v as u128, s)
+    }
+}
+
+fn wide_quorem2(u1: u128, u0: u128, d: Divisor128) -> (u128, u128) {
+    let Divisor128 { d, v, s } = d;
+
+    let d1 = (d >> 64) as u64;
+    let d0 = d as u64;
+    println!("d1={d1} d0={d0}");
+    if d1 == 0 {
+        let u3 = (u1 >> 64) as u64;
+        let u2 = u1 as u64;
+        let u1 = (u0 >> 64) as u64;
+        let u0 = u0 as u64;
+
+        let (q3, r) = div2x1(0, u3, d0, v, s);
+        let (q2, r) = div2x1(r, u2, d0, v, s);
+        let (q1, r) = div2x1(r, u1, d0, v, s);
+        let (q0, r) = div2x1(r, u0, d0, v, s);
+
+        debug_assert!(q3 == 0);
+        debug_assert!(q2 == 0);
+
+        let q = ((q1 as u128) << 64) | (q0 as u128);
+        (q, r as u128)
+    } else {
+        div4x2(u1, u0, d, v as u128, s)
     }
 }
 
@@ -160,5 +186,35 @@ mod tests2 {
 
         println!("q = {}", x / 10u128.pow(24));
         println!("r = {}", x % 10u128.pow(24));
+    }
+
+    #[test]
+    fn test_wide_quorem() {
+        const DIGITS: u32 = 34;
+        const MAX: u128 = u128::pow(10, DIGITS) - 1;
+        for s in 0..=DIGITS {
+            let (u0, mut u1) = widening_mul(MAX, u128::pow(10, s));
+            let (u0, carry) = u0.overflowing_add(MAX);
+            if carry {
+                u1 += 1;
+            }
+            let (u0, carry) = u0.overflowing_add(super::super::util::point5(s));
+            if carry {
+                u1 += 1;
+            }
+            let v = u128::pow(10, s);
+            let d = Divisor128::new(v);
+            let got = wide_quorem2(u1, u0, d);
+
+            #[allow(non_camel_case_types)]
+            type u256 = ruint::Uint<256, 4>;
+            let u = u256::from_limbs([u0 as u64, (u0 >> 64) as u64, u1 as u64, (u1 >> 64) as u64]);
+            let v = u256::from_limbs([v as u64, (v >> 64) as u64, 0, 0]);
+            let want: (u128, u128) = (
+                (u / v).try_into().unwrap(), // q
+                (u % v).try_into().unwrap(), // r
+            );
+            assert_eq!(got, want, "#{s}: {u} / {v}");
+        }
     }
 }

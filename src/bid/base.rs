@@ -1155,8 +1155,7 @@ macro_rules! impl_dec_arith_ctx {
                                     } else {
                                         sum.wrapping_sub(1)
                                     };
-                                    // For context, see the
-                                    // comments in the
+                                    // See the comments in the
                                     // `ToPositiveInf` case.
                                     if sum < MAX_POW10 {
                                         exp -= 1;
@@ -1317,48 +1316,19 @@ macro_rules! impl_dec_arith_ctx {
                     };
                 }
 
-                // The compiler does not understand that this
-                // will never wrap.
-                //
-                // SAFETY: `digits(MAX_COEFF) == DIGITS`, so
-                // this will never wrap. See the above
-                // assertion.
-                let delta = unsafe { <$name>::DIGITS.unchecked_sub($arith::digits(x)) };
-                debug!("delta = {delta}");
-
-                // x -= 10^(DIGITS-shift)
-                debug!("A x = {x}");
-                x -= $arith::pow10(<$name>::DIGITS - shift);
-                debug!("B x = {x}");
-                x = ((x as $icoeff) * ($arith::pow10(delta) as $icoeff)) as $ucoeff;
-                //x = $arith::shl(x, delta).0;
-                debug!("C x = {x}");
-
-                // SAFETY: TODO
-                let extra = unsafe { shift.unchecked_sub(delta) };
-
-                debug!("A y = {y}");
-
-                if hi.signbit() != lo.signbit() {
-                    // Subtraction.
-                    y = y.wrapping_add(<$ucoeff>::MAX);
-                    y ^= <$ucoeff>::MAX;
+                let (xlo, mut xhi) = $arith::shl(x, shift);
+                let (mut xlo, mut carry) = xlo.overflowing_add(y);
+                if carry {
+                    xhi += 1;
                 }
-                debug!("B y = {y}");
-
-                y = y.wrapping_add($arith::pow10(<$name>::DIGITS));
-                debug!("C y = {y}");
-
                 if self.rounding.needs_pt5() {
-                    y += $arith::point5(extra);
-                    debug!("D y = {y}");
+                    (xlo, carry) = xlo.overflowing_add($arith::point5(shift));
+                    if carry {
+                        xhi += 1;
+                    }
                 }
 
-                let (y, r) = $arith::shr(y, extra);
-                debug!("E y = {y}");
-                debug!("r = {r}");
-
-                let mut sum = x + y;
+                let (mut sum, r) = $arith::shr2(xlo, xhi, shift);
                 match self.rounding {
                     $crate::RoundingMode::ToNearestEven => {
                         if sum % 2 != 0 && r == 0 {
@@ -1402,17 +1372,125 @@ macro_rules! impl_dec_arith_ctx {
                     lo.signbit()
                 };
 
-                let exp = lo.unbiased_exp() + (shift - delta) as $unbiased;
-
-                debug!("exp = {exp}");
-                debug!("sum = {sum}");
-
-                if exp <= <$name>::MAX_UNBIASED_EXP {
+                let exp = lo.unbiased_exp() + shift as $unbiased;
+                return if exp <= <$name>::MAX_UNBIASED_EXP {
                     <$name>::from_parts(sign, exp, sum)
                 } else {
                     let digits = $arith::digits(sum);
                     self.round_exp(sign, exp, sum, digits)
-                }
+                };
+
+                /*
+                    // The compiler does not understand that this
+                    // will never wrap.
+                    //
+                    // SAFETY: `digits(MAX_COEFF) == DIGITS`, so
+                    // this will never wrap. See the above
+                    // assertion.
+                    let delta = unsafe { <$name>::DIGITS.unchecked_sub($arith::digits(x)) };
+                    debug!("delta = {delta}");
+
+                    // shift = [0, DIGITS]
+                    // sum = (x * 10^shift) + y
+                    //     = (x - 10^(16-shift)) * 10^(DIGITS-digits(x))
+                    //          + y + 10^DIGITS
+
+                    // T1 = 10^(16-shift)
+                    //
+                    // k = 16-digits(x)
+                    // x = (x - T1) * 10^k
+                    //   = (x - T1) * 10^(16-digits(x))
+                    //   = (x - 10^(16-shift)) * 10^(16-digits(x))
+
+                    // x -= 10^(DIGITS-shift)
+                    debug!("A x = {x}");
+                    x -= $arith::pow10(<$name>::DIGITS - shift);
+                    debug!("B x = {x}");
+                    // x = ((x as $icoeff) * ($arith::pow10(delta) as $icoeff)) as $ucoeff;
+                    x = $arith::shl(x, delta).0;
+                    debug!("C x = {x}");
+
+                    // SAFETY: TODO
+                    let extra = unsafe { shift.unchecked_sub(delta) };
+
+                    debug!("A y = {y}");
+
+                    if hi.signbit() != lo.signbit() {
+                        // Subtraction.
+                        y = y.wrapping_add(<$ucoeff>::MAX);
+                        y ^= <$ucoeff>::MAX;
+                    }
+                    debug!("B y = {y}");
+
+                    // y += 10^DIGITS
+                    y = y.wrapping_add($arith::pow10(<$name>::DIGITS));
+                    debug!("C y = {y}");
+
+                    if self.rounding.needs_pt5() {
+                        y = y.wrapping_add($arith::point5(extra));
+                        debug!("D y = {y}");
+                    }
+
+                    let (y, r) = $arith::shr(y, extra);
+                    debug!("E y = {y}");
+                    debug!("r = {r}");
+
+                    let mut sum = x + y;
+                    match self.rounding {
+                        $crate::RoundingMode::ToNearestEven => {
+                            if sum % 2 != 0 && r == 0 {
+                                sum -= 1
+                            }
+                        }
+                        $crate::RoundingMode::ToNearestTowardZero => {
+                            if r == 0 {
+                                sum -= 1
+                            }
+                        }
+                        $crate::RoundingMode::AwayFromZero => {
+                            if r != 0 {
+                                sum += 1;
+                            }
+                        }
+                        $crate::RoundingMode::ToPositiveInf => {
+                            if r != 0 && !lo.signbit() {
+                                sum += 1;
+                            }
+                        }
+                        $crate::RoundingMode::ToNegativeInf => {
+                            if r != 0 && lo.signbit() {
+                                sum += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    let sign = if sum == 0 {
+                        // The sign of a zero is also zero unless
+                        // both operands are negative or the signs
+                        // differ and the rounding mode is
+                        // `ToNegativeInf`.
+                        (hi.signbit() && lo.signbit())
+                            || (hi.signbit() != lo.signbit()
+                                && matches!(self.rounding, $crate::RoundingMode::ToNegativeInf))
+                    } else if x > y {
+                        hi.signbit()
+                    } else {
+                        lo.signbit()
+                    };
+
+                    let exp = lo.unbiased_exp() + (shift - delta) as $unbiased;
+
+                    debug!("exp = {exp}");
+                    debug!("sum = {sum}");
+
+                    if exp <= <$name>::MAX_UNBIASED_EXP {
+                        <$name>::from_parts(sign, exp, sum)
+                    } else {
+                        let digits = $arith::digits(sum);
+                        self.round_exp(sign, exp, sum, digits)
+                    }
+                */
             }
 
             /// Returns `lhs / rhs`.

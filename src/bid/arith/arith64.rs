@@ -1,19 +1,17 @@
-use super::idiv::{div2x1, Divisor64};
+use super::idiv::{div2x1, Divisor2x1};
 
 super::impl_basic!(u64, u32);
 
-const fn quorem(u: u64, d: Divisor64) -> (u64, u64) {
-    let Divisor64 { d, v, s } = d;
+type Divisor = Divisor2x1<u64, u64>;
+
+const fn quorem(u: u64, d: Divisor) -> (u64, u64) {
+    let Divisor { d, v, s } = d;
     div2x1(0, u, d, v, s)
 }
 
-#[allow(dead_code)]
-const fn wide_quorem(u1: u64, u0: u64, d: Divisor64) -> (u128, u128) {
-    let Divisor64 { d, v, s } = d;
-    let (q1, r) = div2x1(0, u1, d, v, s);
-    let (q0, r) = div2x1(r, u0, d, v, s);
-    let q = ((q1 as u128) << 64) | (q0 as u128);
-    (q, r as u128)
+const fn wide_quorem(u1: u64, u0: u64, d: Divisor) -> (u64, u64) {
+    let Divisor { d, v, s } = d;
+    div2x1(u1, u0, d, v, s)
 }
 
 const fn umulh(lhs: u64, rhs: u64) -> u64 {
@@ -51,12 +49,37 @@ const RECIP10: [(u32, u32, u64); NUM_POW10] = [
     (0, 62, 8507059173023461587),  // 10^19
 ];
 
-const RECIP10_IMPROVED: [Divisor64; NUM_POW10] = {
-    let mut table = [Divisor64::uninit(); NUM_POW10];
+const RECIP10_IMPROVED: [Divisor; NUM_POW10] = {
+    let mut table = [Divisor::uninit(); NUM_POW10];
     let mut i = 0;
     while i < table.len() {
-        table[i] = Divisor64::new(pow10(i as u32));
+        table[i] = Divisor::new(pow10(i as u32));
         i += 1;
     }
     table
 };
+
+#[cfg(test)]
+mod tests2 {
+    use super::*;
+
+    #[test]
+    fn test_wide_quorem() {
+        const DIGITS: u32 = 16;
+        const MAX: u64 = u64::pow(10, DIGITS) - 1;
+        for s in 0..=DIGITS {
+            let x = MAX as u128 * u128::pow(10, s);
+            let y = MAX as u128;
+            let r = super::super::util::point5(s);
+            let sum = x + y + r;
+            let v = u64::pow(10, s);
+            let d = Divisor::new(v);
+            let got = wide_quorem((sum >> 64) as u64, sum as u64, d);
+            let want = (
+                (sum / v as u128).try_into().unwrap(),
+                (sum % v as u128).try_into().unwrap(),
+            );
+            assert_eq!(got, want, "#{s}: {sum} / {v}");
+        }
+    }
+}
