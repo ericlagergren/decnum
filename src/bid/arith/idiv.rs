@@ -5,303 +5,121 @@
 
 use crate::util::{unlikely, unpredictable};
 
-// TODO(eric): The API `fn quorem(self, u: T)` requires the
-// compiler to perform a bunch of moves to swap `self` and `u`.
-// We should benchmark to see if it matters and, if so, update
-// the API.
+pub(super) const fn recip2x1(mut d: u64) -> (u64, u64, u32) {
+    assert!(d != 0);
 
-/// A 32-bit divisor.
-#[derive(Copy, Clone, Debug)]
-pub struct Divisor32 {
-    pub d: u64, // divisor
-    pub v: u64, // reciprocal
-    pub s: u32, // shift
+    let s = d.leading_zeros();
+    d <<= s;
+    let x = pack64(!d, u64::MAX);
+    let v = (x / (d as u128)) as u64;
+    (d, v, s)
 }
 
-impl Divisor32 {
-    pub const fn uninit() -> Self {
-        Self { d: 0, v: 0, s: 0 }
+pub(super) const fn recip3x2(d: u128) -> (u128, u64, u32) {
+    assert!(d != 0);
+
+    let mut d1 = (d >> 64) as u64;
+    let mut d0 = d as u64;
+
+    let s = d1.leading_zeros();
+    if s != 0 {
+        d1 = (d1 << s) | (d0 >> (64 - s));
+        d0 <<= s;
     }
 
-    pub const fn new(d: u32) -> Self {
-        assert!(d != 0);
-
-        let Divisor64 { d, v, s } = Divisor64::new(d as u64);
-        Self { d, v, s }
+    let mut v = recip2x1(d1).1;
+    let mut p = d1.wrapping_mul(v).wrapping_add(d0);
+    if p < d0 {
+        v -= 1;
+        if p >= d1 {
+            v -= 1;
+            p -= d1;
+        }
+        p = p.wrapping_sub(d1);
     }
+    let (t1, t0) = umul64(v, d0);
+    p = p.wrapping_add(t1);
+    if p < t1 {
+        v -= 1;
+        if pack64(p, t0) >= pack64(d1, d0) {
+            v -= 1;
+        }
+    }
+    let d = pack64(d1, d0);
+    (d, v, s)
+}
 
-    /// Compute the quotient and remainder `(q, r)` where
+pub(super) const fn recip4x2(mut d: u128) -> (u128, u128, u32) {
+    assert!(d != 0);
+
+    /// Returns `(q, r)` such that
     ///
     /// ```text
-    /// q = u / self
-    /// r = u % self
+    /// q = (u1, u0) / v
+    /// r = (u1, u0) % v
     /// ```
-    #[allow(dead_code)]
-    pub const fn quorem(self, u: u32) -> (u32, u32) {
-        let (q, r) = div2x1(0, u as u64, self.d as u64, self.v as u64, self.s);
-        (q as u32, r as u32)
-    }
-}
+    const fn div4x2(u1: u128, u0: u128, mut v: u128) -> (u128, u128) {
+        assert!(v != 0);
+        assert!(v > u1);
 
-/// A 64-bit divisor.
-#[derive(Copy, Clone, Debug)]
-pub struct Divisor64 {
-    pub d: u64, // divisor
-    pub v: u64, // reciprocal
-    pub s: u32, // shift
-}
-
-impl Divisor64 {
-    pub const fn uninit() -> Self {
-        Self { d: 0, v: 0, s: 0 }
-    }
-
-    pub const fn new(mut d: u64) -> Self {
-        assert!(d != 0);
-
-        let s = d.leading_zeros();
-        d <<= s;
-        let x = pack64(!d, u64::MAX);
-        let v = (x / (d as u128)) as u64;
-        Self { d, v, s }
-    }
-
-    /// Compute the quotient and remainder `(q, r)` where
-    ///
-    /// ```text
-    /// q = u / self
-    /// r = u % self
-    /// ```
-    #[allow(dead_code)]
-    pub const fn quorem(self, u: u64) -> (u64, u64) {
-        div2x1(0, u, self.d, self.v, self.s)
-    }
-}
-
-/// A divisor for 2x1 division.
-#[derive(Copy, Clone, Debug)]
-pub(super) struct Divisor2x1<D, V> {
-    pub d: D,   // divisor
-    pub v: V,   // reciprocal
-    pub s: u32, // shift
-}
-
-impl Divisor2x1<u32, u64> {
-    pub const fn uninit() -> Self {
-        Self { d: 0, v: 0, s: 0 }
-    }
-
-    pub const fn new(d: u32) -> Self {
-        assert!(d != 0);
-
-        let Divisor64 { d, v, s } = Divisor64::new(d as u64);
-        Self { d: d as u32, v, s }
-    }
-}
-
-impl Divisor2x1<u64, u64> {
-    pub const fn uninit() -> Self {
-        Self { d: 0, v: 0, s: 0 }
-    }
-
-    pub const fn new(mut d: u64) -> Self {
-        assert!(d != 0);
-
-        let s = d.leading_zeros();
-        d <<= s;
-        let x = pack64(!d, u64::MAX);
-        let v = (x / (d as u128)) as u64;
-        Self { d, v, s }
-    }
-}
-
-impl Divisor2x1<u128, u128> {
-    pub const fn uninit() -> Self {
-        Self { d: 0, v: 0, s: 0 }
-    }
-
-    pub const fn new(mut d: u128) -> Self {
-        assert!(d != 0);
-
-        const fn div128(u1: u128, u0: u128, mut v: u128) -> (u128, u128) {
-            assert!(v != 0);
-            assert!(v > u1);
-
-            let s = v.leading_zeros();
-            v <<= s;
-            let vn1 = v >> 64;
-            let vn0 = v as u64 as u128;
-
-            let un32 = (u1 << s) | (u0 >> (128 - s));
-            let un10 = u0 << s;
-            let un1 = un10 >> 64;
-            let un0 = un10 as u64 as u128;
-
-            let mut q1 = un32 / vn1;
-            let mut rhat = un32 % vn1;
-
-            const TWO64: u128 = 1 << 64;
-
-            while q1 >= TWO64 || q1 * vn0 > TWO64 * rhat + un1 {
-                q1 -= 1;
-                rhat += vn1;
-                if rhat >= TWO64 {
-                    break;
-                }
-            }
-
-            let un21 = un32 * TWO64 + un1 - q1 * v;
-            let mut q0 = un21 / vn1;
-            let mut rhat = un21 - q0 * vn1;
-
-            while q0 >= TWO64 || q0 * vn0 > TWO64 * rhat + un0 {
-                q0 -= 1;
-                rhat += vn1;
-                if rhat >= TWO64 {
-                    break;
-                }
-            }
-
-            (q1 * TWO64 + q0, (un21 * TWO64 + un0 - q0 * v) >> s)
+        if u1 == 0 {
+            return (u0 / v, u0 % v);
         }
 
-        let s = d.leading_zeros();
-        d <<= s;
-        let v = div128(!d, u128::MAX, d).0;
-        Self { d, v, s }
-    }
-}
+        let s = v.leading_zeros();
+        v <<= s;
+        let vn1 = v >> 64;
+        let vn0 = v as u64 as u128;
 
-/// A divisor for 3x2 division.
-#[derive(Copy, Clone, Debug)]
-pub(super) struct Divisor3x2<D, V> {
-    pub d: D,   // divisor
-    pub v: V,   // reciprocal
-    pub s: u32, // shift
-}
-
-impl Divisor3x2<u128, u64> {
-    pub const fn uninit() -> Self {
-        Self { d: 0, v: 0, s: 0 }
-    }
-
-    pub const fn new(d: u128) -> Self {
-        assert!(d != 0);
-
-        let mut d1 = (d >> 64) as u64;
-        let mut d0 = d as u64;
-
-        if d1 == 0 {
-            let Divisor64 { d, v, s } = Divisor64::new(d0);
-            return Self { d: d as u128, v, s };
-        }
-
-        let s = d1.leading_zeros();
-        if s != 0 {
-            d1 = (d1 << s) | (d0 >> (64 - s));
-            d0 <<= s;
-        }
-
-        let mut v = Divisor64::new(d1).v;
-        let mut p = d1.wrapping_mul(v).wrapping_add(d0);
-        if p < d0 {
-            v -= 1;
-            if p >= d1 {
-                v -= 1;
-                p -= d1;
-            }
-            p = p.wrapping_sub(d1);
-        }
-        let (t1, t0) = umul64(v, d0);
-        p = p.wrapping_add(t1);
-        if p < t1 {
-            v -= 1;
-            if pack64(p, t0) >= pack64(d1, d0) {
-                v -= 1;
-            }
-        }
-        let d = pack64(d1, d0);
-        Self { d, v, s }
-    }
-}
-
-/// A 128-bit divisor.
-#[derive(Copy, Clone, Debug)]
-pub struct Divisor128 {
-    pub d: u128, // divisor
-    pub v: u64,  // reciprocal
-    pub s: u32,  // shift
-}
-
-impl Divisor128 {
-    pub const fn uninit() -> Self {
-        Self { d: 0, v: 0, s: 0 }
-    }
-
-    pub const fn new(d: u128) -> Self {
-        assert!(d != 0);
-
-        let mut d1 = (d >> 64) as u64;
-        let mut d0 = d as u64;
-
-        if d1 == 0 {
-            let Divisor64 { d, v, s } = Divisor64::new(d0);
-            return Self { d: d as u128, v, s };
-        }
-
-        let s = d1.leading_zeros();
-        if s != 0 {
-            d1 = (d1 << s) | (d0 >> (64 - s));
-            d0 <<= s;
-        }
-
-        let mut v = Divisor64::new(d1).v;
-        let mut p = d1.wrapping_mul(v).wrapping_add(d0);
-        if p < d0 {
-            v -= 1;
-            if p >= d1 {
-                v -= 1;
-                p -= d1;
-            }
-            p = p.wrapping_sub(d1);
-        }
-        let (t1, t0) = umul64(v, d0);
-        p = p.wrapping_add(t1);
-        if p < t1 {
-            v -= 1;
-            if pack64(p, t0) >= pack64(d1, d0) {
-                v -= 1;
-            }
-        }
-        let d = pack64(d1, d0);
-        Self { d, v, s }
-    }
-
-    /// Compute the quotient and remainder `(q, r)` where
-    ///
-    /// ```text
-    /// q = u / self
-    /// r = u % self
-    /// ```
-    #[inline(always)]
-    #[allow(dead_code)]
-    pub const fn quorem(self, u: u128) -> (u128, u128) {
-        let u1 = (u >> 64) as u64;
-        let u0 = u as u64;
-
-        let d1 = (self.d >> 64) as u64;
-        let d0 = self.d as u64;
-
-        if d1 == 0 {
-            let (q1, r) = div2x1(0, u1, d0, self.v, self.s);
-            let (q0, r) = div2x1(r, u0, d0, self.v, self.s);
-            let q = pack64(q1, q0);
-            (q, r as u128)
+        let un32 = if s != 0 {
+            (u1 << s) | (u0 >> (128 - s))
         } else {
-            let (q, r) = div3x2(0, u1, u0, d1, d0, self.v, self.s);
-            (q as u128, r)
+            u1
+        };
+        let un10 = u0 << s;
+        let un1 = un10 >> 64;
+        let un0 = un10 as u64 as u128;
+
+        let mut q1 = un32 / vn1;
+        let mut rhat = un32 % vn1;
+
+        const TWO64: u128 = 1 << 64;
+
+        while q1 >= TWO64 || q1.wrapping_mul(vn0) > TWO64.wrapping_mul(rhat).wrapping_add(un1) {
+            q1 = q1.wrapping_sub(1);
+            rhat = rhat.wrapping_add(vn1);
+            if rhat >= TWO64 {
+                break;
+            }
         }
+
+        let un21 = un32
+            .wrapping_mul(TWO64)
+            .wrapping_add(un1)
+            .wrapping_sub(q1.wrapping_mul(v));
+        let mut q0 = un21 / vn1;
+        let mut rhat = un21.wrapping_sub(q0.wrapping_mul(vn1));
+
+        while q0 >= TWO64 || q0.wrapping_mul(vn0) > TWO64.wrapping_mul(rhat).wrapping_add(un0) {
+            q0 = q0.wrapping_sub(1);
+            rhat = rhat.wrapping_add(vn1);
+            if rhat >= TWO64 {
+                break;
+            }
+        }
+
+        let q = q1.wrapping_mul(TWO64).wrapping_add(q0);
+        let r = un21
+            .wrapping_mul(TWO64)
+            .wrapping_add(un0)
+            .wrapping_sub(q0.wrapping_mul(v));
+        (q, r >> s)
     }
+
+    let s = d.leading_zeros();
+    d <<= s;
+    let v = div4x2(!d, u128::MAX, d).0;
+    (d, v, s)
 }
 
 // NB: `d` must be normalized.
@@ -367,32 +185,6 @@ pub(super) const fn div3x2(
     if unlikely!(r >= d) {
         q1 = q1.wrapping_add(1);
         r = r.wrapping_sub(d);
-    }
-    (q1, r >> s)
-}
-
-// NB: `d` must be normalized.
-#[inline(always)]
-pub(super) const fn div4x1(mut u1: u64, mut u0: u64, d: u64, v: u64, s: u32) -> (u64, u64) {
-    if s != 0 {
-        u1 = (u1 << s) | (u0 >> (64 - s));
-        u0 <<= s;
-    }
-
-    debug_assert!(d >= 1 << (64 - 1));
-    debug_assert!(u1 < d);
-
-    let (q1, q0) = umul64(v, u1);
-    let (mut q1, q0) = uadd64(q1, q0, u1, u0);
-    q1 = q1.wrapping_add(1);
-    let mut r = u0.wrapping_sub(q1.wrapping_mul(d));
-    if unpredictable!(r > q0) {
-        q1 = q1.wrapping_sub(1);
-        r = r.wrapping_add(d);
-    }
-    if unlikely!(r >= d) {
-        q1 += 1;
-        r -= d;
     }
     (q1, r >> s)
 }
@@ -479,107 +271,4 @@ const fn uadd128(x1: u128, x0: u128, y1: u128, y0: u128) -> (u128, u128) {
 
 const fn pack64(hi: u64, lo: u64) -> u128 {
     ((hi as u128) << 64) | (lo as u128)
-}
-
-#[cfg(test)]
-mod tests {
-    use rand::prelude::*;
-
-    use super::*;
-
-    macro_rules! non_zero_word {
-        () => {
-            loop {
-                let x = random();
-                if x != 0 {
-                    break x;
-                }
-            }
-        };
-    }
-
-    macro_rules! rand_word {
-        () => {{
-            let zero = thread_rng().gen_range(0..3) == 0;
-            if zero {
-                0
-            } else {
-                random()
-            }
-        }};
-    }
-
-    #[test]
-    fn test_divisor32() {
-        const fn golden(u: u32, v: u32) -> (u32, u32) {
-            let q = u / v;
-            let r = u % v;
-            (q, r)
-        }
-        for i in 0..100_000 {
-            let u = non_zero_word!();
-            let v = non_zero_word!();
-            let got = Divisor32::new(v).quorem(u);
-            let want = golden(u, v);
-            assert_eq!(got, want, "#{i}: {u}/{v}");
-        }
-    }
-
-    #[test]
-    fn test_divisor64() {
-        const fn golden(u: u64, v: u64) -> (u64, u64) {
-            let q = u / v;
-            let r = u % v;
-            (q, r)
-        }
-        for i in 0..100_000 {
-            let u = non_zero_word!();
-            let v = non_zero_word!();
-            let got = Divisor64::new(v).quorem(u);
-            let want = golden(u, v);
-            assert_eq!(got, want, "#{i}: {u}/{v}");
-        }
-    }
-
-    #[test]
-    fn test_divisor128() {
-        const fn golden(u: u128, v: u128) -> (u128, u128) {
-            let q = u / v;
-            let r = u % v;
-            (q, r)
-        }
-        for i in 0..100_000 {
-            let u1 = rand_word!();
-            let u0 = rand_word!();
-            let v1 = rand_word!();
-            let mut v0 = rand_word!();
-            if v1 == 0 && v0 == 0 {
-                v0 |= 1;
-            }
-
-            let u = pack64(u1, u0);
-            let v = pack64(v1, v0);
-
-            let got = Divisor128::new(v).quorem(u);
-            let want = golden(u, v);
-            assert_eq!(got, want, "#{i}: {u}/{v}");
-
-            // let u2 = rand_word!();
-            // if v == 1 {
-            //     v0 += 1;
-            //     v += 1;
-            // }
-
-            // let got = Divisor128::new(v).quorem2(u2, u);
-            // #[allow(non_camel_case_types)]
-            // type u256 = ruint::Uint<256, 4>;
-            // let u = u256::from_limbs([u0, u1, u2, 0]);
-            // let v = u256::from_limbs([v0, v1, 0, 0]);
-            // let want: (u128, u128) = (
-            //     (u / v).try_into().unwrap(), // q
-            //     (u % v).try_into().unwrap(), // r
-            // );
-            // assert_eq!(got, want, "#{i}: {u}/{v}");
-        }
-    }
 }

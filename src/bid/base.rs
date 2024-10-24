@@ -1007,7 +1007,7 @@ macro_rules! impl_dec_arith_ctx {
                 debug!("lo = {lo:?} ({lo})");
 
                 let mut x = hi.coeff();
-                let mut y = lo.coeff();
+                let y = lo.coeff();
 
                 debug!("x = {x}");
                 debug!("y = {y}");
