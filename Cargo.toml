@@ -36,6 +36,10 @@ bench = []
 # Use lookup tables for DPD conversions.
 dpd-tables = []
 
+# Force division by reciprocal integers, even when a divide
+# instruction might be faster.
+force-recip-div = []
+
 # Enable `rand`.
 rand = ["dep:rand"]
 

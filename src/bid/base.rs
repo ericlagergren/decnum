@@ -1220,6 +1220,10 @@ macro_rules! impl_dec_arith_ctx {
                 //    1. sum = x' + y
                 //    2. sum += 0.5000...
                 // which means we need two spare bits.
+                //
+                // TODO(eric): Instead of checking the bit
+                // lengths, maybe we should just do the full
+                // multiply and check if the high word is zero?
                 let bits = $arith::bitlen(x) + $arith::pow10_bits(shift);
                 debug!("bits = {bits}");
                 if bits <= <$ucoeff>::BITS - 2 {
@@ -1316,18 +1320,25 @@ macro_rules! impl_dec_arith_ctx {
                     };
                 }
 
-                let (xlo, mut xhi) = $arith::shl(x, shift);
-                let (mut xlo, mut carry) = xlo.overflowing_add(y);
-                if carry {
-                    xhi += 1;
-                }
-                if self.rounding.needs_pt5() {
-                    (xlo, carry) = xlo.overflowing_add($arith::point5(shift));
+                // (xlo, xhi) = x*(10^shift) + round
+                let (xlo, xhi) = {
+                    // TODO(eric): Verify that the generated code
+                    // is halfway decent.
+                    let (xlo, mut xhi) = $arith::shl(x, shift);
+                    let (mut xlo, mut carry) = xlo.overflowing_add(y);
                     if carry {
                         xhi += 1;
                     }
-                }
+                    if self.rounding.needs_pt5() {
+                        (xlo, carry) = xlo.overflowing_add($arith::point5(shift));
+                        if carry {
+                            xhi += 1;
+                        }
+                    }
+                    (xlo, xhi)
+                };
 
+                // Round down to TODO
                 let (mut sum, r) = $arith::shr2(xlo, xhi, shift);
                 match self.rounding {
                     $crate::RoundingMode::ToNearestEven => {

@@ -1,7 +1,13 @@
 use super::idiv::{self, div2x1};
 use crate::util::assume;
 
-super::impl_basic!(u64);
+super::impl_basic!(u64, u128);
+
+/// Like [`digits`], but for a double-width word.
+pub const fn digits2(x1: u64, x0: u64) -> u32 {
+    let x = ((x1 as u128) << 64) | (x0 as u128);
+    super::arith128::digits(x)
+}
 
 pub(super) const fn quorem_pow10(u: u64, n: u32) -> (u64, u64) {
     debug_assert!(n > 0);
@@ -11,7 +17,11 @@ pub(super) const fn quorem_pow10(u: u64, n: u32) -> (u64, u64) {
 
     // Amazingly, Apple Silicon's integer division units are
     // better than reciprocals for word-sized operands.
-    if cfg!(all(target_vendor = "apple", target_arch = "aarch64")) {
+    if cfg!(all(
+        not(feature = "force-recip-div"),
+        target_vendor = "apple",
+        target_arch = "aarch64",
+    )) {
         return (u / d, u % d);
     }
 
@@ -108,13 +118,19 @@ impl Divisor {
 }
 
 const fn umulh(lhs: u64, rhs: u64) -> u64 {
-    // SAFETY: The product is contained in the larger type.
-    let wide = unsafe { (lhs as u128).unchecked_mul(rhs as u128) };
-    (wide >> 64) as u64
+    widening_mul(lhs, rhs).1
 }
 
+// Returns (lo, hi).
 const fn widening_mul(lhs: u64, rhs: u64) -> (u64, u64) {
     // SAFETY: The product is contained in the larger type.
     let wide = unsafe { (lhs as u128).unchecked_mul(rhs as u128) };
     (wide as u64, (wide >> 64) as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    super::super::impl_tests!(u64, u128);
 }

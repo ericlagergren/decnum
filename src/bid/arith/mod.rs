@@ -4,11 +4,13 @@ pub mod arith128;
 pub mod arith32;
 pub mod arith64;
 pub mod idiv;
-pub mod uint256;
-mod util;
+mod uint256;
+
+#[cfg(test)]
+pub use uint256::u256;
 
 macro_rules! impl_basic {
-    ($word:ty) => {
+    ($word:ty, $wide:ty) => {
         /// Returns the minimum number of bits required to
         /// represent `x`.
         ///
@@ -95,7 +97,7 @@ macro_rules! impl_basic {
                 clippy::indexing_slicing,
                 reason = "Calling code always checks that `n` is in range"
             )]
-            let p = TABLE[n as usize]; // or (10 as $word).pow(n)
+            let p = TABLE[n as usize]; // or <$word>::pow(10, n)
 
             // SAFETY: `p` is a power of 10, so it cannot be
             // zero. This line helps the compiler get rid of some
@@ -125,32 +127,61 @@ macro_rules! impl_basic {
                 clippy::indexing_slicing,
                 reason = "Calling code always checks that `n` is in range"
             )]
-            let bits = TABLE[n as usize];
-            bits
+            TABLE[n as usize]
         }
-
-        /// The maximum shift that does not overflow `$word`.
-        #[allow(dead_code)]
-        pub const MAX_SHIFT: u32 = (NUM_POW10 - 1) as u32;
 
         const NUM_POW10: usize = {
             let mut n = 0;
-            while (10 as $word).checked_pow(n).is_some() {
-                n += 1
+            while <$word>::checked_pow(10, n).is_some() {
+                n += 1;
             }
             n as usize
         };
 
-        /// Returns `floor(5 * 10^n)`.
+        /// Returns `floor(0.5 * 10^n)`.
         pub const fn point5(n: u32) -> $word {
-            $crate::bid::arith::util::point5(n) as $word
+            #[allow(
+                clippy::indexing_slicing,
+                reason = "This is a const initializer, so panicking is okay."
+            )]
+            const TABLE: [$word; NUM_POW5] = {
+                let mut table = [0; NUM_POW5];
+                let mut i = 1;
+                table[0] = 0;
+                while i < table.len() {
+                    table[i] = 5 * <$word>::pow(10, (i - 1) as u32);
+                    i += 1;
+                }
+                table
+            };
+
+            #[allow(
+                clippy::indexing_slicing,
+                reason = "Calling code always checks that `n` is in range"
+            )]
+            TABLE[n as usize]
         }
+
+        const NUM_POW5: usize = {
+            // Start at 1 so that pow5(0) == 0.
+            let mut n = 1;
+            loop {
+                let Some(p) = <$word>::checked_pow(10, (n - 1) as u32) else {
+                    break;
+                };
+                if <$word>::checked_mul(5, p).is_none() {
+                    break;
+                }
+                n += 1;
+            }
+            n
+        };
 
         /// Returns `(lo, hi) = x * 10^n`.
         ///
         /// # Panics
         ///
-        /// Panics if `n > MAX_SHIFT`.
+        /// Panics if `10^n` overflows.
         pub const fn shl(x: $word, n: u32) -> ($word, $word) {
             widening_mul(x, pow10(n))
         }
@@ -163,34 +194,40 @@ macro_rules! impl_basic {
         /// ```
         pub const fn shr(x: $word, n: u32) -> ($word, $word) {
             if n == 0 {
-                // x / (10^0) = x/1 = x
+                // x/(10^0) = x/1 = x
                 (x, 0)
             } else if n >= NUM_POW10 as u32 {
-                // x / y for y > x = 0
+                // x/y for y > x = 0
                 (0, 0)
             } else {
                 quorem_pow10(x, n)
             }
         }
 
-        /// Returns the quotient and remainder `(q, r)` such that
-        ///
-        /// ```text
-        /// q = (lo, hi) / (10^n)
-        /// r = (lo, hi) % (10^n)
-        /// ```
+        /// Like [`shr`], but for a double-width word.
         pub const fn shr2(lo: $word, hi: $word, n: u32) -> ($word, $word) {
-            if hi == 0 {
-                shr(lo, n)
+            if n == 0 && hi == 0 {
+                // x/(10^0) = x/1 = x
+                //
+                // This also holds if `hi != 0`, but we only
+                // return a single word.
+                (lo, 0)
+            } else if n >= NUM_POW10 as u32 {
+                // x/y for y > x = 0
+                (0, 0)
             } else {
                 wide_quorem_pow10(hi, lo, n)
             }
         }
+    };
+}
+pub(super) use impl_basic;
 
+#[cfg(test)]
+macro_rules! impl_tests {
+    ($word:ty, $wide:ty) => {
         #[cfg(test)]
         mod tests {
-            use core::cmp;
-
             use super::*;
 
             #[test]
@@ -222,17 +259,26 @@ macro_rules! impl_basic {
                 const K: u32 = <$word>::BITS;
                 const DIGITS: u32 = 9 * (K / 32) - 2;
                 const MAX: $word = <$word>::pow(10, DIGITS) - 1;
+                const BITS: usize = (K * 2) as usize;
+                const NLIMBS: usize = ruint::nlimbs(BITS as usize);
 
-                fn limbs(u1: $word, u0: $word) -> [u64; ruint::nlimbs(2 * K as usize)] {
-                    let mut limbs = [0; ruint::nlimbs(2 * K as usize)];
-                    let mut i = 0;
-                    for mut u in [u0, u1] {
-                        let n = cmp::max(<$word>::BITS / 64, 1);
-                        for _ in 0..n {
-                            limbs[i] = u as u64;
-                            i += 1;
-                            u = u.wrapping_shr(64);
+                fn limbs(u1: $word, u0: $word) -> [u64; NLIMBS] {
+                    let mut limbs = [0; NLIMBS];
+                    match <$word>::BITS {
+                        32 => {
+                            limbs[0] = ((u1 as u64) << 32) | (u0 as u64);
                         }
+                        64 => {
+                            limbs[0] = u0 as u64;
+                            limbs[1] = u1 as u64;
+                        }
+                        128 => {
+                            limbs[0] = u0 as u64;
+                            limbs[1] = (u0 >> 64) as u64;
+                            limbs[2] = u1 as u64;
+                            limbs[3] = (u1 >> 64) as u64;
+                        }
+                        bits => panic!("unknown bit size: {bits}"),
                     }
                     limbs
                 }
@@ -243,7 +289,7 @@ macro_rules! impl_basic {
                     if carry {
                         u1 += 1;
                     }
-                    let (u0, carry) = u0.overflowing_add(super::super::util::point5(s) as $word);
+                    let (u0, carry) = u0.overflowing_add(point5(s));
                     if carry {
                         u1 += 1;
                     }
@@ -252,7 +298,7 @@ macro_rules! impl_basic {
                     let got = shr2(u0, u1, s);
 
                     #[allow(non_camel_case_types)]
-                    type uint = ruint::Uint<{ 2 * K as usize }, { ruint::nlimbs(2 * K as usize) }>;
+                    type uint = ruint::Uint<BITS, NLIMBS>;
                     let u = uint::from_limbs(limbs(u1, u0));
                     let v = uint::from_limbs(limbs(0, v));
                     println!("u={u}");
@@ -278,4 +324,5 @@ macro_rules! impl_basic {
         }
     };
 }
-pub(super) use impl_basic;
+#[cfg(test)]
+pub(super) use impl_tests;

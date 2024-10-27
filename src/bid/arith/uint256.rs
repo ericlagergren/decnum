@@ -84,4 +84,12 @@ impl u256 {
             }
         }
     }
+
+    pub(super) const fn const_mul64(self, rhs: u64) -> Self {
+        use arith128::widening_mul;
+
+        let (lo, hi) = widening_mul(self.lo, rhs as u128);
+        let hi = self.hi.wrapping_mul(rhs as u128).wrapping_add(hi);
+        Self { lo, hi }
+    }
 }

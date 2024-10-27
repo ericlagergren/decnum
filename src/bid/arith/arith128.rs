@@ -1,6 +1,63 @@
 use super::idiv::{self, div2x1, div3x2, div4x2};
 
-super::impl_basic!(u128);
+super::impl_basic!(u128, u256);
+
+/// Like [`digits`], but for a double-width word.
+#[no_mangle]
+pub fn digits2(mut x1: u128, mut x0: u128) -> u32 {
+    // Ensure that `x` is non-zero so that `digits(0) == 1`.
+    //
+    // This cannot cause an incorrect result because:
+    //
+    // - `x0|1` sets the lowest bit, so it cannot increase the
+    //   bit length for a non-zero `x`.
+    // - `x >= p` remains correct because the largest integer
+    //   less than `p` is 999...999, which is odd, meaning `x0|1`
+    //   is a no-op.
+    x0 |= 1;
+
+    const MAX: u32 = (NUM_POW10 - 1) as u32;
+
+    let bits = if x1 != 0 {
+        u128::BITS + bitlen(x1)
+    } else {
+        bitlen(x0)
+    };
+    // r is in [0, 78]
+    let r = ((bits + 1) * 1233) / 4096;
+    let mut n = r;
+    if n >= MAX * 2 {
+        crate::debug!("(1) n = {n} ({x1}, {x0})");
+        const Y0: u128 = 0xba477cdae68ef33ba09aa98000000000;
+        const Y1: u128 = 0xdd15fe86affad91249ef0eb713f39ebb;
+        (x1, x0) = sub2x2(x1, x0, Y1, Y0);
+        debug_assert!(x1 == 0);
+        n -= MAX;
+    }
+    if n > MAX {
+        crate::debug!("(2) n = {n} ({x1}, {x0})");
+        (x1, x0) = sub2x1(x1, x0, 99999999999999999990000000000000000000);
+        n -= MAX;
+    }
+    crate::debug!("(3) n = {n} ({x1}, {x0}) {}", pow10(n));
+    let gt = x1 != 0 || x0 >= pow10(n);
+    r + gt as u32
+}
+
+fn sub2x1(mut x1: u128, x0: u128, y: u128) -> (u128, u128) {
+    let (x0, b) = x0.overflowing_sub(y);
+    x1 -= b as u128;
+    (x1, x0)
+}
+
+fn sub2x2(mut x1: u128, x0: u128, y1: u128, y0: u128) -> (u128, u128) {
+    println!("x = ({x1}, {x0})");
+    println!("y = ({y1}, {y0})");
+    let (x0, b) = x0.overflowing_sub(y0);
+    x1 -= y1;
+    x1 -= b as u128;
+    (x1, x0)
+}
 
 const fn quorem_pow10(u: u128, n: u32) -> (u128, u128) {
     debug_assert!(n > 0);
@@ -141,7 +198,7 @@ impl WideDivisor {
 }
 
 // Returns `(lo, hi)`
-const fn widening_mul(x: u128, y: u128) -> (u128, u128) {
+pub(super) const fn widening_mul(x: u128, y: u128) -> (u128, u128) {
     let x1 = (x >> 64) as u64;
     let x0 = x as u64;
     let y1 = (y >> 64) as u64;
@@ -168,4 +225,25 @@ const fn widening_mul(x: u128, y: u128) -> (u128, u128) {
     let hi = p3 as u128 | (p4 as u128) << 64; // hi
     let lo = p1 as u128 | (p2 as u128) << 64; // lo
     (lo, hi)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bid::arith::u256;
+
+    super::super::impl_tests!(u128, u256);
+
+    #[test]
+    fn test_digits2() {
+        let mut x = u256::new(1);
+        let mut want = 1;
+        loop {
+            let got = digits2(x.hi, x.lo);
+            assert_eq!(got, want, "#{x:?}");
+            x = x.const_mul64(10);
+            want += 1;
+            println!();
+        }
+    }
 }
